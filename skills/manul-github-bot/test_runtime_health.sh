@@ -1090,6 +1090,8 @@ INSTALL_ROOT="$TMPROOT/install-runtime"
 INSTALL_HOME="$TMPROOT/install-home"
 FAKE_BIN="$TMPROOT/fake-bin"
 mkdir -p "$INSTALL_HOME" "$FAKE_BIN"
+# Simulate the pre-extraction zsh entry plus unrelated operator configuration.
+printf 'export KEEP_ZSH_SETTING=1\nsource "%s/.globalskills/skills/manul-github-bot/manul-shell.zsh"\n' "$INSTALL_HOME" > "$INSTALL_HOME/.zshrc"
 printf '#!/bin/sh
 exit 0
 ' > "$FAKE_BIN/openclaw"
@@ -1128,9 +1130,21 @@ else
 fi
 
 if grep -qF "source \"$SCRIPT_DIR/manul-shell.zsh\"" "$INSTALL_HOME/.zshrc" 2>/dev/null; then
-  ok "Fresh installer installs canonical zsh integration"
+  ok "Installer installs canonical zsh integration"
 else
-  fail "Fresh installer did not install zsh integration"
+  fail "Installer did not install zsh integration"
+fi
+
+if ! grep -qF '.globalskills/skills/manul-github-bot/manul-shell.zsh' "$INSTALL_HOME/.zshrc"; then
+  ok "Installer removes the stale globalskills Manul zsh source"
+else
+  fail "Installer left the stale globalskills Manul zsh source"
+fi
+
+if grep -qF 'export KEEP_ZSH_SETTING=1' "$INSTALL_HOME/.zshrc"; then
+  ok "Installer preserves unrelated operator zsh configuration"
+else
+  fail "Installer removed unrelated operator zsh configuration"
 fi
 
 if [ -L "$INSTALL_ROOT/watchdog.sh" ] && crontab -l 2>/dev/null | grep -qF "$INSTALL_ROOT/watchdog.sh"; then
