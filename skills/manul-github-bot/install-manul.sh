@@ -67,6 +67,7 @@ if [ ! -d "$CANONICAL_DIR" ]; then
     fail "Canonical Manul directory does not exist: $CANONICAL_DIR"
 fi
 CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
+export MANUL_CANONICAL_DIR="$CANONICAL_DIR"
 
 for required in install-manul-symlinks.sh config.json.example manul-env.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
@@ -305,7 +306,7 @@ else
 fi
 
 ZSHRC="$HOME/.zshrc"
-MANUL_SHELL_LINE="source \"$CANONICAL_DIR/manul-shell.zsh\""
+MANUL_SHELL_LINE="export MANUL_CANONICAL_DIR=\"$CANONICAL_DIR\"; source \"$CANONICAL_DIR/manul-shell.zsh\""
 if [ ! -f "$ZSHRC" ]; then
     touch "$ZSHRC" || fail "Could not create $ZSHRC"
 fi
@@ -313,7 +314,7 @@ if grep -Fq "$MANUL_SHELL_LINE" "$ZSHRC"; then
     echo "[6/7] Manul zsh integration already installed"
 else
     echo >> "$ZSHRC"
-    echo "# Manul CLI (managed by globalskills)" >> "$ZSHRC"
+    echo "# Manul CLI (managed by Manul)" >> "$ZSHRC"
     echo "$MANUL_SHELL_LINE" >> "$ZSHRC"
     echo "[6/7] Installed Manul zsh integration"
 fi
