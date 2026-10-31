@@ -81,7 +81,10 @@ EOF
     CLAUDE_BIN \
     CLAUDE_MODEL \
     MANUL_JIRA_USER \
-    MANUL_JIRA_PASSWORD; do
+    MANUL_JIRA_PASSWORD \
+    MANUL_CANONICAL_DIR \
+    MANUL_CANONICAL_ROOT \
+    MANUL_CANONICAL_BRANCH; do
     value="${!variable:-}"
     [ -n "$value" ] || continue
 
