@@ -238,6 +238,11 @@ mkdir -p "$MANUL_DIR"
 MANUL_TESTING=true source "$SCRIPT_DIR/manul-daemon.sh"
 export PATH="$FAKE_BIN:$PATH"
 
+# Use a disposable test configuration, not an operator-specific config.json
+# that is intentionally excluded from the standalone repository.
+CONFIG="$TEST_TMPDIR/config.json"
+jq '.autoCreatePr = true' "$SCRIPT_DIR/config.json.example" > "$CONFIG"
+
 # Setup test environment
 LOG_FILE="$TEST_TMPDIR/daemon.log"
 LIFECYCLE_LOG="$TEST_TMPDIR/lifecycle.log"
@@ -246,7 +251,7 @@ DB="$TEST_TMPDIR/manul_test.db"
 HEARTBEAT_INTERVAL=60
 LOG="$LOG_FILE"
 LIFECYCLE_LOG="$LIFECYCLE_LOG"
-export PID_FILE DB HEARTBEAT_INTERVAL LOG LIFECYCLE_LOG CONFIG="$SCRIPT_DIR/config.json" MANUL_DIR GH_API_TIMEOUT
+export PID_FILE DB HEARTBEAT_INTERVAL LOG LIFECYCLE_LOG CONFIG MANUL_DIR GH_API_TIMEOUT
 
 # DEFAULT_BRANCH is a global set by the production dispatch path; tests must set it.
 DEFAULT_BRANCH="master"
@@ -483,7 +488,7 @@ echo "[OK] Test G: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 echo ""
 echo "=== Test H: autoCreatePr disabled + no PR -> COMPLETION_SUCCESS=false ==="
 CONFIG_DISABLED="$TEST_TMPDIR/config-disabled.json"
-jq '.autoCreatePr = false' "$SCRIPT_DIR/config.json" > "$CONFIG_DISABLED"
+jq '.autoCreatePr = false' "$CONFIG" > "$CONFIG_DISABLED"
 export CONFIG="$CONFIG_DISABLED"
 
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_H';" 2>/dev/null
@@ -522,7 +527,7 @@ if ! grep -q "MISSING_PR\|no PR found" "$LOG_FILE" 2>/dev/null; then
     exit 1
 fi
 # Restore the canonical config for any remaining tests
-export CONFIG="$SCRIPT_DIR/config.json"
+export CONFIG="$TEST_TMPDIR/config.json"
 echo "[OK] Test H: PASSED (COMPLETION_SUCCESS=$COMPLETION_SUCCESS)"
 
 # ─── Test I: issue task left on default branch -> verify_required_pr must FAIL ─
