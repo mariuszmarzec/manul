@@ -127,9 +127,9 @@ if ! [ -f "$PID_FILE" ] || ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/nul
         exit 1
     fi
 
-    # The startup wrapper synchronizes ~/.globalskills to origin/master and
-    # refreshes the runtime symlinks before launching the daemon. Watchdog must
-    # use the same path so recovery cannot resurrect a stale runtime revision.
+    # The startup wrapper synchronizes the standalone Manul checkout and
+    # refreshes runtime symlinks before launching the daemon. Watchdog uses
+    # the same canonical source so recovery cannot resurrect stale scripts.
     if ! "$START_WRAPPER" start >>"$LOG" 2>&1; then
         log "ERROR: daemon startup via canonical wrapper failed"
         exit 1
