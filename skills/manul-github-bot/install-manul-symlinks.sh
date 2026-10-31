@@ -9,7 +9,7 @@
 #
 # Options:
 #   --runtime-dir    Runtime scripts directory (default: ~/.manul)
-#   --canonical-dir  Canonical skill source directory (default: ~/.globalskills/skills/manul-github-bot)
+#   --canonical-dir  Canonical skill source directory (default: the installer script's directory)
 #   --dry-run        Show what would be done without making changes
 #
 # Safety:
