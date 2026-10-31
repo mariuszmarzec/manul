@@ -310,6 +310,18 @@ MANUL_SHELL_LINE="export MANUL_CANONICAL_DIR=\"$CANONICAL_DIR\"; source \"$CANON
 if [ ! -f "$ZSHRC" ]; then
     touch "$ZSHRC" || fail "Could not create $ZSHRC"
 fi
+
+# Remove the exact legacy source line before the old globalskills copy is
+# retired. Keep the existing zshrc inode/mode while filtering only that path.
+OLD_MANUL_SHELL_MARKER=".globalskills/skills/manul-github-bot/manul-shell.zsh"
+if grep -Fq "$OLD_MANUL_SHELL_MARKER" "$ZSHRC"; then
+    ZSHRC_TMP="$(mktemp)" || fail "Could not create temporary zshrc migration file"
+    grep -Fv "$OLD_MANUL_SHELL_MARKER" "$ZSHRC" > "$ZSHRC_TMP" || true
+    cat "$ZSHRC_TMP" > "$ZSHRC" || fail "Could not remove the stale Manul zsh entry"
+    rm -f "$ZSHRC_TMP"
+    echo "[6/7] Removed stale globalskills Manul zsh integration"
+fi
+
 if grep -Fq "$MANUL_SHELL_LINE" "$ZSHRC"; then
     echo "[6/7] Manul zsh integration already installed"
 else
