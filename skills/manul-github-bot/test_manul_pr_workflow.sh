@@ -17,7 +17,8 @@ MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="${MANUL_DIR}/manul.db"
 CONFIG="${MANUL_DIR}/config.json"
-CANONICAL_DIR="${CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CANONICAL_DIR="${CANONICAL_DIR:-$SCRIPT_DIR}"
 POLL="${CANONICAL_DIR}/poll.sh"
 DAEMON="${CANONICAL_DIR}/manul-daemon.sh"
 FEEDBACK="${CANONICAL_DIR}/feedback.sh"
@@ -303,7 +304,7 @@ test_config_repos() {
 
   # Check canonical config
   local canonical_repos
-  canonical_repos="$(jq -r '.repositories[]?' "$CANONICAL_DIR/config.json")"
+  canonical_repos="$(jq -r '.repositories[]?' "$CANONICAL_DIR/config.json.example")"
   assert_contains "$TEST_NAME" "$canonical_repos" "mariuszmarzec/caracal-rag"
 
   # Check runtime config
@@ -319,7 +320,7 @@ test_config_repos() {
   # Verify allowedUsers includes mariuszmarzec
   local allowed
   allowed="$(jq -r '.allowedUsers[]?' "$CONFIG")"
-  assert_contains "$TEST_NAME" "$allowed" "mariuszmarzec"
+  assert_contains "$TEST_NAME" "$allowed" "<GITHUB_LOGIN>"
 }
 
 # ============================================================================
