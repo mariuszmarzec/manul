@@ -235,8 +235,12 @@ Todo root independently using the curated catalog at
 GitHub repository URL in the task takes precedence; otherwise the longest
 whole-phrase project alias must identify exactly one catalog entry. Relevant
 project skills listed by that entry are included as task context rather than
-being opened by the worker from a global path. The resolved canonical
-`owner/repo` and routing provenance are persisted with the queued task.
+being opened by the worker from a global path. The host supplies these files
+through `MANUL_HOST_SKILLS_DIR` (normally `~/.globalskills/skills`), which is
+persisted in `~/.manul/.env` for unattended task execution. If no host skills
+directory is configured, Manul continues without external skill context. The
+resolved canonical `owner/repo` and routing provenance are persisted with the
+queued task.
 Configure `repositoryAllowlist` to narrow which catalog repositories the Todo
 sources may target. Unknown, ambiguous, and disallowed targets are logged and
 not queued; Manul must never fall back to a hardcoded Todo repository.
