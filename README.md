@@ -30,6 +30,8 @@ and the GNU process/filesystem utilities documented in
 ```bash
 git clone https://github.com/mariuszmarzec/manul.git ~/.manul-repo
 export MANUL_CANONICAL_DIR="$HOME/.manul-repo/skills/manul-github-bot"
+# Optional host integration: globalskills provides mapped project skill content.
+export MANUL_HOST_SKILLS_DIR="$HOME/.globalskills/skills"
 MANUL_DB="$HOME/.manul/state/manul.db"
 if [ -f "$MANUL_DB" ]; then
   bash "$MANUL_CANONICAL_DIR/install-manul.sh"
@@ -53,8 +55,11 @@ manul stop
 ```
 
 For a non-default checkout location, keep `MANUL_CANONICAL_DIR` exported in
-the interactive environment; the installer also persists it in the
-runtime-owned environment file for unattended watchdog/daemon processes.
+the interactive environment. When host skills are installed separately, set
+`MANUL_HOST_SKILLS_DIR` to their `skills/` directory; Manul persists both
+paths in its runtime-owned environment file for unattended daemon/watchdog
+processes. Without a host skills directory, Manul continues to run normally
+but cannot include externally mapped skill contents in Todo task prompts.
 
 ## Configuration
 
