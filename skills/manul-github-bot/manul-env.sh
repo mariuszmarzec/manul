@@ -94,6 +94,32 @@ EOF
     fi
   done
 
+  # Canonical source locations are migration-sensitive: refresh them on every
+  # installer bootstrap so a previous globalskills checkout cannot remain in
+  # the unattended daemon/watchdog environment after source extraction.
+  if [ -n "${MANUL_CANONICAL_DIR:-}" ]; then
+    local canonical_refresh_file
+    canonical_refresh_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_DIR=/ &&
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_ROOT=/ &&
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_BRANCH=/
+    ' "$env_file" > "$canonical_refresh_file"; then
+      rm -f -- "$canonical_refresh_file"
+      return 1
+    fi
+    printf 'MANUL_CANONICAL_DIR=%q\n' "$MANUL_CANONICAL_DIR" >> "$canonical_refresh_file"
+    if [ -n "${MANUL_CANONICAL_ROOT:-}" ]; then
+      printf 'MANUL_CANONICAL_ROOT=%q\n' "$MANUL_CANONICAL_ROOT" >> "$canonical_refresh_file"
+    fi
+    if [ -n "${MANUL_CANONICAL_BRANCH:-}" ]; then
+      printf 'MANUL_CANONICAL_BRANCH=%q\n' "$MANUL_CANONICAL_BRANCH" >> "$canonical_refresh_file"
+    fi
+    chmod 600 "$canonical_refresh_file" || { rm -f -- "$canonical_refresh_file"; return 1; }
+    mv -- "$canonical_refresh_file" "$env_file" || { rm -f -- "$canonical_refresh_file"; return 1; }
+    echo "  Refreshed canonical standalone Manul source paths" >&2
+  fi
+
   if [ -n "${TODO_LOCAL_MCP_TOKEN:-}" ]; then
     refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
     if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/' "$env_file" > "$refreshed_file"; then
