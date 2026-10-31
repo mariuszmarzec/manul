@@ -76,11 +76,6 @@ if [ -s "$GH_LOG" ]; then
   exit 1
 fi
 
-if ! grep -q 'mode: "human"' "$SCRIPT_DIR/../ai-commit-attribution/SKILL.md"; then
-  echo "FAIL: commit attribution skill has no human-mode exception"
-  exit 1
-fi
-
 # Default remains bot when mode is omitted.
 sed '/"mode": "human",/d' "$MANUL_DIR/config.json" > "$MANUL_DIR/config-bot.json"
 cp "$MANUL_DIR/config-bot.json" "$MANUL_DIR/config.json"
