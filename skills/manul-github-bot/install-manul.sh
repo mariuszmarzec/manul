@@ -316,6 +316,7 @@ fi
 OLD_MANUL_SHELL_MARKER=".globalskills/skills/manul-github-bot/manul-shell.zsh"
 if grep -Fq "$OLD_MANUL_SHELL_MARKER" "$ZSHRC"; then
     ZSHRC_TMP="$(mktemp)" || fail "Could not create temporary zshrc migration file"
+    awk '
       /^[[:space:]]*(source|[.])[[:space:]]+/ &&
       index($0, ".globalskills/skills/manul-github-bot/manul-shell.zsh") > 0 &&
       index($0, ";") == 0 { next }
