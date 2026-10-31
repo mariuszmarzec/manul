@@ -1,0 +1,134 @@
+{
+  "enabled": true,
+  "mode": "bot",
+  "commentStyle": {
+    "human": {
+      "concise": true,
+      "maxLines": 6
+    }
+  },
+  "pollInterval": 60,
+  "trigger": "/manul",
+  "agents": [
+    "architect",
+    "coder",
+    "coder-cheap",
+    "coder-strong",
+    "coder-expert",
+    "reviewer",
+    "reviewer-expert",
+    "reviewer-adversarial",
+    "debugger",
+    "debugger-expert",
+    "researcher",
+    "tester",
+    "security",
+    "performance",
+    "refactorer"
+  ],
+  "autoCreatePr": true,
+  "autoRebaseOnPrBase": true,
+  "autoRebaseOnPrBaseNote": "For review comments, always sync work dir to pr_base_branch (the base of the PR the comment lives on) before checking out existing_branch. Prevents working on a stale/merged manul branch.",
+  "allowedUsers": ["<GITHUB_LOGIN>"],
+  "repositoryAllowlist": [
+    "mariuszmarzec/globalskills",
+    "mariuszmarzec/interview-subjects",
+    "mariuszmarzec/fiteo",
+    "mariuszmarzec/caracal-rag",
+    "mariuszmarzec/todo",
+    "mariuszmarzec/shoppingListGenerator",
+    "mariuszmarzec/cheatDay",
+    "mariuszmarzec/fiteoApp",
+    "mariuszmarzec/QuickMVI"
+  ],
+  "taskSources": [
+    {
+      "type": "github_issues",
+      "enabled": true,
+      "repositories": [
+        "mariuszmarzec/globalskills",
+        "mariuszmarzec/interview-subjects",
+        "mariuszmarzec/fiteo",
+        "mariuszmarzec/caracal-rag",
+        "mariuszmarzec/todo",
+        "mariuszmarzec/shoppingListGenerator",
+        "mariuszmarzec/cheatDay",
+        "mariuszmarzec/fiteoApp",
+        "mariuszmarzec/QuickMVI"
+      ]
+    },
+    {
+      "type": "jira_tasks",
+      "enabled": false,
+      "baseUrl": "https://your-domain.atlassian.net",
+      "repository": "mariuszmarzec/your-repo",
+      "userEnv": "MANUL_JIRA_USER",
+      "passwordEnv": "MANUL_JIRA_PASSWORD",
+      "jql": "project is not EMPTY",
+      "searchPath": "/rest/api/2/search"
+    },
+    {
+      "type": "todo_local_mcp",
+      "enabled": false,
+      "url": "http://127.0.0.1:8765/mcp",
+      "tokenEnv": "TODO_LOCAL_MCP_TOKEN",
+      "allowReportOnly": false
+    },
+    {
+      "type": "todo_remote_mcp",
+      "enabled": false,
+      "url": "https://your-fiteo-host/mcp",
+      "tokenEnv": "FITEO_PAT",
+      "manulUserId": 123,
+      "allowReportOnly": false
+    }
+  ],
+  "repositories": [
+    "mariuszmarzec/globalskills",
+    "mariuszmarzec/interview-subjects",
+    "mariuszmarzec/fiteo",
+    "mariuszmarzec/caracal-rag",
+    "mariuszmarzec/todo",
+    "mariuszmarzec/shoppingListGenerator",
+    "mariuszmarzec/cheatDay",
+    "mariuszmarzec/fiteoApp",
+    "mariuszmarzec/QuickMVI"
+  ],
+  "retryConfig": {
+    "maxAttempts": 3,
+    "contextStrategy": "progressive",
+    "contextLimits": [240000, 120000, 60000],
+    "useLightContextOnFinalRetry": true,
+    "sessionTimeoutSeconds": 300
+  },
+  "retention": {
+    "listDays": 7,
+    "historyDays": 14
+  },
+  "compaction": {
+    "retryOnTimeout": true,
+    "fallbackCutoffTokens": 240000
+  },
+  "ciFix": {
+    "enabled": true,
+    "maxAttemptsPerRun": 2,
+    "cooldownMinutes": 60
+  },
+  "automation": {
+    "enabled": true,
+    "agentRuntime": "openclaw",
+    "roleRuntime": "opencode",
+    "agentTimeoutSeconds": 43500,
+    "opencodeMaxStepLimitContinuations": 3,
+    "heartbeatTimeout": 900,
+    "leaseTimeout": 900,
+    "maxAttemptsBeforeFail": 3,
+    "maxPreExecutionFailures": 8,
+    "agentNoProgressTimeoutSeconds": 900,
+    "lockTtl": 1800,
+    "alerts": {
+      "failureWebhook": null,
+      "stuckTaskWebhook": null
+    }
+  }
+}
