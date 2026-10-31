@@ -28,7 +28,7 @@ The runtime isolation refactor has landed. The current implementation:
   process boundary; they must not spawn subprocesses directly and must not
   depend on each other. OpenCode receives canonical roles through its native
   `--agent` flag; Codex and Claude Code receive the matching canonical role
-  instructions from `~/.globalskills/agents/` prepended to the task prompt.
+  instructions from the host-provided canonical agent directory (normally `~/.globalskills/agents/`) prepended to the task prompt.
   Never silently route role names to OpenClaw's config-agent selector.
 - Has no fallback to `~/.openclaw/manul` and no `OPENCLAW_MANUL_DIR` alias.
 
