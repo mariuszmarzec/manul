@@ -29,7 +29,9 @@
   "autoCreatePr": true,
   "autoRebaseOnPrBase": true,
   "autoRebaseOnPrBaseNote": "For review comments, always sync work dir to pr_base_branch (the base of the PR the comment lives on) before checking out existing_branch. Prevents working on a stale/merged manul branch.",
-  "allowedUsers": ["<GITHUB_LOGIN>"],
+  "allowedUsers": [
+    "<GITHUB_LOGIN>"
+  ],
   "repositoryAllowlist": [
     "mariuszmarzec/globalskills",
     "mariuszmarzec/interview-subjects",
@@ -39,7 +41,8 @@
     "mariuszmarzec/shoppingListGenerator",
     "mariuszmarzec/cheatDay",
     "mariuszmarzec/fiteoApp",
-    "mariuszmarzec/QuickMVI"
+    "mariuszmarzec/QuickMVI",
+    "mariuszmarzec/manul"
   ],
   "taskSources": [
     {
@@ -54,7 +57,8 @@
         "mariuszmarzec/shoppingListGenerator",
         "mariuszmarzec/cheatDay",
         "mariuszmarzec/fiteoApp",
-        "mariuszmarzec/QuickMVI"
+        "mariuszmarzec/QuickMVI",
+        "mariuszmarzec/manul"
       ]
     },
     {
@@ -92,12 +96,17 @@
     "mariuszmarzec/shoppingListGenerator",
     "mariuszmarzec/cheatDay",
     "mariuszmarzec/fiteoApp",
-    "mariuszmarzec/QuickMVI"
+    "mariuszmarzec/QuickMVI",
+    "mariuszmarzec/manul"
   ],
   "retryConfig": {
     "maxAttempts": 3,
     "contextStrategy": "progressive",
-    "contextLimits": [240000, 120000, 60000],
+    "contextLimits": [
+      240000,
+      120000,
+      60000
+    ],
     "useLightContextOnFinalRetry": true,
     "sessionTimeoutSeconds": 300
   },
