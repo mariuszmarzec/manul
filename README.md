@@ -30,12 +30,19 @@ and the GNU process/filesystem utilities documented in
 ```bash
 git clone https://github.com/mariuszmarzec/manul.git ~/.manul-repo
 export MANUL_CANONICAL_DIR="$HOME/.manul-repo/skills/manul-github-bot"
-bash "$MANUL_CANONICAL_DIR/install-manul.sh"
+MANUL_DB="$HOME/.manul/state/manul.db"
+if [ -f "$MANUL_DB" ]; then
+  bash "$MANUL_CANONICAL_DIR/install-manul.sh"
+else
+  # Explicitly initialize only a brand-new runtime with no existing database.
+  bash "$MANUL_CANONICAL_DIR/install-manul.sh" --init-state
+fi
 ```
 
-The installer prepares `~/.manul`, deploys runtime symlinks, preserves an
-existing database/configuration/environment, and adds the interactive zsh
-entrypoints. It does not start automation automatically.
+The installer prepares `~/.manul`, restores `config.json` from the example
+when needed, deploys runtime symlinks, preserves an existing database and
+environment, and adds the interactive zsh entrypoints. It does not start
+automation automatically.
 
 To start or inspect Manul:
 
