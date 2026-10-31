@@ -89,7 +89,7 @@ The installer deploys the runtime scripts as symlinks.
 Canonical source:
 
 ```
-~/.globalskills/skills/manul-github-bot/
+~/.manul-repo/skills/manul-github-bot/
 ```
 
 Current runtime:
