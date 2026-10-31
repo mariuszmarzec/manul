@@ -263,7 +263,7 @@ preserved when the runtime session pointer is cleared. This runtime continuation
 is not the same as the user-input command `/manul continue <answer>`.
 
 The canonical source for Manul code remains
-`~/.globalskills/skills/manul-github-bot/`; `~/.manul` is the runtime
+`~/.manul-repo/skills/manul-github-bot/`; `~/.manul` is the runtime
 directory for configuration, state, logs, locks, and workspace data. Existing
 configuration files do not require a migration: `manul-paths.sh` supplies the
 default runtime values if `automation.agentRuntime` or `automation.roleRuntime`
