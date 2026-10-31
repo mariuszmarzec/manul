@@ -189,7 +189,7 @@ echo "Test 6: explicit OpenClaw timeout is passed to OpenClaw"
 cat > "$TMPDIR/mock_orchestrator.sh" << 'MOCK_EOF'
 #!/bin/bash
 set -u
-printf '%s\\n' "$@" > "$ARGS_FILE"
+printf '%s\n' "$@" > "$ARGS_FILE"
 exit 0
 MOCK_EOF
 chmod +x "$TMPDIR/mock_orchestrator.sh"
