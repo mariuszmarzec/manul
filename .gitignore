@@ -1,0 +1,5 @@
+# Operator-specific runtime configuration must never be committed.
+skills/manul-github-bot/config.json
+
+# Local CI outputs.
+test-results/
