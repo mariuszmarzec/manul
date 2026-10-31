@@ -81,15 +81,15 @@ Run the hermetic test suite locally:
 ```bash
 for test in skills/manul-github-bot/test_*.sh; do
   case "$(basename "$test")" in
-    test_agent_modes.sh|test_manul_pr_workflow.sh|test_concurrency_impl.sh) continue ;;
+    test_manul_pr_workflow.sh|test_concurrency_impl.sh) continue ;;
   esac
   bash "$test"
 done
 python3 skills/manul-github-bot/test_todo_mcp_client.py
 ```
 
-`test_agent_modes.sh` validates host-owned agent definitions and remains an
-integration check in the host skills repository. `test_manul_pr_workflow.sh`
+The host repository runs its own integration checks for global agent definitions.
+`test_manul_pr_workflow.sh`
 is an operator-side workflow test that uses the configured runtime database;
 do not run it against a disposable CI environment.
 
