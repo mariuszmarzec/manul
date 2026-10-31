@@ -15,7 +15,7 @@ set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # DB on native ext4 (NOT on 9p /mnt/f)
-DB="${MANUL_DIR}/manul.db"
+DB="${MANUL_DIR}/state/manul.db"
 CONFIG="${MANUL_DIR}/config.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANONICAL_DIR="${CANONICAL_DIR:-$SCRIPT_DIR}"
@@ -317,10 +317,13 @@ test_config_repos() {
   has_typo="$(jq -r '.repositories[]?' "$CONFIG" | grep -c 'mariuszmarcer' || true)"
   assert_eq "$TEST_NAME (no typos)" "0" "$has_typo"
 
-  # Verify allowedUsers includes mariuszmarzec
-  local allowed
+  # The tracked example is sanitized; the operator runtime must contain
+  # the real account used by this live GitHub workflow test.
+  local canonical_allowed allowed
+  canonical_allowed="$(jq -r '.allowedUsers[]?' "$CANONICAL_DIR/config.json.example")"
+  assert_contains "$TEST_NAME (example login placeholder)" "$canonical_allowed" "<GITHUB_LOGIN>"
   allowed="$(jq -r '.allowedUsers[]?' "$CONFIG")"
-  assert_contains "$TEST_NAME" "$allowed" "<GITHUB_LOGIN>"
+  assert_contains "$TEST_NAME (operator login)" "$allowed" "mariuszmarzec"
 }
 
 # ============================================================================
