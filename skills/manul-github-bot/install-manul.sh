@@ -316,7 +316,9 @@ fi
 OLD_MANUL_SHELL_MARKER=".globalskills/skills/manul-github-bot/manul-shell.zsh"
 if grep -Fq "$OLD_MANUL_SHELL_MARKER" "$ZSHRC"; then
     ZSHRC_TMP="$(mktemp)" || fail "Could not create temporary zshrc migration file"
-    grep -Fv "$OLD_MANUL_SHELL_MARKER" "$ZSHRC" > "$ZSHRC_TMP" || true
+    awk '
+      !($0 ~ /^[[:space:]]*(source|\\.)[[:space:]]+[^;]*\\.globalskills\\/skills\\/manul-github-bot\\/manul-shell\\.zsh[[:space:]]*$/)
+    ' "$ZSHRC" > "$ZSHRC_TMP" || fail "Could not filter the stale Manul zsh entry"
     cat "$ZSHRC_TMP" > "$ZSHRC" || fail "Could not remove the stale Manul zsh entry"
     rm -f "$ZSHRC_TMP"
     echo "[6/7] Removed stale globalskills Manul zsh integration"
