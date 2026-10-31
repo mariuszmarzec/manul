@@ -33,10 +33,11 @@ if [[ "$1" == "pr" && "$2" == "create" ]]; then
     # gh pr create --repo R --base B --head H --title T --body B
     base=""
     head=""
-    for ((i=1; i<=$#; i++)); do
-        case "${!i}" in
-            --base) i=$((i+1)); base="${!i}" ;;
-            --head) i=$((i+1)); head="${!i}" ;;
+    args=("$@")
+    for ((i=0; i<${#args[@]}; i++)); do
+        case "${args[$i]}" in
+            --base) i=$((i+1)); base="${args[$i]}" ;;
+            --head) i=$((i+1)); head="${args[$i]}" ;;
         esac
     done
     if [ -n "$head" ] && [ -n "$base" ]; then
@@ -48,9 +49,10 @@ fi
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
     # gh pr list --repo R --state all --head H --json ... --limit 10
     head=""
-    for ((i=1; i<=$#; i++)); do
-        case "${!i}" in
-            --head) i=$((i+1)); head="${!i}" ;;
+    args=("$@")
+    for ((i=0; i<${#args[@]}; i++)); do
+        case "${args[$i]}" in
+            --head) i=$((i+1)); head="${args[$i]}" ;;
         esac
     done
     if [ -n "$head" ] && [ -f "$FAKE_GH_STATE" ]; then
