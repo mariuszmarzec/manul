@@ -961,7 +961,7 @@ if ! printf '%s' "$FAIL_REASON" | grep -q "real PR"; then
     exit 1
 fi
 echo "[OK] Test M: PASSED (issuebody repository change cannot bypass PR verification)"
-export CONFIG="$SCRIPT_DIR/config.json"
+export CONFIG="$TEST_TMPDIR/config.json"
 
 
 # Test Q/R/S: report-only delivery and implementation guards.
