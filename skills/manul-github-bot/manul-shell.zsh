@@ -2,7 +2,7 @@
 # manul-shell.zsh — Manul CLI entrypoints for interactive shells.
 #
 # Source this from ~/.zshrc:
-#   source "$HOME/.globalskills/skills/manul-github-bot/manul-shell.zsh"
+#   source "$HOME/.manul-repo/skills/manul-github-bot/manul-shell.zsh"
 #
 # All three CLI entrypoints point at the CANONICAL source scripts, never at the
 # runtime dir. This means deleting/archiving ~/.manul can never
@@ -23,7 +23,7 @@
 #   - watchdog.sh only restarts the daemon when it is present, so crash recovery
 #     never re-enables automation.
 
-MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
+MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
 MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 MANUL_INSTALLER="$MANUL_CANONICAL_DIR/install-manul.sh"
 MANUL_REPAIR="$MANUL_CANONICAL_DIR/repair-manul-runtime.sh"
