@@ -84,7 +84,8 @@ EOF
     MANUL_JIRA_PASSWORD \
     MANUL_CANONICAL_DIR \
     MANUL_CANONICAL_ROOT \
-    MANUL_CANONICAL_BRANCH; do
+    MANUL_CANONICAL_BRANCH \
+    MANUL_HOST_SKILLS_DIR; do
     value="${!variable:-}"
     [ -n "$value" ] || continue
 
@@ -103,7 +104,8 @@ EOF
     if ! awk '
       $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_DIR=/ &&
       $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_ROOT=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_BRANCH=/
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_BRANCH=/ &&
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_HOST_SKILLS_DIR=/
     ' "$env_file" > "$canonical_refresh_file"; then
       rm -f -- "$canonical_refresh_file"
       return 1
@@ -115,9 +117,12 @@ EOF
     if [ -n "${MANUL_CANONICAL_BRANCH:-}" ]; then
       printf 'MANUL_CANONICAL_BRANCH=%q\n' "$MANUL_CANONICAL_BRANCH" >> "$canonical_refresh_file"
     fi
+    if [ -n "${MANUL_HOST_SKILLS_DIR:-}" ]; then
+      printf 'MANUL_HOST_SKILLS_DIR=%q\n' "$MANUL_HOST_SKILLS_DIR" >> "$canonical_refresh_file"
+    fi
     chmod 600 "$canonical_refresh_file" || { rm -f -- "$canonical_refresh_file"; return 1; }
     mv -- "$canonical_refresh_file" "$env_file" || { rm -f -- "$canonical_refresh_file"; return 1; }
-    echo "  Refreshed canonical standalone Manul source paths" >&2
+    echo "  Refreshed standalone Manul source and host skill paths" >&2
   fi
 
   if [ -n "${TODO_LOCAL_MCP_TOKEN:-}" ]; then
