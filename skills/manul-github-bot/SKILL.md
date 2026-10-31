@@ -485,10 +485,17 @@ Do not put provider-global configuration into Manul's config merely because the 
 
 ## Installation
 
-Current installer:
+Current installer (from the canonical standalone checkout):
 
 ```bash
-bash skills/manul-github-bot/install-manul.sh
+MANUL_CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
+MANUL_DB="$HOME/.manul/state/manul.db"
+if [ -f "$MANUL_DB" ]; then
+  bash "$MANUL_CANONICAL_DIR/install-manul.sh"
+else
+  # Explicit first-time initialization; never used when a DB already exists.
+  bash "$MANUL_CANONICAL_DIR/install-manul.sh" --init-state
+fi
 ```
 
 Useful options:
