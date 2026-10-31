@@ -24,8 +24,8 @@ set -euo pipefail
 
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 SOURCE_DB="${MANUL_SOURCE_DB:-}"
-CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.globalskills/skills/manul-github-bot}"
-SCRIPT_DIR="$CANONICAL_DIR"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
 source "$SCRIPT_DIR/manul-platform.sh"
 manul_platform_prepare || exit 1
 manul_platform_reexec_if_needed "$SCRIPT_DIR/repair-manul-runtime.sh" "$@"
