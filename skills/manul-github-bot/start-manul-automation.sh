@@ -51,16 +51,17 @@ case "${1:-}" in
         # The runtime is a symlinked view of the canonical source. Before
         # starting, require that the configured canonical source is a real
         # git checkout and fast-forward it to origin/master when possible.
-        CANONICAL_ROOT="${MANUL_CANONICAL_ROOT:-$HOME/.globalskills}"
-        CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$CANONICAL_ROOT/skills/manul-github-bot}"
+        CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$HOME/.manul-repo/skills/manul-github-bot}"
+        CANONICAL_ROOT="${MANUL_CANONICAL_ROOT:-$(cd "$CANONICAL_DIR/../.." && pwd)}"
+        CANONICAL_BRANCH="${MANUL_CANONICAL_BRANCH:-main}"
         if [ -d "$CANONICAL_ROOT/.git" ]; then
-            if git -C "$CANONICAL_ROOT" fetch origin master --quiet >/dev/null 2>&1; then
-                if ! git -C "$CANONICAL_ROOT" merge --ff-only origin/master >/dev/null 2>&1; then
-                    log "ERROR: canonical globalskills checkout is not fast-forwardable to origin/master"
+            if git -C "$CANONICAL_ROOT" fetch origin "$CANONICAL_BRANCH" --quiet >/dev/null 2>&1; then
+                if ! git -C "$CANONICAL_ROOT" merge --ff-only "origin/$CANONICAL_BRANCH" >/dev/null 2>&1; then
+                    log "ERROR: canonical Manul checkout is not fast-forwardable to origin/$CANONICAL_BRANCH"
                     exit 1
                 fi
             else
-                log "ERROR: failed to fetch canonical globalskills/master"
+                log "ERROR: failed to fetch canonical Manul/$CANONICAL_BRANCH"
                 exit 1
             fi
         fi
