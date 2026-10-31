@@ -132,6 +132,14 @@ export FITEO_PAT="remote-test-token"
 export TODO_MCP_CALL_LOG="$TEST_DIR/mcp-calls.log"
 touch "$TODO_MCP_CALL_LOG"
 
+# Project skills are provided by the host environment, not bundled with Manul.
+HOST_SKILLS_DIR="$TEST_DIR/host-skills"
+mkdir -p "$HOST_SKILLS_DIR/fiteo-backend-api"
+cat > "$HOST_SKILLS_DIR/fiteo-backend-api/SKILL.md" <<'SKILL'
+Fiteo API integration guidance. The documentation source is fiteo-docs.
+SKILL
+export MANUL_HOST_SKILLS_DIR="$HOST_SKILLS_DIR"
+
 cat > "$TEST_DIR/project-repositories.json" <<'JSON'
 {
   "version": 1,
