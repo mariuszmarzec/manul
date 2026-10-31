@@ -138,10 +138,14 @@ todo_task_resolve_repository() {
 }
 
 todo_task_resolved_skill_context() {
-  local resolution_json="$1" skill skill_file
+  local resolution_json="$1" skill skill_file skills_dir
+  # Skills are owned by the host environment (normally globalskills), not by
+  # the standalone Manul repository. Keep this boundary configurable so Manul
+  # can run without globalskills when no external project skills are mapped.
+  skills_dir="${MANUL_HOST_SKILLS_DIR:-$HOME/.globalskills/skills}"
   while IFS= read -r skill; do
     [[ "$skill" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
-    skill_file="$TODO_TASK_SOURCE_DIR/../$skill/SKILL.md"
+    skill_file="$skills_dir/$skill/SKILL.md"
     [ -r "$skill_file" ] || {
       echo "project skill context is unavailable: $skill" >&2
       continue
