@@ -8,7 +8,8 @@ echo ""
 
 # Source the production implementation to extract the backoff calculation logic
 # We test the actual formula used in manul-pr-review.sh:sqlite3_retry()
-BACKOFF_SOURCE=$(grep -A 5 'Exponential backoff' /home/marzec/.globalskills/skills/manul-github-bot/manul-pr-review.sh)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKOFF_SOURCE=$(grep -A 5 'Exponential backoff' "$SCRIPT_DIR/manul-pr-review.sh")
 
 echo "Production implementation snippet:"
 echo "$BACKOFF_SOURCE"
