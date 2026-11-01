@@ -30,8 +30,7 @@ and the GNU process/filesystem utilities documented in
 ```bash
 git clone https://github.com/mariuszmarzec/manul.git ~/.manul-repo
 export MANUL_CANONICAL_DIR="$HOME/.manul-repo/skills/manul-github-bot"
-# Optional host integration: globalskills provides mapped project skill content.
-export MANUL_HOST_SKILLS_DIR="$HOME/.globalskills/skills"
+# Mapped project skills are read from ~/.agents/skills.
 MANUL_DB="$HOME/.manul/state/manul.db"
 if [ -f "$MANUL_DB" ]; then
   bash "$MANUL_CANONICAL_DIR/install-manul.sh"
@@ -62,11 +61,11 @@ missing database. It preserves runtime data and deliberately does not restart
 a running daemon; inspect active tasks and leases before any later restart.
 
 For a non-default checkout location, keep `MANUL_CANONICAL_DIR` exported in
-the interactive environment. When host skills are installed separately, set
-`MANUL_HOST_SKILLS_DIR` to their `skills/` directory; Manul persists both
-paths in its runtime-owned environment file for unattended daemon/watchdog
-processes. Without a host skills directory, Manul continues to run normally
-but cannot include externally mapped skill contents in Todo task prompts.
+the interactive environment. Project skill context and the curated repository
+catalog are read only from `~/.agents/skills`; Manul does not accept an
+alternate skills root or search other checkouts. If that directory or a mapped
+skill is unavailable, Manul continues without the missing external skill
+context.
 
 ## Configuration
 
