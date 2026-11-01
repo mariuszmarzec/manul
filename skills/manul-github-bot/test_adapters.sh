@@ -376,14 +376,12 @@ MOCK
   chmod +x "$tmp/bin/opencode"
   echo "Do the task" > "$tmp/prompt"
   : > "$tmp/stdout"; : > "$tmp/stderr"
-  set +e
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     MOCK_INVOKED_FILE="$tmp/invoked" MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-tool-collision \
       --prompt "$tmp/prompt" --workspace "$tmp" --attempt 1 --timeout 10 \
       --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   rc=$?
-  set -e
   if [ "$rc" -ne 0 ] && printf '%s' "$out" | jq -e '.status == "FAILED" and .failure_code == "PRE_EXECUTION_FAILURE" and .diagnostics.stage == "manul_tool_scope"' >/dev/null; then
     ok "OpenCode adapter fails closed on a task-local Manul tool name collision"
   else
