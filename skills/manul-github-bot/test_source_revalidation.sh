@@ -27,7 +27,10 @@ cat >"$CONFIG" <<'JSON'
   "retryConfig": {
     "delaySeconds": 1
   },
-  "repositories": []
+  "repositories": [],
+  "taskSources": [
+    {"type":"github_issues","enabled":true,"repositories":["owner/repo"],"trigger":"/manul","allowedUsers":[]}
+  ]
 }
 JSON
 
@@ -138,6 +141,12 @@ case "$url" in
   */issues/2001) echo '{"state":"open"}' ;;
   */issues/2002) echo '{"state":"closed"}' ;;
   */issues/35) echo '{"state":"open"}' ;;
+  */issues/2011) echo '{"state":"open","body":"/manul implement the task","user":{"login":"alice"}}' ;;
+  */issues/2012) echo '{"state":"closed","body":"/manul implement the task","user":{"login":"alice"}}' ;;
+  */issues/2013) echo '{"state":"open","body":"No trigger here","user":{"login":"alice"}}' ;;
+  */issues/2014) echo '{"message":"network"}'; exit 7 ;;
+  */issues/2015) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
+  */issues/2016) echo '{"state":"open","body":"/manul not an issue","user":{"login":"alice"},"pull_request":{"url":"https://api.github.com/repos/owner/repo/pulls/2016"}}' ;;
   */issues/9999) echo '{"message":"Not Found","status":"404"}'; exit 1 ;;
   */issues/5000) echo '{"message":"network"}'; exit 7 ;;
   */pulls/3001|*/pulls/4001|*/pulls/4002|*/pulls/4003|*/pulls/4004|*/pulls/590)
@@ -269,6 +278,21 @@ revalidate_pr_review_comment "review:12345" "$REPO" 5000; rc=$?; assert_rc "Grap
 echo "=== revalidate_source ==="
 revalidate_source "review:1202" "$REPO" 4002; rc=$?; assert_rc "wrapper passes issueNumber to review" 0 "$rc"
 revalidate_source "issue:1001" "$REPO" 591 "https://github.com/$REPO/pull/591#issuecomment-1001"; rc=$?; assert_rc "wrapper routes PR comment sources through PR state validation" 1 "$rc"
+
+echo "=== GitHub Issues task-source revalidation ==="
+task_source_revalidate "$CONFIG" "github_issues" "owner/repo#2011" "owner/repo" 2011; rc=$?; assert_rc "open issue with configured trigger is fresh" 0 "$rc"
+task_source_revalidate "$CONFIG" "github_issues" "owner/repo#2012" "owner/repo" 2012; rc=$?; assert_rc "closed issue source is stale" 1 "$rc"
+task_source_revalidate "$CONFIG" "github_issues" "owner/repo#2013" "owner/repo" 2013; rc=$?; assert_rc "issue with removed trigger is stale" 1 "$rc"
+task_source_revalidate "$CONFIG" "github_issues" "owner/repo#2014" "owner/repo" 2014; rc=$?; assert_rc "GitHub API error is transient" 2 "$rc"
+task_source_revalidate "$CONFIG" "github_issues" "owner/repo#2015" "owner/repo" 2015; rc=$?; assert_rc "missing source issue is stale" 1 "$rc"
+task_source_revalidate "$CONFIG" "github_issues" "owner/repo#2016" "owner/repo" 2016; rc=$?; assert_rc "pull request cannot be a GitHub Issues root" 1 "$rc"
+task_source_revalidate "$CONFIG" "github_issues" "other/repo#2011" "owner/repo" 2011; rc=$?; assert_rc "source identity mismatch is rejected as transient" 2 "$rc"
+
+echo "=== execution-kind context defaults ==="
+assert_eq "empty task context defaults to repository execution" "repository" "$(task_execution_kind_from_context "")"
+assert_eq "empty JSON object defaults to repository execution" "repository" "$(task_execution_kind_from_context "{}")"
+assert_eq "report-only execution kind is preserved" "report_only" "$(task_execution_kind_from_context '{"execution":{"kind":"report_only"}}')"
+assert_eq "unknown explicit execution kind is not silently accepted" "unsupported" "$(task_execution_kind_from_context '{"execution":{"kind":"unsupported"}}')"
 
 echo "=== stale/requeue helpers ==="
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,action,status,attempts,claimToken,workerPid,heartbeatAt,leaseExpiresAt) VALUES('stale-test','$REPO',1,'url','IMPLEMENT','running',1,'token1',123,datetime('now'),datetime('now','+900 seconds'));"
