@@ -30,29 +30,10 @@ todo_task_repository_catalog_path() {
     return 0
   fi
 
-  # In standalone Manul installs the project catalog is supplied by the host
-  # globalskills checkout. Prefer its explicitly configured skills directory.
-  local host_catalog=""
-  if [ -n "${MANUL_HOST_SKILLS_DIR:-}" ]; then
-    host_catalog="$MANUL_HOST_SKILLS_DIR/globalskills-repository/project-repositories.json"
-    if [ -r "$host_catalog" ]; then
-      printf '%s\n' "$host_catalog"
-      return 0
-    fi
-  fi
-
-  # Standard standalone layout: globalskills is checked out at ~/.globalskills.
-  # Do not require MANUL_HOST_SKILLS_DIR to be present in a daemon's .env;
-  # the catalog is still discoverable in unattended poller processes.
-  host_catalog="$HOME/.agents/skills/globalskills-repository/project-repositories.json"
-  if [ -r "$host_catalog" ]; then
-    printf '%s\n' "$host_catalog"
-    return 0
-  fi
-
-  # Backward-compatible location for deployments that still colocate the
-  # catalog with the Manul skill tree.
-  printf '%s\n' "$TODO_TASK_SOURCE_DIR/../globalskills-repository/project-repositories.json"
+  # The curated project catalog is part of the canonical agent skills tree.
+  # Keep skill discovery fixed to ~/.agents/skills in interactive and daemon
+  # processes; no alternate checkout or bundled fallback is supported.
+  printf '%s\n' "$HOME/.agents/skills/globalskills-repository/project-repositories.json"
 }
 
 # Resolve a task target only from the curated project catalog. Explicit GitHub
@@ -169,10 +150,9 @@ todo_task_resolve_repository() {
 
 todo_task_resolved_skill_context() {
   local resolution_json="$1" skill skill_file skills_dir
-  # Skills are owned by the host environment (normally globalskills), not by
-  # the standalone Manul repository. Keep this boundary configurable so Manul
-  # can run without globalskills when no external project skills are mapped.
-  skills_dir="${MANUL_HOST_SKILLS_DIR:-$HOME/.globalskills/skills}"
+  # Mapped project skills have one canonical source and are never loaded from
+  # a Manul checkout, runtime directory, or alternate host path.
+  skills_dir="$HOME/.agents/skills"
   while IFS= read -r skill; do
     [[ "$skill" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
     skill_file="$skills_dir/$skill/SKILL.md"
