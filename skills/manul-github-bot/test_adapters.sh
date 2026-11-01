@@ -1185,7 +1185,7 @@ test_opencode_caracal_mcp() {
 JSON
   cat >"$home/.manul/.env" <<'ENV'
 FITEO_BASE_URL=https://api.fiteo.example
-FITEO_PAT=runtime-fiteo-pat
+FITEO_MANUL_PAT=runtime-fiteo-pat
 ENV
   chmod 600 "$home/.manul/.env"
   cat >"$tmp/bin/opencode" <<'MOCK'
@@ -1194,7 +1194,7 @@ set -euo pipefail
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   config="${OPENCODE_CONFIG:?effective task config missing}"
   [ "${FITEO_BASE_URL:-}" = "https://api.fiteo.example" ] &&
-    [ "${FITEO_PAT:-}" = "runtime-fiteo-pat" ]
+    [ "${FITEO_MANUL_PAT:-}" = "runtime-fiteo-pat" ]
   jq -e '
     .mcp["other-server"].url == "https://example.invalid/mcp"
     and .mcp["caracal-rag"].type == "remote"
@@ -1204,7 +1204,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     and .mcp["fiteo"].type == "remote"
     and .mcp["fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
     and .mcp["fiteo"].oauth == false
-    and .mcp["fiteo"].headers.Authorization == "Bearer {env:FITEO_PAT}"
+    and .mcp["fiteo"].headers.Authorization == "Bearer {env:FITEO_MANUL_PAT}"
     and .mcp["fiteo"].enabled == true
     and .tools["caracal-rag_*"] == true
     and .tools["fiteo_*"] == true
