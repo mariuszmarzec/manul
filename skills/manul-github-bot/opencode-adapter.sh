@@ -262,11 +262,6 @@ prepare_opencode_manul_tool() {
 
 trap cleanup_opencode_task_config EXIT HUP INT TERM
 
-if ! prepare_opencode_manul_tool; then
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Unable to prepare task-scoped Manul Fiteo custom tool without overwriting workspace configuration","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"manul_tool_scope","agent_started":false}}\\n' "$OPT_TASK_ID"
-    exit 78
-fi
-
 # Respect a configured provider path, but also cover OpenCode's canonical
 # default when OPENCODE_CONFIG is not exported by the unattended launcher.
 _OPENCODE_BASE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
@@ -310,6 +305,16 @@ if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -f "$_OPENCODE_BASE_CONFIG" ]; then
     fi
 else
     _workspace_real="$(realpath -e -- "$OPT_WORKSPACE" 2>/dev/null || true)"
+fi
+
+if [ -z "$_workspace_real" ] || [ ! -d "$_workspace_real" ]; then
+    printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Cannot resolve OpenCode task workspace","session_id":"","duration_s":0}\\n' "$OPT_TASK_ID"
+    exit 66
+fi
+
+if ! prepare_opencode_manul_tool; then
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Unable to prepare task-scoped Manul Fiteo custom tool without overwriting workspace configuration","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"manul_tool_scope","agent_started":false}}\n' "$OPT_TASK_ID"
+    exit 78
 fi
 
 # Caracal is a required capability for Manul's OpenCode runtime. Never start
