@@ -475,6 +475,7 @@ local_question_task="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
 assert_eq "plain local /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$local_question_task")"
 assert_contains "plain local /manul question keeps its prompt" "$(jq -r '.prompt' <<<"$local_question_task")" "what day is today?"
 assert_eq "plain local /manul question does not require repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$local_question_task")"
+export TODO_TASK_REPOSITORY_CATALOG="$SAVED_TODO_TASK_REPOSITORY_CATALOG"
 export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8765/mcp'
 
@@ -552,6 +553,16 @@ cat > "$TEST_DIR/remote-question.json" <<'JSON'
 ]
 JSON
 REMOTE_QUESTION_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
+
+# Exercise the production default: the catalog is provided by globalskills,
+# not bundled alongside the standalone Manul checkout.
+HOST_REPOSITORY_CATALOG="$MANUL_HOST_SKILLS_DIR/globalskills-repository/project-repositories.json"
+mkdir -p "$(dirname "$HOST_REPOSITORY_CATALOG")"
+cp "$TODO_TASK_REPOSITORY_CATALOG" "$HOST_REPOSITORY_CATALOG"
+SAVED_TODO_TASK_REPOSITORY_CATALOG="$TODO_TASK_REPOSITORY_CATALOG"
+unset TODO_TASK_REPOSITORY_CATALOG
+assert_eq "default Todo repository catalog resolves through MANUL_HOST_SKILLS_DIR" "$HOST_REPOSITORY_CATALOG" "$(todo_task_repository_catalog_path)"
+
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-question.json"
 remote_question_task="$(task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE")"
 assert_eq "plain remote /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$remote_question_task")"
