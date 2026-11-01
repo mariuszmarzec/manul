@@ -34,14 +34,14 @@ cat >"$WORK/todo-sources.json" <<'JSON'
   "repositoryAllowlist": ["owner/catalog-a", "owner/catalog-b"],
   "taskSources": [
     {"type":"todo_local_mcp","enabled":true,"tokenEnv":"TODO_LOCAL_MCP_TOKEN"},
-    {"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp"},
+    {"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID","url":"https://fiteo.example.test/mcp"},
     {"type":"github_issues","enabled":true,"repositories":["owner/issues"]}
   ]
 }
 JSON
 todo_sources="$(task_source_configured_sources "$WORK/todo-sources.json")"
 assert_contains "global repository allowlist is inherited by local Todo source" "$todo_sources" '"type":"todo_local_mcp","enabled":true,"tokenEnv":"TODO_LOCAL_MCP_TOKEN","repositoryAllowlist":["owner/catalog-a","owner/catalog-b"]'
-assert_contains "global repository allowlist is inherited by remote Todo source" "$todo_sources" '"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp","repositoryAllowlist":["owner/catalog-a","owner/catalog-b"]'
+assert_contains "global repository allowlist is inherited by remote Todo source" "$todo_sources" '"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID","url":"https://fiteo.example.test/mcp","repositoryAllowlist":["owner/catalog-a","owner/catalog-b"]'
 assert_not_contains "global Todo repository allowlist does not alter GitHub repository filters" "$todo_sources" '"type":"github_issues","repositories":["owner/issues"],"repositoryAllowlist"'
 
 cat >"$WORK/todo-allowlist-intersection.json" <<'JSON'

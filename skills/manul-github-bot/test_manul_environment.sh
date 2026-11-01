@@ -65,16 +65,18 @@ CLAUDE_MODEL="claude-test-model"
 CARACAL_MCP_URL="http://127.0.0.1:3400/mcp"
 CARACAL_ACCESS_TOKEN="caracal-test-token"
 FITEO_BASE_URL="https://fiteo-test.example"
-FITEO_PAT="fiteo-test-pat"
+FITEO_MANUL_PAT="fiteo-test-pat"
+FITEO_MANUL_SHARE_USER_ID="1"
+FITEO_PAT="operator-pat-must-not-be-copied"
 UNSAFE_SECRET="must-not-be-copied"
 CUSTOM_JIRA_USER="custom-jira-user"
 CUSTOM_JIRA_PASSWORD="custom-jira-password"
 
 cat > "$RUNTIME/config.json" <<'EOF'
-{"taskSources":[{"type":"jira_tasks","enabled":true,"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD"}]}
+{"taskSources":[{"type":"jira_tasks","enabled":true,"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD"},{"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}]}
 EOF
 
-export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN FITEO_BASE_URL FITEO_PAT UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
+export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
 
 ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$RUNTIME")"
 
@@ -95,7 +97,8 @@ if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
    ! grep -q '^CARACAL_MCP_URL=' "$ENV_FILE" ||
    ! grep -q '^CARACAL_ACCESS_TOKEN=' "$ENV_FILE" ||
    ! grep -q '^FITEO_BASE_URL=' "$ENV_FILE" ||
-   ! grep -q '^FITEO_PAT=' "$ENV_FILE" ||
+    ! grep -q '^FITEO_MANUL_PAT=' "$ENV_FILE" ||
+    ! grep -q '^FITEO_MANUL_SHARE_USER_ID=1$' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
   fail "Bootstrap did not persist all supported provider variables"
@@ -110,7 +113,7 @@ else
 fi
 
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN FITEO_BASE_URL FITEO_PAT
+  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT
   source "$ENV_FILE"
   [ "$OPENCLAW_STATE_DIR" = "$TMP/openclaw state" ] &&
   [ "$OPENCLAW_CONFIG_PATH" = "$TMP/openclaw/config with spaces.json" ] &&
@@ -126,13 +129,39 @@ if (
   [ "$CARACAL_MCP_URL" = "http://127.0.0.1:3400/mcp" ] &&
   [ "$CARACAL_ACCESS_TOKEN" = "caracal-test-token" ] &&
   [ "$FITEO_BASE_URL" = "https://fiteo-test.example" ] &&
-  [ "$FITEO_PAT" = "fiteo-test-pat" ] &&
+  [ "$FITEO_MANUL_PAT" = "fiteo-test-pat" ] &&
+  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
+  [ -z "${FITEO_PAT:-}" ] &&
   [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
   [ "$CUSTOM_JIRA_PASSWORD" = "custom-jira-password" ]
 ); then
   ok "Bootstrap shell-quotes provider values correctly"
 else
   fail "Bootstrap did not preserve provider values when reloaded"
+fi
+
+# The recipient ID is persisted independently and refreshed even when the
+# remote Fiteo source does not need a separate endpoint/PAT pair.
+SHARE_ONLY="$TMP/share-only"
+mkdir -p "$SHARE_ONLY"
+cat > "$SHARE_ONLY/.env" <<MANUL_SHARE_ENV
+EXISTING_OPERATOR_SETTING=preserve-me
+FITEO_PAT=old-operator-pat
+FITEO_MANUL_SHARE_USER_ID=99
+MANUL_SHARE_ENV
+chmod 600 "$SHARE_ONLY/.env"
+cat > "$SHARE_ONLY/config.json" <<MANUL_SHARE_CONFIG
+{"taskSources":[{"type":"todo_remote_mcp","enabled":true,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}]}
+MANUL_SHARE_CONFIG
+SHARE_ONLY_ENV_FILE="$(FITEO_MANUL_SHARE_USER_ID=1 env -u FITEO_BASE_URL -u FITEO_MANUL_PAT -u FITEO_PAT bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
+if grep -qx 'FITEO_MANUL_SHARE_USER_ID=1' "$SHARE_ONLY_ENV_FILE" &&
+   grep -qx 'EXISTING_OPERATOR_SETTING=preserve-me' "$SHARE_ONLY_ENV_FILE" &&
+   ! grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
+   ! grep -q '^FITEO_PAT=' "$SHARE_ONLY_ENV_FILE" &&
+    ! grep -q '^FITEO_PAT=old-operator-pat$' "$SHARE_ONLY_ENV_FILE"; then
+  ok "Bootstrap refreshes the share recipient independently of Fiteo credentials"
+else
+  fail "Bootstrap did not refresh the share recipient independently"
 fi
 
 PRESERVE="$TMP/preserve"
@@ -197,22 +226,26 @@ PRESERVE_FITEO="$TMP/preserve-fiteo"
 mkdir -p "$PRESERVE_FITEO"
 cat > "$PRESERVE_FITEO/.env" <<'EOF'
 FITEO_BASE_URL=https://old-fiteo.example
-FITEO_PAT=old-fiteo-pat
+FITEO_PAT=old-operator-pat
+FITEO_MANUL_PAT=old-manul-pat
 EOF
 chmod 600 "$PRESERVE_FITEO/.env"
 FITEO_BASE_URL="https://new-fiteo.example"
-FITEO_PAT="new-fiteo-pat"
-export FITEO_BASE_URL FITEO_PAT
+FITEO_MANUL_PAT="new-manul-fiteo-pat"
+FITEO_MANUL_SHARE_USER_ID="1"
+export FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID
 FITEO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE_FITEO")"
 if (
-  unset FITEO_BASE_URL FITEO_PAT
+  unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT
   source "$FITEO_ENV_FILE"
   [ "$FITEO_BASE_URL" = "https://new-fiteo.example" ] &&
-  [ "$FITEO_PAT" = "new-fiteo-pat" ]
+  [ "$FITEO_MANUL_PAT" = "new-manul-fiteo-pat" ] &&
+  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
+  [ -z "${FITEO_PAT:-}" ]
 ); then
-  ok "Bootstrap refreshes the Fiteo endpoint/PAT pair for unattended MCP sessions"
+  ok "Bootstrap refreshes Manul Fiteo credentials without persisting the operator PAT"
 else
-  fail "Bootstrap did not refresh the Fiteo MCP credentials correctly"
+  fail "Bootstrap did not refresh Manul Fiteo credentials correctly"
 fi
 assert_file_mode_600 "$FITEO_ENV_FILE"
 
@@ -264,7 +297,7 @@ mkdir -p "$START_RUNTIME" "$CANONICAL_RUNTIME" "$FAKE_BIN"
 # isolated canonical tree with the same files as the real skill source so this
 # test exercises startup/symlink behavior rather than a deliberately incomplete
 # fixture.
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.py "$CANONICAL_RUNTIME/"
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "$CANONICAL_RUNTIME/"
 cp "$SCRIPT_DIR/orchestrator.prompt.md" "$CANONICAL_RUNTIME/orchestrator.prompt.md"
 chmod +x "$CANONICAL_RUNTIME"/*.sh
 

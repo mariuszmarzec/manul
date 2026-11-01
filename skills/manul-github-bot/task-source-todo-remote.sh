@@ -12,7 +12,10 @@ todo_source_remote_config() {
     echo "task-source: remote Fiteo MCP requires an HTTPS URL" >&2
     return 2
   }
-  jq -c '.tokenEnv = (.tokenEnv // "FITEO_PAT")' <<<"$source_json"
+  jq -c '
+    .tokenEnv = "FITEO_MANUL_PAT"
+    | .shareUserIdEnv = (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")
+  ' <<<"$source_json"
 }
 
 task_source_todo_remote_poll() {
@@ -32,6 +35,9 @@ task_source_todo_remote_poll() {
     [ -n "$shared_task_json" ] || continue
     todo_task_is_active "$shared_task_json" || continue
     todo_task_has_remote_share "$shared_task_json" "$manul_user_id" || continue
+    # Sharing grants visibility; execution requires an explicit /manul command
+    # in the root description or any nested subtask. Queue the root tree once.
+    todo_task_has_remote_trigger "$shared_task_json" || continue
     task_id="$(jq -r '.id // "unknown"' <<<"$shared_task_json")"
     if todo_task_is_report_only "$shared_task_json"; then
       if [ "$(jq -r '.allowReportOnly // false' <<<"$source_json")" != "true" ]; then

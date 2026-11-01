@@ -269,14 +269,18 @@ fi
 # untouched. The endpoint and PAT are stored atomically by manul-env.sh.
 _FITEO_RUNTIME_ENV_FILE="$MANUL_DIR/.env"
 if [ -f "$_FITEO_RUNTIME_ENV_FILE" ]; then
-    _fiteo_runtime_values="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s|%s" "${FITEO_BASE_URL:-}" "${FITEO_PAT:-}"' _ "$_FITEO_RUNTIME_ENV_FILE" 2>/dev/null)" || _fiteo_runtime_values=""
-    IFS="|" read -r _fiteo_runtime_base_url _fiteo_runtime_pat <<< "$_fiteo_runtime_values"
+    _fiteo_runtime_values="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s|%s|%s" "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${FITEO_MANUL_SHARE_USER_ID:-}"' _ "$_FITEO_RUNTIME_ENV_FILE" 2>/dev/null)" || _fiteo_runtime_values=""
+    IFS="|" read -r _fiteo_runtime_base_url _fiteo_runtime_pat _fiteo_runtime_share_user_id <<< "$_fiteo_runtime_values"
     if [ -n "$_fiteo_runtime_base_url" ] && [ -n "$_fiteo_runtime_pat" ]; then
         FITEO_BASE_URL="$_fiteo_runtime_base_url"
-        FITEO_PAT="$_fiteo_runtime_pat"
-        export FITEO_BASE_URL FITEO_PAT
+        FITEO_MANUL_PAT="$_fiteo_runtime_pat"
+        export FITEO_BASE_URL FITEO_MANUL_PAT
+        if [[ "$_fiteo_runtime_share_user_id" =~ ^[1-9][0-9]*$ ]]; then
+            FITEO_MANUL_SHARE_USER_ID="$_fiteo_runtime_share_user_id"
+            export FITEO_MANUL_SHARE_USER_ID
+        fi
     else
-        unset FITEO_BASE_URL FITEO_PAT 2>/dev/null || true
+        unset FITEO_BASE_URL FITEO_MANUL_PAT 2>/dev/null || true
     fi
 fi
 
@@ -353,17 +357,17 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
               url: "{env:FITEO_BASE_URL}/mcp",
               oauth: false,
               enabled: true,
-              headers: {Authorization: "Bearer {env:FITEO_PAT}"}
+              headers: {Authorization: "Bearer {env:FITEO_MANUL_PAT}"}
             }
           }
       )
-    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
+    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true, "manul_fiteo_create_task": true, "fiteo_todo_create_task": false})
     | .agent = (
         (.agent // {})
         | if type == "object" then
             with_entries(
               if .key == "chat" then .
-              else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
+              else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true, "manul_fiteo_create_task": true, "fiteo_todo_create_task": false})
               end
             )
           else {}

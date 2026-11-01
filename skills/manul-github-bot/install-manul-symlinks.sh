@@ -93,6 +93,8 @@ SCRIPTS=(
     "task-source-todo-remote.sh"
     "todo-task-source-utils.sh"
     "todo-mcp-client.py"
+    "todo-remote-create-task.py"
+    "manul_fiteo_create_task.ts"
     "start-manul-automation.sh"
     "task-recovery.sh"
     "manul-queue-reset.sh"
@@ -200,6 +202,42 @@ for script in "${SCRIPTS[@]}"; do
     CHANGED=$((CHANGED + 1))
 done
 
+# OpenCode discovers custom tools from its global tools directory. Deploy only
+# the Manul-owned helper under a unique name, and never replace an operator file.
+OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
+OPENCODE_TOOLS_DIR="$OPENCODE_CONFIG_DIR/tools"
+OPENCODE_TOOL_SOURCE="$RUNTIME_DIR/manul_fiteo_create_task.ts"
+OPENCODE_TOOL_TARGET="$OPENCODE_TOOLS_DIR/manul_fiteo_create_task.ts"
+if [ -f "$OPENCODE_TOOL_SOURCE" ]; then
+    if [ -L "$OPENCODE_TOOL_TARGET" ]; then
+        current_target="$(readlink "$OPENCODE_TOOL_TARGET" 2>/dev/null || true)"
+        if [ "$current_target" = "$OPENCODE_TOOL_SOURCE" ]; then
+            echo "OK OpenCode Manul task tool: symlink already correct"
+        else
+            echo "ERROR: OpenCode tool path is already a symlink to another target: $OPENCODE_TOOL_TARGET" >&2
+            DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
+        fi
+    elif [ -e "$OPENCODE_TOOL_TARGET" ]; then
+        echo "ERROR: refusing to overwrite an existing OpenCode custom tool: $OPENCODE_TOOL_TARGET" >&2
+        DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
+    elif $DRY_RUN; then
+        echo "[dry-run] Would install OpenCode Manul task tool: $OPENCODE_TOOL_TARGET -> $OPENCODE_TOOL_SOURCE"
+        CHANGED=$((CHANGED + 1))
+    else
+        mkdir -p "$OPENCODE_TOOLS_DIR"
+        if ln -s "$OPENCODE_TOOL_SOURCE" "$OPENCODE_TOOL_TARGET"; then
+            echo "Installed OpenCode Manul task tool: $OPENCODE_TOOL_TARGET -> $OPENCODE_TOOL_SOURCE"
+            CHANGED=$((CHANGED + 1))
+        else
+            echo "ERROR: failed to install OpenCode Manul custom tool" >&2
+            DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
+        fi
+    fi
+else
+    echo "ERROR: canonical OpenCode Manul task tool is missing: $OPENCODE_TOOL_SOURCE" >&2
+    DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
+fi
+
 # Verify deployment. Every declared entry must be a symlink whose resolved
 # target is a real file inside the canonical source. A broken or misplaced
 # link is a hard failure — the installer must exit non-zero so callers
@@ -226,6 +264,15 @@ for script in "${SCRIPTS[@]}"; do
         VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
     fi
 done
+
+if [ -L "$OPENCODE_TOOL_TARGET" ] &&
+   [ "$(readlink "$OPENCODE_TOOL_TARGET" 2>/dev/null || true)" = "$OPENCODE_TOOL_SOURCE" ] &&
+   [ -f "$OPENCODE_TOOL_TARGET" ]; then
+    echo "OK OpenCode Manul task tool -> $OPENCODE_TOOL_SOURCE"
+else
+    echo "FAIL OpenCode Manul task tool is missing or points elsewhere" >&2
+    VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+fi
 
 # Summary
 echo

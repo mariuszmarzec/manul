@@ -51,11 +51,12 @@ case "$tool" in
       parent_id="$(jq -r '.task.parentTaskId' <<<"$arguments")"
     fi
     task_id="$(jq '[.. | objects | .id? // empty] | max + 1' "$TODO_MCP_FIXTURE")"
-    jq --argjson parentId "$parent_id" --argjson id "$task_id" --arg description "$description" '
+    shares="$(if [ "$tool" = "todo_create_task" ]; then jq -c '.task.shares // []' <<<"$arguments"; else printf '[]'; fi)"
+    jq --argjson parentId "$parent_id" --argjson id "$task_id" --arg description "$description" --argjson shares "$shares" '
       map(if .id == $parentId then
         .subTasks = ((.subTasks // []) + [{
           id:$id, description:$description, parentTaskId:$parentId,
-          subTasks:[], isToDo:true, priority:1, scheduler:null, shares:[]
+          subTasks:[], isToDo:true, priority:1, scheduler:null, shares:$shares
         }])
       else . end)
     ' "$TODO_MCP_FIXTURE" > "$TODO_MCP_FIXTURE.next"
@@ -128,7 +129,8 @@ export TODO_LOCAL_MCP_DIRECT_STATUS=401
 export TODO_LOCAL_MCP_BRIDGE_STATUS=000
 export PATH="$BIN:$PATH"
 export TODO_LOCAL_MCP_TOKEN="local-test-token"
-export FITEO_PAT="remote-test-token"
+export FITEO_MANUL_PAT="remote-test-token"
+export FITEO_MANUL_SHARE_USER_ID=88
 export TODO_MCP_CALL_LOG="$TEST_DIR/mcp-calls.log"
 touch "$TODO_MCP_CALL_LOG"
 
@@ -271,7 +273,7 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
           {
             "id": 23,
             "ownerId": 4,
-            "description": "Shared nested step",
+            "description": "/manul start working on this task\nShared nested step instructions",
             "addedTime": "2026-10-01T10:02:00",
             "modifiedTime": "2026-10-01T10:02:00",
             "parentTaskId": 22,
@@ -340,7 +342,7 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
 JSON
 
 LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"TODO_LOCAL_MCP_TOKEN"}'
-REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp"}'
+REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp"}'
 
 echo "=== Repository routing ==="
 local_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":90,"description":"/manul Update local project"}')"
@@ -454,6 +456,7 @@ task_source_todo_local_complete "$LOCAL_SOURCE" "$(jq -r '.taskSourceId' <<<"$lo
 assert_eq "local completion retry confirms an already-done tree without another MCP mutation" "0" "$(wc -l < "$TODO_MCP_CALL_LOG" | tr -d ' ')"
 
 echo "=== Remote Fiteo source ==="
+export FITEO_MANUL_SHARE_USER_ID=88
 export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 remote_tasks="$(task_source_todo_remote_poll "$REMOTE_SOURCE")"
 assert_eq "only explicitly editor-shared remote root is enqueued" "1" "$(printf '%s\n' "$remote_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
@@ -461,12 +464,36 @@ remote_task="$(printf '%s\n' "$remote_tasks" | jq -c '.')"
 assert_contains "remote root source type is normalized" "$remote_task" '"taskSourceType":"todo_remote_mcp"'
 assert_eq "remote Fiteo adapter assigns repository from shared task description" "owner/remote" "$(jq -r '.metadata.repository' <<<"$remote_task")"
 assert_eq "remote source persists alias provenance" "remote project" "$(jq -r '.metadata.repositoryResolution.matchedAlias' <<<"$remote_task")"
+assert_contains "a nested /manul command activates the parent task" "$remote_tasks" '"taskSourceId":"21@'
+remote_prompt="$(jq -r '.prompt' <<<"$remote_task")"
+assert_contains "nested trigger instruction is retained in the parent prompt" "$remote_prompt" 'start working on this task'
+assert_contains "nested subtask context is retained in the parent prompt" "$remote_prompt" 'Shared nested step instructions'
+assert_not_contains "remote prompt strips the executable /manul marker" "$remote_prompt" '/manul'
 assert_not_contains "viewer-only task is excluded" "$remote_tasks" '"taskSourceId":"24@'
 assert_not_contains "unshared task is excluded" "$remote_tasks" '"taskSourceId":"25@'
 remote_id="$(jq -r '.taskSourceId' <<<"$remote_task")"
 assert_eq "remote revalidation accepts unchanged tree" "0" "$(
   task_source_todo_remote_revalidate "$REMOTE_SOURCE" "$remote_id"; echo $?
 )"
+
+# A shared remote task without a trigger is visible to the source but must not
+# enter the execution queue.
+jq '.[0].subTasks[0].subTasks[0].description = "Shared nested step without trigger"' \
+  "$TEST_DIR/remote.json" > "$TEST_DIR/remote-no-trigger.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-no-trigger.json"
+remote_untriggered_tasks="$(task_source_todo_remote_poll "$REMOTE_SOURCE")"
+assert_eq "shared remote root without any /manul command is not queued" "0" "$(printf '%s\n' "$remote_untriggered_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
+export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
+
+# Removing the descendant trigger after queueing invalidates remote revalidation.
+jq '.[0].subTasks[0].subTasks[0].description = "Shared nested step without trigger"' \
+  "$TEST_DIR/remote.json" > "$TEST_DIR/remote-trigger-removed.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-trigger-removed.json"
+remote_trigger_removed_rc=0
+task_source_todo_remote_revalidate "$REMOTE_SOURCE" "$remote_id" || remote_trigger_removed_rc=$?
+assert_rc "remote revalidation rejects a removed nested trigger" "1" "$remote_trigger_removed_rc"
+
+export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 
 # A completed child and changed modifiedTime must not invalidate a retry while
 # the root remains active; the structural fingerprint deliberately ignores
@@ -587,7 +614,7 @@ cat > "$TEST_DIR/remote-report.json" <<'JSON'
   {"id":601,"ownerId":4,"description":"/manul report Summarize remote report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
-REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserId":77,"url":"https://fiteo.example.test/mcp","tokenEnv":"FITEO_PAT"}'
+REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserId":77,"url":"https://fiteo.example.test/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-report.json"
 remote_report_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
 assert_eq "remote report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$remote_report_task")"
@@ -606,6 +633,8 @@ assert_eq "remote result child stays pending when completion update fails" "true
 unset TODO_MCP_FAIL_MARK
 remote_report_receipt="$(todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "A regenerated retry answer must reuse the persisted result.")"
 assert_eq "remote retry returns the exact previously persisted answer" "Remote Fiteo report answer." "$(jq -r '.answer' <<<"$remote_report_receipt")"
+remote_report_share_verified="$(jq -r '.[0].subTasks[0].shares | any(.[]; .userId == "88" and .permission == "EDITOR_AND_VIEWER")' "$TODO_MCP_FIXTURE")"
+assert_eq "Manul-created remote report subtask is shared with the configured owner" "true" "$remote_report_share_verified"
 remote_result_id="$(jq -r '.resultTaskId' <<<"$remote_report_receipt")"
 remote_create_call_count=$(grep -c todo_create_task "$TODO_MCP_CALL_LOG")
 assert_eq "remote report uses Fiteo create tool only once across retry" "1" "$remote_create_call_count"
@@ -648,6 +677,12 @@ if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_mcp_client.py"; then
   ok "Streamable HTTP MCP client tests passed"
 else
   fail "Streamable HTTP MCP client tests failed"
+fi
+
+if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_remote_create_task.py"; then
+  ok "Remote Todo share-enforcement tests passed"
+else
+  fail "Remote Todo share-enforcement tests failed"
 fi
 
 echo "Results: $PASS passed, $FAIL failed"

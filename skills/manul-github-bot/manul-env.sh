@@ -62,7 +62,7 @@ EOF
     then
       return 1
     fi
-    chmod 600 "$env_file" || return 1
+  chmod 600 "$env_file" || return 1
   fi
 
   local variable value refreshed_file
@@ -94,6 +94,20 @@ EOF
       echo "  Captured $variable for unattended Manul processes" >&2
     fi
   done
+
+  # FITEO_PAT belongs to the interactive/operator aicode session, not Manul.
+  # Remove it from any legacy Manul runtime file so an ACP wrapper cannot
+  # accidentally resurrect the operator identity from stale runtime state.
+  if grep -qE "^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=" "$env_file"; then
+    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=/' "$env_file" > "$refreshed_file"; then
+      rm -f -- "$refreshed_file"
+      return 1
+    fi
+    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+    echo "  Removed legacy operator Fiteo PAT from Manul runtime environment" >&2
+  fi
 
   # Canonical source locations are migration-sensitive: refresh them on every
   # installer bootstrap so a previous globalskills checkout cannot remain in
@@ -156,23 +170,27 @@ EOF
     echo "  Refreshed Caracal MCP endpoint/token for unattended Manul processes" >&2
   fi
 
-  # Fiteo's remote OpenCode MCP is always registered, independently of whether
-  # a Todo remote task source is enabled. Persist its endpoint and PAT together
-  # so a long-running daemon can refresh the pair without inheriting shell state.
-  if [ -n "${FITEO_BASE_URL:-}" ] && [ -n "${FITEO_PAT:-}" ]; then
+  # Manul uses a dedicated Fiteo identity. Never persist or fall back to the
+  # operator's FITEO_PAT: remote Todo reads and the task-scoped MCP use only the
+  # PAT belonging to the Manul account.
+  if [ -n "${FITEO_BASE_URL:-}" ] && [ -n "${FITEO_MANUL_PAT:-}" ]; then
     refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
     if ! awk '
       $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_BASE_URL=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=/
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_MANUL_PAT=/ &&
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_MANUL_SHARE_USER_ID=/
     ' "$env_file" > "$refreshed_file"; then
       rm -f -- "$refreshed_file"
       return 1
     fi
-    printf 'FITEO_BASE_URL=%q\nFITEO_PAT=%q\n' \
-      "$FITEO_BASE_URL" "$FITEO_PAT" >> "$refreshed_file"
+    printf 'FITEO_BASE_URL=%q\nFITEO_MANUL_PAT=%q\n' \
+      "$FITEO_BASE_URL" "$FITEO_MANUL_PAT" >> "$refreshed_file"
+    if [[ "${FITEO_MANUL_SHARE_USER_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+      printf 'FITEO_MANUL_SHARE_USER_ID=%q\n' "$FITEO_MANUL_SHARE_USER_ID" >> "$refreshed_file"
+    fi
     chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
     mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
-    echo "  Refreshed Fiteo MCP endpoint/PAT for unattended Manul processes" >&2
+    echo "  Refreshed Manul Fiteo MCP endpoint/PAT for unattended processes" >&2
   fi
 
   # Jira credentials may use operator-selected environment variable names.
@@ -222,11 +240,26 @@ EOF
         .taskSources[]?
         | select((.enabled != false))
         | if .type == "todo_local_mcp" then (.tokenEnv // "TODO_LOCAL_MCP_TOKEN")
-          elif .type == "todo_remote_mcp" then (.tokenEnv // "FITEO_PAT")
+          elif .type == "todo_remote_mcp" then (.tokenEnv // "FITEO_MANUL_PAT")
           else empty
           end
       ' "$runtime_dir/config.json" 2>/dev/null | sort -u
     )
+  fi
+
+  # Persist the configured non-secret recipient for Manul-created remote Todo tasks.
+  # This is independent from the endpoint/PAT pair: remote task discovery may
+  # use a task-scoped MCP URL while the bootstrap environment supplies the ID.
+  if [[ "${FITEO_MANUL_SHARE_USER_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_MANUL_SHARE_USER_ID=/' "$env_file" > "$refreshed_file"; then
+      rm -f -- "$refreshed_file"
+      return 1
+    fi
+    printf 'FITEO_MANUL_SHARE_USER_ID=%q\n' "$FITEO_MANUL_SHARE_USER_ID" >> "$refreshed_file"
+    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+    echo "  Refreshed Fiteo share-recipient ID for unattended Manul tasks" >&2
   fi
 
   chmod 600 "$env_file" || return 1

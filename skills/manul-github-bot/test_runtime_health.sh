@@ -142,12 +142,12 @@ PERM_ROOT=$(mktemp -d /tmp/manul-perm-XXXXXX)
 PERM_CANON="$PERM_ROOT/canonical"
 PERM_RUN="$PERM_ROOT/runtime"
 mkdir -p "$PERM_CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$PERM_CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "$PERM_CANON/" 2>/dev/null || true
 chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
 chmod 644 "$PERM_CANON/manul-queue-reset.sh"
 set +e
-MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
+OPENCODE_CONFIG_DIR="$PERM_ROOT/opencode" MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
 PERM_RC=$?
 set -e
 if [ "$PERM_RC" -eq 0 ] && [ -x "$PERM_CANON/agent-task-runner.sh" ] && [ "$(stat -c "%a" "$PERM_CANON/agent-task-runner.sh" 2>/dev/null || true)" = "755" ]; then
@@ -160,6 +160,15 @@ if [ "$PERM_RC" -eq 0 ] && [ -x "$PERM_CANON/manul-queue-reset.sh" ] && [ "$(sta
   ok "Installer restores execute bit on canonical queue-reset command"
 else
   fail "Installer did not restore canonical queue-reset execute bit (rc=$PERM_RC)"
+fi
+
+PERM_OPENCODE_TOOL="$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
+if [ "$PERM_RC" -eq 0 ] && [ -L "$PERM_OPENCODE_TOOL" ] &&
+   [ "$(readlink "$PERM_OPENCODE_TOOL" 2>/dev/null || true)" = "$PERM_RUN/manul_fiteo_create_task.ts" ] &&
+   [ -f "$PERM_OPENCODE_TOOL" ]; then
+  ok "Installer deploys the Manul Fiteo custom tool into OPENCODE_CONFIG_DIR"
+else
+  fail "Installer did not deploy the Manul Fiteo custom tool into OPENCODE_CONFIG_DIR"
 fi
 
 if [ -L "$PERM_RUN/agent-task-runner.sh" ] && [ -x "$PERM_RUN/agent-task-runner.sh" ]; then
@@ -282,11 +291,11 @@ CANON="$SELFHEAL_ROOT/canonical"
 RUN1="$SELFHEAL_ROOT/runtime1"
 RUN2="$SELFHEAL_ROOT/runtime2"
 mkdir -p "$CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "$CANON/" 2>/dev/null || true
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
-MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC1=$?
 set -e
@@ -298,7 +307,7 @@ fi
 
 # 2) Idempotent: second run exits 0 and leaves symlinks intact
 set +e
-MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC2=$?
 set -e
@@ -329,7 +338,7 @@ fi
 rm -f "$RUN1/manul-status.sh"
 echo "junk" > "$RUN1/manul-status.sh"
 set +e
-MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC3=$?
 set -e
@@ -343,7 +352,7 @@ fi
 rm -f "$RUN1/poll.sh"
 mkdir -p "$RUN1/poll.sh"
 set +e
-MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC4=$?
 set -e
@@ -355,7 +364,7 @@ fi
 
 # 6) Missing canonical source is fatal
 set +e
-MANUL_RUNTIME_DIR="$RUN2" MANUL_CANONICAL_DIR="$SELFHEAL_ROOT/missing" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN2" MANUL_CANONICAL_DIR="$SELFHEAL_ROOT/missing" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC5=$?
 set -e
@@ -374,12 +383,12 @@ CLI_ROOT="$(mktemp -d /tmp/manul-cli-XXXXXX)"
 CANON="$CLI_ROOT/canonical"
 RUN="$CLI_ROOT/runtime"
 mkdir -p "$CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "$CANON/" 2>/dev/null || true
 [ -f "$SCRIPT_DIR/state/manul.db" ] && cp "$SCRIPT_DIR/state/manul.db" "$CANON/" 2>/dev/null || true
 
 # Deploy a real runtime so the CLI can actually run
 set +e
-MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$CLI_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 set -e
 
@@ -493,7 +502,7 @@ done
 
 # 4) The repair path (installer) recreates all required symlinks from scratch
 set +e
-MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$CLI_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC_REPAIR=$?
 set -e
@@ -575,6 +584,7 @@ mkdir -p "$MISSING_DB_RUNTIME"
 
 set +e
 NO_BACKUP_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$MISSING_DB_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$MISSING_DB_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -619,6 +629,7 @@ ok "Canonical backup DB has all required tables"
 GOOD_RUNTIME="$TMPROOT/good-runtime"
 set +e
 GOOD_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$GOOD_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$GOOD_RUNTIME" \
   MANUL_SOURCE_DB="$BACKUP_DB" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
@@ -715,6 +726,7 @@ CONFIG_BEFORE=$(sha256sum "$GOOD_RUNTIME/config.json" | awk '{print $1}')
 
 set +e
 SECOND_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$GOOD_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$GOOD_RUNTIME" \
   MANUL_SOURCE_DB="$BACKUP_DB" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
@@ -753,6 +765,7 @@ cp "$BACKUP_DB" "$ARCHIVE_DIR/state/manul.db"
 
 set +e
 ARCHIVE_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$ARCHIVE_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$ARCHIVE_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -826,6 +839,7 @@ cp "$SCRIPT_DIR/config.json.example" "$READONLY_RUNTIME/config.json" 2>/dev/null
 
 set +e
 READONLY_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$READONLY_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$READONLY_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -952,6 +966,7 @@ cp "$SCRIPT_DIR/config.json.example" "$EMPTY_RUNTIME/config.json" 2>/dev/null ||
 
 set +e
 EMPTY_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$EMPTY_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$EMPTY_RUNTIME" \
   MANUL_SOURCE_DB="$BACKUP_DB" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
@@ -1001,6 +1016,7 @@ cp "$SCRIPT_DIR/config.json.example" "$CORRUPT_RUNTIME/config.json" 2>/dev/null 
 
 set +e
 CORRUPT_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$CORRUPT_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$CORRUPT_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -1054,6 +1070,7 @@ DB_BEFORE=$(sha256sum "$VALID_RUNTIME/state/manul.db" | awk '{print $1}')
 
 set +e
 VALID_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$VALID_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$VALID_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -1098,7 +1115,7 @@ exit 0
 chmod +x "$FAKE_BIN/openclaw"
 set +e
 INSTALL_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-INSTALL_OUTPUT=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1)
+INSTALL_OUTPUT=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" OPENCODE_CONFIG_DIR="$INSTALL_HOME/.config/opencode" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1)
 INSTALL_EXIT=$?
 INSTALL_END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 set -e
@@ -1154,7 +1171,7 @@ else
 fi
 
 set +e
-INSTALL_OUTPUT_2=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
+INSTALL_OUTPUT_2=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" OPENCODE_CONFIG_DIR="$INSTALL_HOME/.config/opencode" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
@@ -1379,7 +1396,7 @@ FAIL_CLOSED_RUNTIME="$FAIL_CLOSED_ROOT/runtime"
 mkdir -p "$FAIL_CLOSED_RUNTIME"
 set +e
 FAIL_CLOSED_OUTPUT=$(
-  MANUL_RUNTIME_DIR="$FAIL_CLOSED_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+  OPENCODE_CONFIG_DIR="$FAIL_CLOSED_RUNTIME/opencode" MANUL_RUNTIME_DIR="$FAIL_CLOSED_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
 )
 FAIL_CLOSED_EXIT=$?
 set -e
@@ -1393,10 +1410,10 @@ rm -rf "$FAIL_CLOSED_ROOT"
 # ── Test: explicit installer opt-in is the only fresh-DB path ────────────────
 INIT_ROOT="$(mktemp -d /tmp/manul-init-optin-XXXXXX)"
 INIT_RUNTIME="$INIT_ROOT/runtime"
-mkdir -p "$INIT_RUNTIME"
+mkdir -p "$INIT_RUNTIME" "$INIT_ROOT/home"
 set +e
 INIT_OUTPUT=$(
-  PATH="$FAKE_BIN:$PATH" MANUL_RUNTIME_DIR="$INIT_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
+  PATH="$FAKE_BIN:$PATH" HOME="$INIT_ROOT/home" OPENCODE_CONFIG_DIR="$INIT_ROOT/opencode" MANUL_RUNTIME_DIR="$INIT_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
 )
 INIT_EXIT=$?
 set -e
@@ -1417,7 +1434,7 @@ cp "$SCRIPT_DIR/config.json.example" "$PERSIST_RUNTIME/config.json"
 sqlite3 "$PERSIST_RUNTIME/state/manul.db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT); CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE workspaces(workspaceId TEXT PRIMARY KEY, workspacePath TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'IDLE', currentTaskId TEXT, lastUsedAt TEXT); INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,createdAt) VALUES('persist-task','test/repo',1,'https://github.com/test/repo/issues/1','do it','queued','2026-09-22T00:00:00Z');"
 PERSIST_BEFORE="$(sqlite3 "$PERSIST_RUNTIME/state/manul.db" "SELECT COUNT(*) FROM processed_comments;")"
 set +e
-PERSIST_OUTPUT="$(MANUL_RUNTIME_DIR="$PERSIST_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1)"
+PERSIST_OUTPUT="$(OPENCODE_CONFIG_DIR="$PERSIST_RUNTIME/opencode" MANUL_RUNTIME_DIR="$PERSIST_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1)"
 PERSIST_EXIT=$?
 set -e
 PERSIST_AFTER="$(sqlite3 "$PERSIST_RUNTIME/state/manul.db" "SELECT COUNT(*) FROM processed_comments;" 2>/dev/null || echo 0)"

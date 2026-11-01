@@ -214,7 +214,7 @@ Current provider types:
 - `github_issues` — default, backed by GitHub repositories.
 - `jira_tasks` — Jira REST provider, disabled by default.
 - `todo_local_mcp` — separate Todo Desktop MCP source. It selects active root tasks whose description contains a line beginning with `/manul`.
-- `todo_remote_mcp` — separate Fiteo backend MCP source. It selects active root tasks explicitly shared with the configured `manulUserId` using `EDITOR_AND_VIEWER` permission.
+- `todo_remote_mcp` — separate Fiteo backend MCP source. Sharing with the configured `manulUserId` and `EDITOR_AND_VIEWER` grants visibility; execution additionally requires a `/manul` command in the root description or any nested subtask. A nested trigger queues the complete parent tree once.
 
 For either Todo provider, an operator may set `allowReportOnly: true` to enable
 the explicit `/manul report <question>` trigger. A report-only source does not
@@ -245,7 +245,7 @@ Configure `repositoryAllowlist` to narrow which catalog repositories the Todo
 sources may target. Unknown, ambiguous, and disallowed targets are logged and
 not queued; Manul must never fall back to a hardcoded Todo repository.
 
-The local adapter connects directly to Todo Desktop at `http://127.0.0.1:8765/mcp` on native Linux/macOS hosts. Inside WSL it first tries the same loopback endpoint and falls back to the existing WSL bridge at `http://127.0.0.1:8766/mcp` when direct loopback is unavailable. Both paths use `TODO_LOCAL_MCP_TOKEN`. The remote adapter requires an HTTPS MCP URL and a PAT supplied through a configured environment variable (default `FITEO_PAT`). Neither token belongs in `config.json`.
+The local adapter connects directly to Todo Desktop at `http://127.0.0.1:8765/mcp` on native Linux/macOS hosts. Inside WSL it first tries the same loopback endpoint and falls back to the existing WSL bridge at `http://127.0.0.1:8766/mcp` when direct loopback is unavailable. Both paths use `TODO_LOCAL_MCP_TOKEN`. The remote adapter requires an HTTPS MCP URL and Manul's dedicated PAT supplied through `FITEO_MANUL_PAT`. Never use the operator's `FITEO_PAT` for Manul's task-scoped Fiteo connection. When creating a Todo task through Fiteo, always use the `manul_fiteo_create_task` custom tool rather than calling `fiteo_todo_create_task` directly: the custom tool adds the required `EDITOR_AND_VIEWER` share and verifies it by reading the new task back. It requires `FITEO_MANUL_SHARE_USER_ID`, the numeric Fiteo ID of the intended Mariusz recipient. Neither token nor recipient ID belongs in `config.json`.
 
 A Todo root is one Manul task. Its nested subtasks are included as ordered implementation steps in pre-order, preserving the order returned by Todo; they are not queued as independent tasks. Manul revalidates the source tree before execution and marks the root and descendants done only after repository delivery has been verified. For Fiteo, descendants are updated before the root so a partial failure can be retried while the root remains active.
 
