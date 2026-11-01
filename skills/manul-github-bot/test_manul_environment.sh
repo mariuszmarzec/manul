@@ -299,7 +299,7 @@ CRONTAB_FILE="$TMP/crontab"
 mkdir -p "$START_RUNTIME" "$CANONICAL_RUNTIME" "$FAKE_BIN"
 
 # The startup wrapper now refreshes runtime symlinks from the canonical source.
-# Isolate that source in the test instead of relying on ~/.globalskills.
+# Isolate that source in the test instead of relying on a global skill path.
 # The installer validates the complete canonical script set. Populate an
 # isolated canonical tree with the same files as the real skill source so this
 # test exercises startup/symlink behavior rather than a deliberately incomplete
