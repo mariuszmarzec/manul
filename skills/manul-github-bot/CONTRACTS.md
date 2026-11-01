@@ -57,6 +57,17 @@ A stale running task is either:
 - requeued for another execution attempt, preserving its attempt count; or
 - marked failed when the configured maximum attempts has been reached.
 
+Manual `--retry-stale` recovery requeues a terminal `stale` row through an
+atomic compare-and-swap guarded by the full source identity. It must NEVER
+terminate an executor or inspect, unlink, or otherwise modify an
+`executor.pid` file. A liveness check followed by unlink is not safe: the
+dispatcher can replace the marker with a fresh executor PID between those
+operations. The dispatcher/runner exclusively owns executor PID-file creation
+and replacement; orphaned-executor detection and termination remain the
+daemon's responsibility. Retry-stale deliberately performs no executor or
+PID-file cleanup after its CAS, even when a pre-existing marker appears dead.
+`cleanup_orphaned_task_executors` responsibility, never the recovery CLI's.
+
 ## 3. Attempt counting
 
 `attempts` is the bounded budget for actual agent-runtime executions, not workspace/checkout preparation.
