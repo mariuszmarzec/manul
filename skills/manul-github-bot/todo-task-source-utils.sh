@@ -44,7 +44,7 @@ todo_task_repository_catalog_path() {
   # Standard standalone layout: globalskills is checked out at ~/.globalskills.
   # Do not require MANUL_HOST_SKILLS_DIR to be present in a daemon's .env;
   # the catalog is still discoverable in unattended poller processes.
-  host_catalog="$HOME/.globalskills/skills/globalskills-repository/project-repositories.json"
+  host_catalog="$HOME/.agents/skills/globalskills-repository/project-repositories.json"
   if [ -r "$host_catalog" ]; then
     printf '%s\n' "$host_catalog"
     return 0
