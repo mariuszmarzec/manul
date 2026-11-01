@@ -247,6 +247,43 @@ EOF
     )
   fi
 
+  # Persist the remote Todo identity variable configured by manulUserIdEnv.
+  # The poller may run under cron/systemd without inheriting the interactive shell.
+  local remote_manul_user_id_variable
+  if [ -f "$runtime_dir/config.json" ]; then
+    while IFS= read -r remote_manul_user_id_variable; do
+      [ -n "$remote_manul_user_id_variable" ] || continue
+      if [[ ! "$remote_manul_user_id_variable" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "  Ignoring invalid Fiteo Manul user ID environment variable name" >&2
+        continue
+      fi
+      value="${!remote_manul_user_id_variable:-}"
+      [ -n "$value" ] || continue
+      if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+        echo "  Ignoring non-numeric value for configured Fiteo Manul user ID variable" >&2
+        continue
+      fi
+
+      refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+      if ! awk -v variable="$remote_manul_user_id_variable" '
+        $0 !~ ("^[[:space:]]*(export[[:space:]]+)?" variable "=")
+      ' "$env_file" > "$refreshed_file"; then
+        rm -f -- "$refreshed_file"
+        return 1
+      fi
+      printf '%s=%q\n' "$remote_manul_user_id_variable" "$value" >> "$refreshed_file"
+      chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+      mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+      echo "  Refreshed configured Fiteo Manul user ID for unattended processes" >&2
+    done < <(
+      jq -r '
+        .taskSources[]?
+        | select((.enabled != false) and .type == "todo_remote_mcp")
+        | .manulUserIdEnv // empty
+      ' "$runtime_dir/config.json" 2>/dev/null
+    )
+  fi
+
   # Persist the configured non-secret recipient for Manul-created remote Todo tasks.
   # This is independent from the endpoint/PAT pair: remote task discovery may
   # use a task-scoped MCP URL while the bootstrap environment supplies the ID.

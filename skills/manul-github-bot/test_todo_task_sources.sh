@@ -130,7 +130,10 @@ export TODO_LOCAL_MCP_BRIDGE_STATUS=000
 export PATH="$BIN:$PATH"
 export TODO_LOCAL_MCP_TOKEN="local-test-token"
 export FITEO_MANUL_PAT="remote-test-token"
+export FITEO_BASE_URL="https://fiteo.example.test"
+export MANUL_USER_ID=77
 export FITEO_MANUL_SHARE_USER_ID=88
+export FITEO_PAT="operator-only-token"
 export TODO_MCP_CALL_LOG="$TEST_DIR/mcp-calls.log"
 touch "$TODO_MCP_CALL_LOG"
 
@@ -160,6 +163,7 @@ export TODO_TASK_REPOSITORY_CATALOG="$TEST_DIR/project-repositories.json"
 
 source "$SCRIPT_DIR/task-source-todo-local.sh"
 source "$SCRIPT_DIR/task-source-todo-remote.sh"
+source "$SCRIPT_DIR/manul-env.sh"
 
 cat > "$TEST_DIR/local.json" <<'JSON'
 [
@@ -342,7 +346,44 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
 JSON
 
 LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"TODO_LOCAL_MCP_TOKEN"}'
-REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp"}'
+REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp"}'
+remote_resolved_config="$(todo_source_remote_config "$REMOTE_SOURCE")"
+assert_eq "remote URL expands the Fiteo base URL environment placeholder" "https://fiteo.example.test/mcp" "$(jq -r '.url' <<<"$remote_resolved_config")"
+assert_eq "remote Manul user ID is resolved from the configured environment variable" "77" "$(jq -r '.manulUserId' <<<"$remote_resolved_config")"
+assert_eq "resolved remote Manul user ID is normalized as a JSON number" "number" "$(jq -r '.manulUserId | type' <<<"$remote_resolved_config")"
+
+missing_user_id_rc=0
+unset MANUL_USER_ID
+todo_source_remote_config "$REMOTE_SOURCE" >/dev/null 2>"$TEST_DIR/missing-manul-user-id.log" || missing_user_id_rc=$?
+assert_rc "remote config rejects a missing Manul user ID environment variable" "2" "$missing_user_id_rc"
+assert_contains "missing Manul user ID diagnostic names the variable" "$(cat "$TEST_DIR/missing-manul-user-id.log")" "MANUL_USER_ID"
+export MANUL_USER_ID=77
+
+missing_base_url_rc=0
+unset FITEO_BASE_URL
+todo_source_remote_config "$REMOTE_SOURCE" >/dev/null 2>"$TEST_DIR/missing-fiteo-base-url.log" || missing_base_url_rc=$?
+assert_rc "remote config rejects a missing URL environment variable" "2" "$missing_base_url_rc"
+assert_contains "missing URL diagnostic names the variable" "$(cat "$TEST_DIR/missing-fiteo-base-url.log")" "FITEO_BASE_URL"
+export FITEO_BASE_URL="https://fiteo.example.test"
+
+legacy_remote_config="$(todo_source_remote_config '{"type":"todo_remote_mcp","url":"https://fiteo.example.test/mcp","manulUserId":77}')"
+assert_eq "legacy numeric manulUserId remains supported" "77" "$(jq -r '.manulUserId' <<<"$legacy_remote_config")"
+
+# Environment bootstrap must persist URL, PAT and the configured identity for
+# the unattended poller, without ever copying the operator's Fiteo PAT.
+ENV_RUNTIME="$TEST_DIR/env-runtime"
+mkdir -p "$ENV_RUNTIME"
+cat > "$ENV_RUNTIME/config.json" <<'JSON'
+{"taskSources":[{"type":"todo_remote_mcp","enabled":true,"url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","manulUserIdEnv":"MANUL_USER_ID","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}]}
+JSON
+manul_env_bootstrap "$ENV_RUNTIME" >/dev/null 2>"$TEST_DIR/env-bootstrap.log"
+env_bootstrap_content="$(cat "$ENV_RUNTIME/.env")"
+assert_contains "runtime environment persists the Fiteo base URL" "$env_bootstrap_content" "FITEO_BASE_URL=https://fiteo.example.test"
+assert_contains "runtime environment persists the dedicated Manul PAT" "$env_bootstrap_content" "FITEO_MANUL_PAT=remote-test-token"
+assert_contains "runtime environment persists configured Manul user ID" "$env_bootstrap_content" "MANUL_USER_ID=77"
+assert_contains "runtime environment persists the task-share recipient ID" "$env_bootstrap_content" "FITEO_MANUL_SHARE_USER_ID=88"
+assert_not_contains "runtime environment never persists the operator Fiteo PAT" "$env_bootstrap_content" "FITEO_PAT="
+assert_eq "runtime environment file remains private" "600" "$(stat -c '%a' "$ENV_RUNTIME/.env")"
 
 echo "=== Repository routing ==="
 local_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":90,"description":"/manul Update local project"}')"
@@ -614,7 +655,7 @@ cat > "$TEST_DIR/remote-report.json" <<'JSON'
   {"id":601,"ownerId":4,"description":"/manul report Summarize remote report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
-REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserId":77,"url":"https://fiteo.example.test/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
+REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-report.json"
 remote_report_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
 assert_eq "remote report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$remote_report_task")"

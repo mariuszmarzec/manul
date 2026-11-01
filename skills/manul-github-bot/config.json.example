@@ -81,9 +81,9 @@
     {
       "type": "todo_remote_mcp",
       "enabled": false,
-      "url": "https://your-fiteo-host/mcp",
+      "url": "{env:FITEO_BASE_URL}/mcp",
       "tokenEnv": "FITEO_MANUL_PAT",
-      "manulUserId": 123,
+      "manulUserIdEnv": "MANUL_USER_ID",
       "shareUserIdEnv": "FITEO_MANUL_SHARE_USER_ID",
       "allowReportOnly": false
     }

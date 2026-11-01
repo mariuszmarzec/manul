@@ -5,15 +5,69 @@ set -uo pipefail
 TODO_REMOTE_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_REMOTE_SOURCE_DIR/todo-task-source-utils.sh"
 
+todo_source_expand_env_placeholders() {
+  local template="$1"
+  python3 - "$template" <<'PYTHON'
+import os
+import re
+import sys
+
+template = sys.argv[1]
+placeholder = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
+unparsed = placeholder.sub("", template)
+if "{env:" in unparsed:
+    print("task-source: invalid environment placeholder in remote Fiteo MCP URL", file=sys.stderr)
+    raise SystemExit(2)
+
+def expand(match):
+    name = match.group(1)
+    value = os.environ.get(name)
+    if not value:
+        print(
+            f"task-source: remote Fiteo MCP URL requires non-empty environment variable {name}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return value
+
+sys.stdout.write(placeholder.sub(expand, template))
+PYTHON
+}
+
 todo_source_remote_config() {
-  local source_json="$1" url
-  url="$(jq -r '.url // empty' <<<"$source_json")"
+  local source_json="$1" url_template url manul_user_id_env manul_user_id
+  url_template="$(jq -r '.url // empty' <<<"$source_json")"
+  url="$(todo_source_expand_env_placeholders "$url_template")" || return $?
   [[ "$url" == https://* ]] || {
-    echo "task-source: remote Fiteo MCP requires an HTTPS URL" >&2
+    echo "task-source: remote Fiteo MCP requires an HTTPS URL after environment expansion" >&2
     return 2
   }
-  jq -c '
-    .tokenEnv = "FITEO_MANUL_PAT"
+
+  manul_user_id_env="$(jq -r '.manulUserIdEnv // empty' <<<"$source_json")"
+  if [ -n "$manul_user_id_env" ]; then
+    [[ "$manul_user_id_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+      echo "task-source: manulUserIdEnv must be a valid environment variable name" >&2
+      return 2
+    }
+    manul_user_id="${!manul_user_id_env:-}"
+  else
+    # Keep backward compatibility with existing numeric manulUserId configs.
+    manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
+  fi
+
+  [[ "$manul_user_id" =~ ^[1-9][0-9]*$ ]] || {
+    if [ -n "$manul_user_id_env" ]; then
+      echo "task-source: todo_remote_mcp requires a positive numeric value in $manul_user_id_env" >&2
+    else
+      echo "task-source: todo_remote_mcp requires a positive numeric manulUserId or manulUserIdEnv" >&2
+    fi
+    return 2
+  }
+
+  jq -c --arg url "$url" --argjson manulUserId "$manul_user_id" '
+    .url = $url
+    | .manulUserId = $manulUserId
+    | .tokenEnv = "FITEO_MANUL_PAT"
     | .shareUserIdEnv = (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")
   ' <<<"$source_json"
 }
