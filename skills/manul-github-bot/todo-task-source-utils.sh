@@ -710,7 +710,7 @@ todo_task_report_deliver() {
   if [ "$source_type" = "todo_remote_mcp" ]; then
     todo_task_log_remote_share_diagnostics "post_create_readback" "$result_json" "$share_user_id" || return 1
     if ! todo_task_has_remote_share "$result_json" "$share_user_id"; then
-      echo "Todo remote report result share verification failed at stage=post_create_readback; result remains pending" >&2
+      echo "Todo remote report result share verification failed at stage=post_create_readback; completion is blocked" >&2
       return 1
     fi
   fi
