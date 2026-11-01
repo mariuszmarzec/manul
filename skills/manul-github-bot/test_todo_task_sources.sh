@@ -385,6 +385,19 @@ assert_contains "runtime environment persists the task-share recipient ID" "$env
 assert_not_contains "runtime environment never persists the operator Fiteo PAT" "$env_bootstrap_content" "FITEO_PAT="
 assert_eq "runtime environment file remains private" "600" "$(stat -c '%a' "$ENV_RUNTIME/.env")"
 
+# A URL from the login shell must refresh even when its PAT is already stored
+# in the runtime .env and is not exported by the current installer process.
+ENV_RUNTIME_URL_ONLY="$TEST_DIR/env-runtime-url-only"
+mkdir -p "$ENV_RUNTIME_URL_ONLY"
+printf 'FITEO_MANUL_PAT=preexisting-manul-pat\n' > "$ENV_RUNTIME_URL_ONLY/.env"
+chmod 600 "$ENV_RUNTIME_URL_ONLY/.env"
+unset FITEO_MANUL_PAT
+manul_env_bootstrap "$ENV_RUNTIME_URL_ONLY" >/dev/null 2>"$TEST_DIR/env-url-only-bootstrap.log"
+export FITEO_MANUL_PAT="remote-test-token"
+url_only_bootstrap_content="$(cat "$ENV_RUNTIME_URL_ONLY/.env")"
+assert_contains "bootstrap persists Fiteo URL without requiring PAT in the current shell" "$url_only_bootstrap_content" "FITEO_BASE_URL=https://fiteo.example.test"
+assert_contains "bootstrap preserves the PAT already stored in runtime environment" "$url_only_bootstrap_content" "FITEO_MANUL_PAT=preexisting-manul-pat"
+
 echo "=== Repository routing ==="
 local_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":90,"description":"/manul Update local project"}')"
 assert_eq "catalog alias resolves the canonical local repository" "owner/local" "$(jq -r '.repository' <<<"$local_resolution")"

@@ -193,6 +193,21 @@ EOF
     echo "  Refreshed Manul Fiteo MCP endpoint/PAT for unattended processes" >&2
   fi
 
+  # FITEO_BASE_URL may be supplied by the login shell while the dedicated
+  # PAT already lives in ~/.manul/.env. Persist the URL independently so the
+  # configured {env:FITEO_BASE_URL} placeholder also works after daemon restart.
+  if [ -n "${FITEO_BASE_URL:-}" ] && [ -z "${FITEO_MANUL_PAT:-}" ]; then
+    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_BASE_URL=/' "$env_file" > "$refreshed_file"; then
+      rm -f -- "$refreshed_file"
+      return 1
+    fi
+    printf 'FITEO_BASE_URL=%q\n' "$FITEO_BASE_URL" >> "$refreshed_file"
+    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+    echo "  Refreshed Fiteo base URL for unattended processes" >&2
+  fi
+
   # Jira credentials may use operator-selected environment variable names.
   # Capture only names explicitly configured by enabled Jira task sources; never
   # copy arbitrary process environment variables into Manul runtime state.
