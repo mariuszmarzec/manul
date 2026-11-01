@@ -62,31 +62,6 @@ EOF
     then
       return 1
     fi
-    # Persist the configured numeric Fiteo share recipient (the account that
-  # corresponds to mariusz.marzec00@gmail.com). It is not a credential, but
-  # remains in the mode-600 runtime file alongside Manul's MCP settings.
-  local share_user_id_variable
-  if [ -f "$runtime_dir/config.json" ]; then
-    while IFS= read -r share_user_id_variable; do
-      [ -n "$share_user_id_variable" ] || continue
-      if [[ ! "$share_user_id_variable" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-        echo "  Ignoring invalid Todo share-recipient environment variable name" >&2
-        continue
-      fi
-      value="${!share_user_id_variable:-}"
-      if [[ "$value" =~ ^[1-9][0-9]*$ ]] && ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${share_user_id_variable}=" "$env_file"; then
-        printf "%s=%q\n" "$share_user_id_variable" "$value" >> "$env_file"
-        echo "  Captured Fiteo share-recipient ID for unattended Manul tasks" >&2
-      fi
-    done < <(
-      jq -r '
-        .taskSources[]?
-        | select((.enabled != false) and .type == "todo_remote_mcp")
-        | (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")
-      ' "$runtime_dir/config.json" 2>/dev/null | sort -u
-    )
-  fi
-
   chmod 600 "$env_file" || return 1
   fi
 
@@ -254,6 +229,32 @@ EOF
           elif .type == "todo_remote_mcp" then (.tokenEnv // "FITEO_MANUL_PAT")
           else empty
           end
+      ' "$runtime_dir/config.json" 2>/dev/null | sort -u
+    )
+  fi
+
+  # Persist the non-secret Fiteo recipient ID configured for remote Todo sharing.
+  # Capture it independently of the Fiteo endpoint/PAT pair so deployments
+  # using only the task-source URL still survive unattended daemon restarts.
+  local share_user_id_variable
+  if [ -f "$runtime_dir/config.json" ]; then
+    while IFS= read -r share_user_id_variable; do
+      [ -n "$share_user_id_variable" ] || continue
+      if [[ ! "$share_user_id_variable" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "  Ignoring invalid Todo share-recipient environment variable name" >&2
+        continue
+      fi
+      value="${!share_user_id_variable:-}"
+      if [[ "$value" =~ ^[1-9][0-9]*$ ]] &&
+         ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${share_user_id_variable}=" "$env_file"; then
+        printf "%s=%q\\n" "$share_user_id_variable" "$value" >> "$env_file"
+        echo "  Captured Fiteo share-recipient ID for unattended Manul tasks" >&2
+      fi
+    done < <(
+      jq -r '
+        .taskSources[]?
+        | select(.type == "todo_remote_mcp")
+        | (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")
       ' "$runtime_dir/config.json" 2>/dev/null | sort -u
     )
   fi
