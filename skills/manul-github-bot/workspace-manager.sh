@@ -72,7 +72,7 @@ workspace_lease() {
   local safe_task_id
   safe_task_id="$(sql_escape "$task_id")"
   local result
-  result="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId IN (SELECT w.workspaceId FROM workspaces w WHERE w.status='IDLE' AND NOT EXISTS (SELECT 1 FROM workspace_contexts wc WHERE wc.workspaceId=w.workspaceId) LIMIT 1); SELECT changes(); COMMIT;" 2>/dev/null)"
+  result="$(sqlite3 "$DB" "BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId IN (SELECT w.workspaceId FROM workspaces w WHERE w.status='IDLE' AND NOT EXISTS (SELECT 1 FROM workspace_contexts wc WHERE wc.workspaceId=w.workspaceId) LIMIT 1); SELECT changes(); COMMIT;" 2>/dev/null)"
   result="$(printf '%s\n' "$result" | tail -n1)"
   if [ "${result:-0}" -eq 0 ] || [ -z "$result" ]; then
     return 1
@@ -151,8 +151,7 @@ workspace_restore_recovery_snapshot() {
   safe_ws_id="$(sql_escape "$ws_id")"
   safe_task_id_sql="$(sql_escape "$task_id")"
   safe_path="$(sql_escape "$target")"
-  upsert="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000;
-    BEGIN IMMEDIATE;
+  upsert="$(sqlite3 "$DB" "BEGIN IMMEDIATE;
     INSERT INTO workspaces(workspaceId,workspacePath,status,currentTaskId,lastUsedAt)
       VALUES('$safe_ws_id','$safe_path','BUSY','$safe_task_id_sql',datetime('now'))
       ON CONFLICT(workspaceId) DO UPDATE SET workspacePath=excluded.workspacePath,status='BUSY',currentTaskId=excluded.currentTaskId,lastUsedAt=datetime('now')
@@ -186,7 +185,7 @@ workspace_reclaim() {
   local safe_ws_id
   safe_ws_id="$(sql_escape "$ws_id")"
   local result
-  result="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id' AND (status='IDLE' OR (status='BUSY' AND currentTaskId='$safe_task_id')); SELECT changes(); COMMIT;" 2>/dev/null)"
+  result="$(sqlite3 "$DB" "BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id' AND (status='IDLE' OR (status='BUSY' AND currentTaskId='$safe_task_id')); SELECT changes(); COMMIT;" 2>/dev/null)"
   result="$(printf '%s\n' "$result" | tail -n1)"
   if [ "${result:-0}" -ne 1 ] || [ -z "$result" ]; then
     local restored_ws
@@ -216,7 +215,7 @@ workspace_claim_id() {
   safe_ws_id="$(sql_escape "$ws_id")"
   safe_task_id="$(sql_escape "$task_id")"
   local result
-  result="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id' AND (status='IDLE' OR (status='BUSY' AND currentTaskId='$safe_task_id')); SELECT changes(); COMMIT;" 2>/dev/null)"
+  result="$(sqlite3 "$DB" "BEGIN IMMEDIATE; UPDATE workspaces SET status='BUSY', currentTaskId='$safe_task_id', lastUsedAt=datetime('now') WHERE workspaceId='$safe_ws_id' AND (status='IDLE' OR (status='BUSY' AND currentTaskId='$safe_task_id')); SELECT changes(); COMMIT;" 2>/dev/null)"
   result="$(printf '%s\n' "$result" | tail -n1)"
   [ "${result:-0}" -eq 1 ] || return 1
 }

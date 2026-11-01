@@ -52,16 +52,31 @@ case "$tool" in
     fi
     task_id="$(jq '[.. | objects | .id? // empty] | max + 1' "$TODO_MCP_FIXTURE")"
     shares="$(if [ "$tool" = "todo_create_task" ]; then jq -c '.task.shares // []' <<<"$arguments"; else printf '[]'; fi)"
-    jq --argjson parentId "$parent_id" --argjson id "$task_id" --arg description "$description" --argjson shares "$shares" '
-      map(if .id == $parentId then
-        .subTasks = ((.subTasks // []) + [{
-          id:$id, description:$description, parentTaskId:$parentId,
-          subTasks:[], isToDo:true, priority:1, scheduler:null, shares:$shares
-        }])
-      else . end)
-    ' "$TODO_MCP_FIXTURE" > "$TODO_MCP_FIXTURE.next"
-    mv "$TODO_MCP_FIXTURE.next" "$TODO_MCP_FIXTURE"
-    jq -cn --argjson id "$task_id" --arg description "$description" '{id:$id,description:$description}'
+    if [ "$tool" = "todo_create_task" ] && [ "${TODO_MCP_DROP_SHARE:-0}" = "1" ]; then
+      shares='[]'
+    fi
+    if [ "$tool" = "todo_create_task" ] && [ "${TODO_MCP_WRONG_SHARE_PERMISSION:-0}" = "1" ]; then
+      shares="$(jq -c 'map(.permission = "VIEWER")' <<<"$shares")"
+    fi
+    response_shares="$shares"
+    if [ "$tool" = "todo_create_task" ] && [ "${TODO_MCP_RESPONSE_WITHOUT_SHARE:-0}" = "1" ]; then
+      response_shares='[]'
+    fi
+    if [ "${TODO_MCP_DROP_CHILD:-0}" != "1" ]; then
+      jq --argjson parentId "$parent_id" --argjson id "$task_id" --arg description "$description" --argjson shares "$shares" '
+        def add_child:
+          .subTasks = ((.subTasks // []) + [{
+            id:$id, description:$description, parentTaskId:$parentId,
+            subTasks:[], isToDo:true, priority:1, scheduler:null, shares:$shares
+          }]);
+        def walk:
+          if .id == $parentId then add_child
+          else .subTasks = ((.subTasks // []) | map(walk)) end;
+        map(walk)
+      ' "$TODO_MCP_FIXTURE" > "$TODO_MCP_FIXTURE.next"
+      mv "$TODO_MCP_FIXTURE.next" "$TODO_MCP_FIXTURE"
+    fi
+    jq -cn --argjson id "$task_id" --arg description "$description" --argjson shares "$response_shares" '{id:$id,description:$description,shares:$shares}'
     ;;
   mark_tasks_done|todo_mark_tasks)
     printf '%s\t%s\n' "$tool" "$arguments" >> "$TODO_MCP_CALL_LOG"
@@ -762,9 +777,16 @@ assert_eq "remote result child stays pending when completion update fails" "true
 unset TODO_MCP_FAIL_MARK
 remote_report_receipt="$(todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "A regenerated retry answer must reuse the persisted result.")"
 assert_eq "remote retry returns the exact previously persisted answer" "Remote Fiteo report answer." "$(jq -r '.answer' <<<"$remote_report_receipt")"
-remote_report_share_verified="$(jq -r '.[0].subTasks[0].shares | any(.[]; .userId == "88" and .permission == "EDITOR_AND_VIEWER")' "$TODO_MCP_FIXTURE")"
-assert_eq "Manul-created remote report subtask is shared with the configured owner" "true" "$remote_report_share_verified"
 remote_result_id="$(jq -r '.resultTaskId' <<<"$remote_report_receipt")"
+remote_result_parent="$(jq -r '.[0].subTasks[0].parentTaskId' "$TODO_MCP_FIXTURE")"
+assert_eq "Manul report result is persisted under the shared parent task" "601" "$remote_result_parent"
+remote_child_direct_share_count="$(jq -r '.[0].subTasks[0].shares // [] | length' "$TODO_MCP_FIXTURE")"
+assert_eq "Manul report subtask does not create a duplicate direct share" "0" "$remote_child_direct_share_count"
+remote_parent_share_verified="$(jq -r '.[0].shares | any(.[]; .userId == "77" and .permission == "EDITOR_AND_VIEWER")' "$TODO_MCP_FIXTURE")"
+assert_eq "existing direct share on the parent is preserved" "true" "$remote_parent_share_verified"
+remote_create_arguments="$(awk -F '\t' '$1 == "todo_create_task" {print $2; exit}' "$TODO_MCP_CALL_LOG")"
+remote_create_has_shares="$(jq -r '.task | has("shares")' <<<"$remote_create_arguments")"
+assert_eq "Fiteo create request uses parentTaskId without a child shares payload" "false" "$remote_create_has_shares"
 remote_create_call_count=$(grep -c todo_create_task "$TODO_MCP_CALL_LOG")
 assert_eq "remote report uses Fiteo create tool only once across retry" "1" "$remote_create_call_count"
 remote_update_call_count=$(grep -c todo_update_task "$TODO_MCP_CALL_LOG")
@@ -800,6 +822,25 @@ assert_eq "remote result creation failure leaves root active" "true" "$remote_cr
 remote_create_failure_child_count=$(jq -r ".[0].subTasks | length" "$TODO_MCP_FIXTURE")
 assert_eq "remote result creation failure writes no child" "0" "$remote_create_failure_child_count"
 
+
+
+# A successful create response without a child in the parent's tree is not
+# enough: Manul must confirm the exact parent/child relationship on read-back.
+cat > "$TEST_DIR/remote-report-child-not-readable.json" <<'JSON'
+[
+  {"id":605,"ownerId":4,"description":"/manul report Child read-back fixture","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-report-child-not-readable.json"
+remote_unreadable_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
+remote_unreadable_id="$(jq -r '.taskSourceId' <<<"$remote_unreadable_task")"
+export TODO_MCP_DROP_CHILD=1
+remote_unreadable_rc=0
+todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_unreadable_id" "Must be readable under parent." >/dev/null 2>"$TEST_DIR/remote-child-readback.log" || remote_unreadable_rc=$?
+unset TODO_MCP_DROP_CHILD
+assert_rc "remote child missing from parent read-back fails delivery" "1" "$remote_unreadable_rc"
+assert_eq "unreadable remote child does not complete the root" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
+assert_eq "unreadable remote child is not falsely marked complete" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
 
 echo
 if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_mcp_client.py"; then

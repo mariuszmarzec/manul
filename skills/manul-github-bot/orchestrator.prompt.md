@@ -41,10 +41,11 @@ When information is missing, first use authorized sources: the assigned workspac
 
 When creating a task or subtask in the remote Fiteo Todo system:
 
-- Use the Manul custom tool `manul_fiteo_create_task` exclusively. It injects the required `EDITOR_AND_VIEWER` share for the configured Mariusz recipient and verifies the share by reading the created task back.
-- Do not call the raw `fiteo_todo_create_task` MCP tool directly, even when it is visible. Do not create first and attempt to share later.
-- If the custom tool is unavailable, lacks the required recipient configuration, or cannot verify the share, stop and report the exact blocker. Never silently create an unshared task or fall back to the operator's Fiteo identity.
-- The recipient is configured by Manul as a numeric Fiteo user ID. Do not use an email address as `userId` and do not guess the numeric ID.
+- Use the Manul custom tool `manul_fiteo_create_task` exclusively. Do not call the raw `fiteo_todo_create_task` MCP tool directly, even when it is visible.
+- For a root task (no `parentTaskId`), the tool adds a direct `EDITOR_AND_VIEWER` share for the configured recipient and verifies that share on read-back. Root creation requires `FITEO_MANUL_SHARE_USER_ID`.
+- For a subtask, the tool first verifies that the parent is visible to Manul, creates the child with `parentTaskId` and no duplicate direct `shares`, then verifies that the child is returned under that parent. Fiteo access is inherited from the shared parent; a direct share on the child is not required.
+- If the parent is not visible, or the created subtask cannot be read back under the requested parent, stop and report the exact blocker. Never fall back to the operator's Fiteo identity.
+- Do not guess a parent ID or recipient ID. The numeric recipient ID is required only for root tasks; do not use an email address as `userId`.
 
 ## Informational tasks
 

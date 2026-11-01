@@ -70,6 +70,11 @@ assert_rc() {
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DAEMON="$SCRIPT_DIR/manul-daemon.sh"
 
+# The extracted daemon functions use the same sqlite3 CLI wrapper as production.
+# MANUL_DIR is already isolated under WORK, so this creates no production state.
+MANUL_SQLITE_BUSY_TIMEOUT_MS=5000
+source "$SCRIPT_DIR/manul-paths.sh"
+
 # Extract only the functions we need (no globals, no daemon startup)
 eval "$(sed -n '/^log() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^lc_log() {/,/^}/p' "$DAEMON")"

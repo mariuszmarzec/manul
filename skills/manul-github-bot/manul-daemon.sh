@@ -734,8 +734,7 @@ recover_stale_tasks() {
       next_pre_execution_failures=$((pre_execution_failures + 1))
       if [ "$next_pre_execution_failures" -ge "$max_pre_execution_failures" ]; then target_status="failed"; else target_status="queued"; fi
 
-      changed="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000;
-        UPDATE processed_comments
+      changed="$(sqlite3 "$DB" "        UPDATE processed_comments
         SET status='$target_status',
             attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
             preExecutionFailures=$next_pre_execution_failures,
@@ -915,7 +914,7 @@ start_heartbeat() {
         # A transient SQLite lock/error must not permanently kill the heartbeat.
         # Exit only when ownership was actually lost or the task became terminal.
         local db_state
-        db_state="$(sqlite3 -cmd '.timeout 5000' "$DB" "SELECT status || '|' || COALESCE(workerPid,0) || '|' || COALESCE(claimToken,'') FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
+        db_state="$(sqlite3 "$DB" "SELECT status || '|' || COALESCE(workerPid,0) || '|' || COALESCE(claimToken,'') FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
         if [ -n "$db_state" ] && [ "$db_state" != "running|${worker_pid}|${claim_token}" ]; then
           exit 0
         fi
@@ -2030,8 +2029,7 @@ close_drained_conversations() {
     -- The poller and dispatcher share this database. A concurrent short write
     -- must not turn an otherwise safe conversation-close reconciliation into
     -- a one-off error; match the timeout used by other daemon write paths.
-    PRAGMA busy_timeout=5000;
-    UPDATE conversations
+        UPDATE conversations
     SET status='COMPLETED',
         activePrNumber=NULL,
         activePrUrl=NULL,
@@ -2356,8 +2354,7 @@ handle_pre_execution_failure() {
   # decrement the claim-time attempt bump, and charge the separate bounded infra
   # counter so repeated checkout/runtime setup failures cannot consume agent budget.
   local changed
-  changed="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000;
-    UPDATE processed_comments
+  changed="$(sqlite3 "$DB" "    UPDATE processed_comments
     SET status='$target_status',
         attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
         preExecutionFailures=$infra_failures,
@@ -4052,6 +4049,11 @@ dispatch_once() {
       return 0
     fi
 
+    # Initialize repository/workspace state before any pre-agent failure path reads it.
+    local REPO_DIR="" WORKDIR="" WORKSPACE_ID="" workspace_path=""
+    local CURRENT_BRANCH="report-only" INITIAL_BRANCH="report-only" INITIAL_HEAD="" DEFAULT_BRANCH="" INITIAL_BASE_BRANCH=""
+    local RELATED_REPOSITORIES="" RELATED_UNAVAILABLE="" REPORT_ONLY_DIR=""
+
     # Start heartbeat for long-running task
     start_heartbeat "$COMMENT_ID" "$CURRENT_WORKER_PID" "$CLAIM_TOKEN"
     # Refresh heartbeat immediately so watchdog doesn't see stale timestamp
@@ -4331,9 +4333,6 @@ This task originates from a Todo task tree, not a GitHub issue or comment.
 TODO_SOURCE_PROMPT
     fi
 
-    local REPO_DIR="" WORKDIR="" WORKSPACE_ID="" workspace_path=""
-    local CURRENT_BRANCH="report-only" INITIAL_BRANCH="report-only" INITIAL_HEAD="" DEFAULT_BRANCH="" INITIAL_BASE_BRANCH=""
-    local RELATED_REPOSITORIES="" RELATED_UNAVAILABLE="" REPORT_ONLY_DIR=""
     if [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
       REPORT_ONLY_DIR="$(mktemp -d /tmp/manul-report-only.XXXXXX)" || {
         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not create an isolated scratch directory for the report-only task." "" "$current_attempt" "report_only_workspace"
