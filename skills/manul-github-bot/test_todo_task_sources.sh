@@ -633,7 +633,7 @@ assert_eq "remote result child stays pending when completion update fails" "true
 unset TODO_MCP_FAIL_MARK
 remote_report_receipt="$(todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "A regenerated retry answer must reuse the persisted result.")"
 assert_eq "remote retry returns the exact previously persisted answer" "Remote Fiteo report answer." "$(jq -r '.answer' <<<"$remote_report_receipt")"
-remote_report_share_verified="$(jq -r '.[0].subTasks[0].shares | any(.[]; ((.userId | tostring) == "88") and .permission == "EDITOR_AND_VIEWER")' "$TODO_MCP_FIXTURE")"
+remote_report_share_verified="$(jq -r '.[0].subTasks[0].shares | any(.[]; .userId == "88" and .permission == "EDITOR_AND_VIEWER")' "$TODO_MCP_FIXTURE")"
 assert_eq "Manul-created remote report subtask is shared with the configured owner" "true" "$remote_report_share_verified"
 remote_result_id="$(jq -r '.resultTaskId' <<<"$remote_report_receipt")"
 remote_create_call_count=$(grep -c todo_create_task "$TODO_MCP_CALL_LOG")
