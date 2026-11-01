@@ -30,8 +30,8 @@ Issue/PR comments beginning with `/manul` are parsed as:
 ## Agent selection and runtime compatibility
 
 Role names are taken from the configured `.agents[]` allow-list; the agent
-definitions remain canonical under `~/.globalskills/agents` and are not copied
-into Manul or runtime-specific directories.
+definitions remain canonical under `~/.agents/agents` and are not copied into
+Manul or runtime-specific directories.
 
 Both `/manul run --agent <role> <task>` and the shorthand
 `/manul <role> <task>` select a role explicitly. Without an explicit role,
