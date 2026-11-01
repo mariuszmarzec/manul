@@ -1153,8 +1153,10 @@ INSTALL_ROOT="$TMPROOT/install-runtime"
 INSTALL_HOME="$TMPROOT/install-home"
 FAKE_BIN="$TMPROOT/fake-bin"
 mkdir -p "$INSTALL_HOME" "$FAKE_BIN"
-# Simulate the pre-extraction zsh entry plus unrelated operator configuration.
-printf 'export KEEP_ZSH_SETTING=1\nsource "%s/.globalskills/skills/manul-github-bot/manul-shell.zsh"\n' "$INSTALL_HOME" > "$INSTALL_HOME/.zshrc"
+# Simulate a stale Manul shell entry from a previous skill checkout plus
+# unrelated operator configuration.
+STALE_MANUL_SHELL="$INSTALL_HOME/previous-skills-root/skills/manul-github-bot/manul-shell.zsh"
+printf 'export KEEP_ZSH_SETTING=1\nsource "%s"\n' "$STALE_MANUL_SHELL" > "$INSTALL_HOME/.zshrc"
 printf '#!/bin/sh
 exit 0
 ' > "$FAKE_BIN/openclaw"
@@ -1198,10 +1200,10 @@ else
   fail "Installer did not install zsh integration"
 fi
 
-if ! grep -qF '.globalskills/skills/manul-github-bot/manul-shell.zsh' "$INSTALL_HOME/.zshrc"; then
-  ok "Installer removes the stale globalskills Manul zsh source"
+if ! grep -qF "$STALE_MANUL_SHELL" "$INSTALL_HOME/.zshrc"; then
+  ok "Installer removes a stale Manul zsh source from a previous skill root"
 else
-  fail "Installer left the stale globalskills Manul zsh source"
+  fail "Installer left a stale Manul zsh source from a previous skill root"
 fi
 
 if grep -qF 'export KEEP_ZSH_SETTING=1' "$INSTALL_HOME/.zshrc"; then
