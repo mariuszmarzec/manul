@@ -364,7 +364,7 @@ if printf '%s' "$sql" | grep -qF "UPDATE processed_comments" &&
     /usr/bin/sqlite3 "$DB" "UPDATE processed_comments SET status='running', claimToken='tok-race-42', workerPid=$RACE_LIVE_PID, attempts=1, nextAttemptAt=NULL, processedAt=datetime('now') WHERE commentId='issue:retry-race';"
     printf '%s' "$RACE_LIVE_PID" >"$RACE_PID_FILE"
   fi
-  printf '%s\\n' "$output"
+  printf '%s\n' "$output"
   exit "$rc"
 fi
 exec /usr/bin/sqlite3 "$@"
