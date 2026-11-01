@@ -67,3 +67,67 @@ task_source_github_issues_poll() {
         '
   done
 }
+
+# Revalidate a queued GitHub Issues root by its stable repo#number identity.
+# This is intentionally separate from issue-comment revalidation: normalized
+# source task IDs are not GitHub comment IDs.
+task_source_github_issues_revalidate() {
+  local source_json="$1"
+  local source_id="$2"
+  local expected_repo="${3:-}"
+  local expected_issue="${4:-}"
+  local repo issue trigger allowed_json issue_json rc
+
+  [[ "$source_id" == *"#"* ]] || return 2
+  repo="${source_id%#*}"
+  issue="${source_id##*#}"
+  [[ "$repo" =~ ^[^/]+/[^/]+$ && "$issue" =~ ^[0-9]+$ ]] || return 2
+  if { [ -n "$expected_repo" ] && [ "$expected_repo" != "$repo" ]; } ||
+     { [ -n "$expected_issue" ] && [ "$expected_issue" != "$issue" ]; }; then
+    echo "task-source: GitHub source identity mismatch for $source_id" >&2
+    return 2
+  fi
+
+  issue_json="$(timeout "${GH_API_TIMEOUT:-30}" gh api "repos/$repo/issues/$issue" 2>>"${LOG:-/dev/null}")" && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 124 ]; then
+      echo "task-source: GitHub issue revalidation timed out for $source_id" >&2
+      return 2
+    fi
+    if printf '%s' "$issue_json" | jq -e '.message == "Not Found"' >/dev/null 2>&1; then
+      echo "task-source: GitHub issue $source_id no longer exists" >&2
+      return 1
+    fi
+    echo "task-source: GitHub issue revalidation failed transiently for $source_id" >&2
+    return 2
+  fi
+
+  if ! jq -e 'type == "object" and (.state == "open" or .state == "closed")' <<<"$issue_json" >/dev/null 2>&1; then
+    echo "task-source: GitHub issue revalidation returned an invalid response for $source_id" >&2
+    return 2
+  fi
+  if ! jq -e '.state == "open" and (.pull_request? == null)' <<<"$issue_json" >/dev/null 2>&1; then
+    echo "task-source: GitHub source $source_id is not an open issue" >&2
+    return 1
+  fi
+
+  trigger="$(jq -r '.trigger // "/manul"' <<<"$source_json")"
+  if ! jq -e --arg trigger "$trigger" '
+    (.body // "")
+    | test("(^|\\r?\\n)[ \\t]*" + ($trigger | gsub("[\\\\^$.|?+()\\\\[\\\\]{}]"; "\\\\\\$&")) + "([ \\t\\r\\n]|$)")
+  ' <<<"$issue_json" >/dev/null 2>&1; then
+    echo "task-source: GitHub issue $source_id no longer contains the configured trigger" >&2
+    return 1
+  fi
+
+  allowed_json="$(jq -c '.allowedUsers // []' <<<"$source_json")"
+  if [ "$(jq 'length' <<<"$allowed_json" 2>/dev/null || echo 0)" -gt 0 ]; then
+    if ! jq -e --argjson allowed "$allowed_json" '(.user.login // "") as $author | ($allowed | index($author)) != null' <<<"$issue_json" >/dev/null 2>&1; then
+      echo "task-source: GitHub issue $source_id author is no longer allowed by source configuration" >&2
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
