@@ -560,6 +560,19 @@ Before starting the task, it runs `opencode mcp list` and refuses to launch the
 task unless Caracal reports a live connected status. A URL or token alone is not
 treated as proof of access.
 
+The Manul-only `manul_fiteo_create_task` custom tool is not installed in
+OpenCode's global `tools/` directory. The installer removes only a legacy
+Manul-owned global registration (a symlink to the Manul runtime tool or a
+byte-identical copy), preserving unrelated operator tools. It provisions the
+matching `@opencode-ai/plugin` dependency beside the canonical Manul skill.
+For each OpenCode task, the adapter creates a temporary project-local symlink at
+`<task-workspace>/.opencode/tools/manul_fiteo_create_task.ts`; it refuses to
+overwrite a pre-existing tool or follow a symlinked config directory. The
+adapter removes its own symlink and any empty directories it created on exit,
+including after errors or timeouts. This keeps aicode and unrelated OpenCode
+sessions from importing Manul tools while preserving the required Fiteo task
+creation/share-verification path inside Manul executions.
+
 In this deployment, OpenClaw runs OpenCode through ACPX. The `aicode`
 launcher configures the ACPX `opencode` harness to invoke
 `aicode/opencode-acp-caracal.sh` and sets
