@@ -107,21 +107,24 @@ task_source_is_todo_type() {
 }
 
 task_source_config_by_type() {
-  local config="$1" type="$2"
+  local config="$1" type="$2" configured_sources
   [ -f "$config" ] || return 1
-  jq -ce --arg type "$type" '
-    [.taskSources[]? | select(.type == $type and (.enabled != false))]
+  configured_sources="$(task_source_configured_sources "$config")" || return 1
+  jq -sce --arg type "$type" '
+    [.[] | select(.type == $type and (.enabled != false))]
     | first // empty
-  ' "$config" 2>/dev/null
+  ' <<<"$configured_sources" 2>/dev/null
 }
 
 # Revalidation is claim-scoped and deliberately distinguishes stale source
 # state (1) from unavailable MCP/config/network (2), matching GitHub providers.
 task_source_revalidate() {
-  local config="$1" type="$2" source_id="$3" source_json
-  task_source_is_todo_type "$type" || return 2
+  local config="$1" type="$2" source_id="$3" expected_repo="${4:-}" expected_issue="${5:-}" source_json
   source_json="$(task_source_config_by_type "$config" "$type")" || return 2
   case "$type" in
+    github_issues)
+      source "$TASK_SOURCE_DIR/task-source-github-issues.sh"
+      task_source_github_issues_revalidate "$source_json" "$source_id" "$expected_repo" "$expected_issue" ;;
     todo_local_mcp)
       source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
       task_source_todo_local_revalidate "$source_json" "$source_id" ;;
