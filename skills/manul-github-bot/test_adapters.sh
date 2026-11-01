@@ -1166,7 +1166,7 @@ test_opencode_caracal_mcp() {
   trap 'rm -rf "$tmp"' RETURN
   local home="$tmp/home"
   local workspace="$home/.manul/workspace/ws-caracal"
-  mkdir -p "$tmp/bin" "$home/.config/opencode" "$workspace"
+  mkdir -p "$tmp/bin" "$home/.config/opencode" "$home/.manul" "$workspace"
   cat >"$home/.config/opencode/opencode.json" <<'JSON'
 {
   "model": "test/provider",
@@ -1183,24 +1183,43 @@ test_opencode_caracal_mcp() {
   }
 }
 JSON
+  cat >"$home/.manul/.env" <<'ENV'
+FITEO_BASE_URL=https://api.fiteo.example
+FITEO_PAT=runtime-fiteo-pat
+ENV
+  chmod 600 "$home/.manul/.env"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   config="${OPENCODE_CONFIG:?effective task config missing}"
+  [ "${FITEO_BASE_URL:-}" = "https://api.fiteo.example" ] &&
+    [ "${FITEO_PAT:-}" = "runtime-fiteo-pat" ]
   jq -e '
     .mcp["other-server"].url == "https://example.invalid/mcp"
     and .mcp["caracal-rag"].type == "remote"
     and .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
     and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
     and .mcp["caracal-rag"].enabled == true
+    and .mcp["fiteo"].type == "remote"
+    and .mcp["fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
+    and .mcp["fiteo"].oauth == false
+    and .mcp["fiteo"].headers.Authorization == "Bearer {env:FITEO_PAT}"
+    and .mcp["fiteo"].enabled == true
     and .tools["caracal-rag_*"] == true
+    and .tools["fiteo_*"] == true
     and .agent.coder.tools["caracal-rag_*"] == true
+    and .agent.coder.tools["fiteo_*"] == true
     and .agent.chat.tools["caracal-rag_*"] == null
+    and .agent.chat.tools["fiteo_*"] == null
   ' "$config" >/dev/null
   : >"${MOCK_CONFIG_CHECK_FILE:?}"
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
     printf '%s\n' 'caracal-rag connected'
+    if [ "${MOCK_FITEO_MCP_STATE:-connected}" = "disconnected" ]; then
+      printf '%s\n' 'fiteo failed'
+      exit 1
+    fi
     exit 0
   fi
   printf '%s\n' 'caracal-rag failed'
@@ -1220,6 +1239,7 @@ MOCK
   # A configured URL/token is insufficient: the CLI must report connected.
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="test-token" \
+    FITEO_BASE_URL="https://inherited-stale.example" FITEO_PAT="stale-inherited-pat" \
     MOCK_CARACAL_MCP_STATE=disconnected MOCK_CONFIG_CHECK_FILE="$tmp/config-checked" \
     MOCK_TASK_STARTED_FILE="$tmp/task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
@@ -1252,6 +1272,7 @@ MOCK
   rm -f "$tmp/config-checked" "$tmp/task-started"
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="test-token" \
+    FITEO_BASE_URL="https://inherited-stale.example" FITEO_PAT="stale-inherited-pat" \
     MOCK_CARACAL_MCP_STATE=connected MOCK_CONFIG_CHECK_FILE="$tmp/config-checked" \
     MOCK_TASK_STARTED_FILE="$tmp/task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
@@ -1262,6 +1283,23 @@ MOCK
   assert_json_status "$out" "COMPLETED" "OpenCode runs task after Caracal MCP preflight passes"
   [ "$rc" -eq 0 ] && ok "Connected Caracal MCP permits task execution" || fail "Connected Caracal rc=$rc"
   [ -f "$tmp/task-started" ] && ok "Task starts after positive Caracal MCP healthcheck" || fail "Task did not start after positive MCP healthcheck"
+ 
+  rm -f "$tmp/config-checked" "$tmp/task-started"
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="test-token" \
+    FITEO_BASE_URL="https://inherited-stale.example" FITEO_PAT="stale-inherited-pat" \
+    MOCK_CARACAL_MCP_STATE=connected MOCK_FITEO_MCP_STATE=disconnected \
+    MOCK_CONFIG_CHECK_FILE="$tmp/fiteo-disconnected-config-checked" \
+    MOCK_TASK_STARTED_FILE="$tmp/fiteo-disconnected-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" \
+      --task-id oc-fiteo-disconnected --prompt "$tmp/prompt" --workspace "$workspace" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/fiteo-disconnected.stdout" --stderr-file "$tmp/fiteo-disconnected.stderr" 2>/dev/null)"
+  rc=$?
+  assert_json_status "$out" "COMPLETED" "OpenCode task proceeds when optional Fiteo MCP is disconnected"
+  [ "$rc" -eq 0 ] && ok "Fiteo MCP outage does not fail an unrelated Manul task" || fail "Fiteo outage blocked task rc=$rc"
+  [ -f "$tmp/fiteo-disconnected-config-checked" ] && ok "Fiteo remains registered in task config during an outage" || fail "Fiteo entry disappeared during outage"
+  [ -f "$tmp/fiteo-disconnected-task-started" ] && ok "Task execution starts despite an optional Fiteo MCP outage" || fail "Task was blocked by Fiteo MCP outage"
 }
 
 # ---------------------------------------------------------------------------
