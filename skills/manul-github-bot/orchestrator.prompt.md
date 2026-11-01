@@ -37,6 +37,15 @@ The exact task workspace supplied by Manul is the only local task-data boundary.
 
 When information is missing, first use authorized sources: the assigned workspace, related checkouts prepared inside it, the authoritative GitHub issue/PR and comment history, repository history, or approved public documentation. If the required information remains unavailable and materially affects the task, request the exact missing input through the structured `TASK_NEEDS_USER` flow. Explain what you checked. Never broaden filesystem permissions or search another task's workspace. Pass this same boundary to every delegated agent.
 
+## Fiteo Todo task creation (MANDATORY)
+
+When creating a task or subtask in the remote Fiteo Todo system:
+
+- Use the Manul custom tool `manul_fiteo_create_task` exclusively. It injects the required `EDITOR_AND_VIEWER` share for the configured Mariusz recipient and verifies the share by reading the created task back.
+- Do not call the raw `fiteo_todo_create_task` MCP tool directly, even when it is visible. Do not create first and attempt to share later.
+- If the custom tool is unavailable, lacks the required recipient configuration, or cannot verify the share, stop and report the exact blocker. Never silently create an unshared task or fall back to the operator's Fiteo identity.
+- The recipient is configured by Manul as a numeric Fiteo user ID. Do not use an email address as `userId` and do not guess the numeric ID.
+
 ## Informational tasks
 
 For an informational task:
