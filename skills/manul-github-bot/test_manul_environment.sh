@@ -153,7 +153,7 @@ chmod 600 "$SHARE_ONLY/.env"
 cat > "$SHARE_ONLY/config.json" <<MANUL_SHARE_CONFIG
 {"taskSources":[{"type":"todo_remote_mcp","enabled":true,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}]}
 MANUL_SHARE_CONFIG
-SHARE_ONLY_ENV_FILE="$(env -u FITEO_BASE_URL -u FITEO_MANUL_PAT -u FITEO_PAT bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
+SHARE_ONLY_ENV_FILE="$(FITEO_MANUL_SHARE_USER_ID=1 env -u FITEO_BASE_URL -u FITEO_MANUL_PAT -u FITEO_PAT bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
 if grep -qx 'FITEO_MANUL_SHARE_USER_ID=1' "$SHARE_ONLY_ENV_FILE" &&
    grep -qx 'EXISTING_OPERATOR_SETTING=preserve-me' "$SHARE_ONLY_ENV_FILE" &&
    ! grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
@@ -226,22 +226,26 @@ PRESERVE_FITEO="$TMP/preserve-fiteo"
 mkdir -p "$PRESERVE_FITEO"
 cat > "$PRESERVE_FITEO/.env" <<'EOF'
 FITEO_BASE_URL=https://old-fiteo.example
-FITEO_PAT=old-fiteo-pat
+FITEO_PAT=old-operator-pat
+FITEO_MANUL_PAT=old-manul-pat
 EOF
 chmod 600 "$PRESERVE_FITEO/.env"
 FITEO_BASE_URL="https://new-fiteo.example"
-FITEO_PAT="new-fiteo-pat"
-export FITEO_BASE_URL FITEO_PAT
+FITEO_MANUL_PAT="new-manul-fiteo-pat"
+FITEO_MANUL_SHARE_USER_ID="1"
+export FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID
 FITEO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE_FITEO")"
 if (
-  unset FITEO_BASE_URL FITEO_PAT
+  unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT
   source "$FITEO_ENV_FILE"
   [ "$FITEO_BASE_URL" = "https://new-fiteo.example" ] &&
-  [ "$FITEO_PAT" = "new-fiteo-pat" ]
+  [ "$FITEO_MANUL_PAT" = "new-manul-fiteo-pat" ] &&
+  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
+  [ -z "${FITEO_PAT:-}" ]
 ); then
-  ok "Bootstrap refreshes the Fiteo endpoint/PAT pair for unattended MCP sessions"
+  ok "Bootstrap refreshes Manul Fiteo credentials without persisting the operator PAT"
 else
-  fail "Bootstrap did not refresh the Fiteo MCP credentials correctly"
+  fail "Bootstrap did not refresh Manul Fiteo credentials correctly"
 fi
 assert_file_mode_600 "$FITEO_ENV_FILE"
 
