@@ -353,7 +353,7 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
               url: "{env:FITEO_BASE_URL}/mcp",
               oauth: false,
               enabled: true,
-              headers: {Authorization: "Bearer {env:FITEO_PAT}"}
+              headers: {Authorization: "Bearer {env:FITEO_MANUL_PAT}"}
             }
           }
       )
