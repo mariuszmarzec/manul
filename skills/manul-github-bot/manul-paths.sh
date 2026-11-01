@@ -44,7 +44,7 @@ export MANUL_SQLITE_BUSY_TIMEOUT_MS
 if command -v sqlite3 >/dev/null 2>&1; then
     sqlite3() {
         case "${1:-}" in
-            --version|-version|--help|-help|-?)
+            --version|-version|--help|-help|'-?')
                 command sqlite3 "$@"
                 ;;
             *)
