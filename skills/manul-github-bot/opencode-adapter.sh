@@ -242,7 +242,11 @@ prepare_opencode_manul_tool() {
     if [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
         existing_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
         if [ "$existing_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-            log "Manul Fiteo custom tool is already present in this task workspace"
+            # This is a stale link from an interrupted previous Manul attempt,
+            # or an already prepared link owned by this exact runtime. Adopt it
+            # so the EXIT trap removes it after the current invocation.
+            OPENCODE_MANUL_TOOL_CREATED=true
+            log "adopted existing Manul Fiteo custom-tool link for this task invocation"
             return 0
         fi
         log "refusing to overwrite an existing workspace custom-tool symlink"
