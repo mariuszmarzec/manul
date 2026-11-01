@@ -445,7 +445,7 @@ assert_contains "empty allowlist rejection is explicit" "$(cat "$TEST_DIR/empty-
 
 resolution_rc=0
 todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":96,"description":"/manul Fetch weather for Krakow"}' 2>"$TEST_DIR/unmatched.log" >/dev/null || resolution_rc=$?
-assert_rc "task without a project reference remains unresolved" "1" "$resolution_rc"
+assert_rc "task without a project reference signals report-only fallback" "3" "$resolution_rc"
 assert_contains "unmatched task explains why routing was not selected" "$(cat "$TEST_DIR/unmatched.log")" "no project alias matched"
 
 resolution_rc=0
@@ -461,6 +461,21 @@ local_task="$(printf '%s\n' "$local_tasks" | jq -c '.')"
 assert_contains "local root source type is normalized" "$local_task" '"taskSourceType":"todo_local_mcp"'
 assert_eq "local Todo adapter assigns repository from description, not a static default" "owner/local" "$(jq -r '.metadata.repository' <<<"$local_task")"
 assert_eq "local source persists repository-resolution provenance" "catalog_alias" "$(jq -r '.metadata.repositoryResolution.method' <<<"$local_task")"
+
+# An ordinary /manul information request with no project alias is automatically
+# report-only even when the legacy allowReportOnly setting is false.
+cat > "$TEST_DIR/local-question.json" <<'JSON'
+[
+  {"id":490,"description":"/manul what day is today?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
+]
+JSON
+LOCAL_QUESTION_SOURCE='{"type":"todo_local_mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+export TODO_MCP_FIXTURE="$TEST_DIR/local-question.json"
+local_question_task="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
+assert_eq "plain local /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$local_question_task")"
+assert_eq "plain local /manul question keeps its prompt" "what day is today?" "$(jq -r '.prompt' <<<"$local_question_task")"
+assert_eq "plain local /manul question does not require repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$local_question_task")"
+export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8765/mcp'
 
 # WSL prefers direct loopback but falls back to its authenticated bridge when
@@ -528,6 +543,21 @@ remote_task="$(printf '%s\n' "$remote_tasks" | jq -c '.')"
 assert_contains "remote root source type is normalized" "$remote_task" '"taskSourceType":"todo_remote_mcp"'
 assert_eq "remote Fiteo adapter assigns repository from shared task description" "owner/remote" "$(jq -r '.metadata.repository' <<<"$remote_task")"
 assert_eq "remote source persists alias provenance" "remote project" "$(jq -r '.metadata.repositoryResolution.matchedAlias' <<<"$remote_task")"
+
+# A plain /manul information request is report-only by default; no explicit
+# report keyword or allowReportOnly opt-in is required.
+cat > "$TEST_DIR/remote-question.json" <<'JSON'
+[
+  {"id":590,"ownerId":4,"description":"/manul what day is today?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
+]
+JSON
+REMOTE_QUESTION_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-question.json"
+remote_question_task="$(task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE")"
+assert_eq "plain remote /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$remote_question_task")"
+assert_eq "plain remote /manul question keeps its prompt" "what day is today?" "$(jq -r '.prompt' <<<"$remote_question_task")"
+assert_eq "plain remote /manul question does not require repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$remote_question_task")"
+export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 assert_contains "a nested /manul command activates the parent task" "$remote_tasks" '"taskSourceId":"21@'
 remote_prompt="$(jq -r '.prompt' <<<"$remote_task")"
 assert_contains "nested trigger instruction is retained in the parent prompt" "$remote_prompt" 'start working on this task'
@@ -591,7 +621,7 @@ cat > "$TEST_DIR/local-report.json" <<'JSON'
   {"id":501,"description":"/manul report Summarize local report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
 JSON
-LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
 export TODO_MCP_FIXTURE="$TEST_DIR/local-report.json"
 local_report_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
 assert_eq "local report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$local_report_task")"
@@ -678,7 +708,7 @@ cat > "$TEST_DIR/remote-report.json" <<'JSON'
   {"id":601,"ownerId":4,"description":"/manul report Summarize remote report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
-REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
+REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
 # The lower-level delivery helper expects the source config to be normalized,
 # just as task_source_report_deliver does in the production dispatch path.
 REMOTE_REPORT_SOURCE="$(todo_source_remote_config "$REMOTE_REPORT_SOURCE")"

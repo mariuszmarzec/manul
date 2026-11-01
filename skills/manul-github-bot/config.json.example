@@ -75,8 +75,7 @@
       "type": "todo_local_mcp",
       "enabled": false,
       "url": "http://127.0.0.1:8765/mcp",
-      "tokenEnv": "TODO_LOCAL_MCP_TOKEN",
-      "allowReportOnly": false
+      "tokenEnv": "TODO_LOCAL_MCP_TOKEN"
     },
     {
       "type": "todo_remote_mcp",
@@ -84,8 +83,7 @@
       "url": "{env:FITEO_BASE_URL}/mcp",
       "tokenEnv": "FITEO_MANUL_PAT",
       "manulUserIdEnv": "MANUL_USER_ID",
-      "shareUserIdEnv": "FITEO_MANUL_SHARE_USER_ID",
-      "allowReportOnly": false
+      "shareUserIdEnv": "FITEO_MANUL_SHARE_USER_ID"
     }
   ],
   "repositories": [

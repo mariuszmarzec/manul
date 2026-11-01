@@ -91,7 +91,9 @@ todo_task_resolve_repository() {
     candidate_count="$(jq -r 'length' <<<"$matches_json")"
     if [ "$candidate_count" -eq 0 ]; then
       echo "no project alias matched the Todo task description" >&2
-      return 1
+      # Exit code 3 tells Todo adapters there is no repository route, so the
+      # task can safely run in report-only mode. Routing errors stay distinct.
+      return 3
     fi
     if [ "$candidate_count" -gt 1 ]; then
       local candidates

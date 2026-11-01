@@ -543,12 +543,20 @@ trigger or task-selection rule:
 - `todo_remote_mcp` selects active unscheduled root tasks whose `shares`
   contain the configured `manulUserId` with `EDITOR_AND_VIEWER` permission.
 
-For both Todo providers, report-only selection is an explicit opt-in: the source
-must set `allowReportOnly: true`, and the Todo description must contain a line
-beginning with `/manul report`. Such a task normalizes to
-`execution.kind=report_only` and does not require repository metadata. The
-common poller accepts this execution kind only for the two Todo source types;
-all other unsupported execution kinds fail closed.
+For both Todo providers, a normal `/manul <request>` trigger is routed as
+follows: an explicit GitHub repository URL or one unambiguous catalog alias
+selects repository-backed execution; when no project alias or repository URL is
+provided, the task is automatically classified as informational
+(`execution.kind=report_only`) and does not require repository metadata or a
+configuration opt-in. The legacy `/manul report <question>` spelling remains
+accepted as an explicit informational-mode alias but is not required.
+
+A missing project reference is distinct from a routing error. Multiple equally
+specific aliases, an uncatalogued explicit GitHub URL, a disallowed repository,
+or an unavailable/invalid catalog remain fail-closed and are not converted to
+informational work. The common poller accepts `execution.kind=report_only`
+only for the two Todo source types; all other unsupported execution kinds fail
+closed.
 
 Todo providers do not select a configured default repository. For each
 active root, the adapter resolves the execution target from the task description:

@@ -44,16 +44,23 @@ task_source_todo_local_poll() {
     todo_task_has_local_trigger "$task_json" || continue
     task_id="$(jq -r '.id // "unknown"' <<<"$task_json")"
     if todo_task_is_report_only "$task_json"; then
-      if [ "$(jq -r '.allowReportOnly // false' <<<"$source_json")" != "true" ]; then
-        echo "task-source: local Todo report-only task $task_id is disabled by allowReportOnly" >&2
-        continue
-      fi
+      # Keep /manul report as a backwards-compatible explicit alias.
       resolution='{"reportOnly":true}'
     else
-      resolution="$(todo_task_resolve_repository "$source_json" "$task_json")" || {
-        echo "task-source: local Todo task $task_id was not queued because its repository could not be resolved" >&2
+      local resolution_output resolution_rc
+      resolution_output="$(todo_task_resolve_repository "$source_json" "$task_json" 2>&1)"
+      resolution_rc=$?
+      if [ "$resolution_rc" -eq 0 ]; then
+        resolution="$resolution_output"
+      elif [ "$resolution_rc" -eq 3 ]; then
+        # No project was specified: treat a normal /manul prompt as an
+        # informational request and save its answer under the Todo root.
+        echo "task-source: local Todo task $task_id has no repository match; treating it as report-only" >&2
+        resolution='{"reportOnly":true}'
+      else
+        echo "task-source: local Todo task $task_id was not queued because its repository could not be resolved: ${resolution_output:-unknown routing error}" >&2
         continue
-      }
+      fi
     fi
     normalized="$(todo_task_to_source_json "$task_json" todo_local_mcp "$resolution")" || continue
     printf '%s\n' "$normalized"

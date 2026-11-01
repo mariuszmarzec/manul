@@ -216,18 +216,23 @@ Current provider types:
 - `todo_local_mcp` — separate Todo Desktop MCP source. It selects active root tasks whose description contains a line beginning with `/manul`.
 - `todo_remote_mcp` — separate Fiteo backend MCP source. Its `url` accepts `{env:VARIABLE}` placeholders (for example `"{env:FITEO_BASE_URL}/mcp"`). Set `manulUserIdEnv` to the name of an environment variable containing the positive numeric ID of the Manul Fiteo account; legacy numeric `manulUserId` remains supported. Sharing with that account and `EDITOR_AND_VIEWER` grants visibility; execution additionally requires a `/manul` command in the root description or any nested subtask. A nested trigger queues the complete parent tree once.
 
-For either Todo provider, an operator may set `allowReportOnly: true` to enable
-the explicit `/manul report <question>` trigger. A report-only source does not
-need a project alias or repository URL: the daemon skips repository locks,
-checkouts, branches, PRs, and the GitHub result-comment protocol, then runs the
-agent in a disposable task-scoped scratch directory. The complete answer is
-saved as a child of the source Todo item, read back and verified, and recorded
-as a local delivery receipt before the Todo tree is completed. The generated
-child is identified by a source-version-bound marker and is the only child
-excluded from the source fingerprint; edits to the original task or its other
-subtasks still invalidate the queued source. Partial writes are retried by
-reusing the exact child instead of creating duplicates. The root is marked done
-last, after the result and all original descendants.
+For either Todo provider, every ordinary `/manul <request>` is routed
+automatically. An explicit GitHub URL or one unambiguous project alias selects
+repository-backed execution. When the request has no repository reference,
+Manul treats it as informational automatically — no `report` keyword and no
+`allowReportOnly` opt-in are needed. The old `/manul report <question>`
+spelling remains accepted as a compatibility alias.
+
+Informational tasks do not need a project alias or repository URL: the daemon
+skips repository locks, checkouts, branches, PRs, and the GitHub result-comment
+protocol, then runs the agent in a disposable task-scoped scratch directory.
+The complete answer is saved as a child of the source Todo item, read back and
+verified, and recorded as a local delivery receipt before the Todo tree is
+completed. The generated child is identified by a source-version-bound marker
+and is the only child excluded from the source fingerprint; edits to the
+original task or its other subtasks still invalidate the queued source. Partial
+writes are retried by reusing the exact child instead of creating duplicates.
+The root is marked done last, after the result and all original descendants.
 
 Todo sources do not have a fixed project repository. Manul resolves each
 Todo root independently using the curated catalog at
@@ -242,8 +247,9 @@ directory is configured, Manul continues without external skill context. The
 resolved canonical `owner/repo` and routing provenance are persisted with the
 queued task.
 Configure `repositoryAllowlist` to narrow which catalog repositories the Todo
-sources may target. Unknown, ambiguous, and disallowed targets are logged and
-not queued; Manul must never fall back to a hardcoded Todo repository.
+sources may target. An absent project reference routes to informational execution;
+ambiguous aliases, uncatalogued explicit URLs, and disallowed targets are logged
+and not queued. Manul must never fall back to a hardcoded Todo repository.
 
 The local adapter connects directly to Todo Desktop at `http://127.0.0.1:8765/mcp` on native Linux/macOS hosts. Inside WSL it first tries the same loopback endpoint and falls back to the existing WSL bridge at `http://127.0.0.1:8766/mcp` when direct loopback is unavailable. Both paths use `TODO_LOCAL_MCP_TOKEN`. The remote adapter accepts an HTTP or HTTPS MCP URL and uses Manul's dedicated PAT supplied through `FITEO_MANUL_PAT`. HTTPS is strongly recommended outside a trusted private network: an HTTP connection does not encrypt the Bearer token in transit. Its URL can be configured as `"{env:FITEO_BASE_URL}/mcp"`, and `manulUserIdEnv` can point to `MANUL_USER_ID` (a positive numeric ID). Never use the operator's `FITEO_PAT` for Manul's task-scoped Fiteo connection. When creating a Todo task through Fiteo, always use the `manul_fiteo_create_task` custom tool rather than calling `fiteo_todo_create_task` directly: the custom tool adds the required `EDITOR_AND_VIEWER` share and verifies it by reading the new task back. It requires `FITEO_MANUL_SHARE_USER_ID`, the numeric Fiteo ID of the intended Mariusz recipient. Neither token nor recipient ID belongs in `config.json`.
 
