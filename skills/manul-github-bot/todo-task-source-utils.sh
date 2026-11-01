@@ -523,7 +523,7 @@ todo_task_has_remote_share() {
 todo_task_remote_share_diagnostics() {
   local task_json="$1" user_id="$2"
   [[ "$user_id" =~ ^[0-9]+$ ]] || return 1
-  jq -cn --arg userId "$user_id" '
+  jq -c --arg userId "$user_id" '
     (.shares // []) as $shares
     | {
         sharesCount: ($shares | length),
