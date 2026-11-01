@@ -142,7 +142,7 @@ PERM_ROOT=$(mktemp -d /tmp/manul-perm-XXXXXX)
 PERM_CANON="$PERM_ROOT/canonical"
 PERM_RUN="$PERM_ROOT/runtime"
 PERM_HOME="$PERM_ROOT/home"
-mkdir -p "$PERM_CANON" "$PERM_ROOT/bin" "$PERM_HOME/.config/opencode/tools" "$PERM_ROOT/opencode/tools"
+mkdir -p "$PERM_CANON" "$PERM_ROOT/bin" "$PERM_HOME/.config/opencode/tools" "$PERM_ROOT/xdg/opencode/tools" "$PERM_ROOT/opencode/tools"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "$PERM_CANON/" 2>/dev/null || true
 chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
@@ -151,6 +151,7 @@ chmod 644 "$PERM_CANON/manul-queue-reset.sh"
 # Simulate both forms produced by the old installer: a global symlink and a
 # byte-identical copy in an explicitly configured OpenCode config directory.
 ln -s "$PERM_RUN/manul_fiteo_create_task.ts" "$PERM_HOME/.config/opencode/tools/manul_fiteo_create_task.ts"
+ln -s "$PERM_RUN/manul_fiteo_create_task.ts" "$PERM_ROOT/xdg/opencode/tools/manul_fiteo_create_task.ts"
 cp "$PERM_CANON/manul_fiteo_create_task.ts" "$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
 printf '%s\n' 'operator-owned tool' > "$PERM_ROOT/opencode/tools/operator_tool.ts"
 
@@ -173,7 +174,7 @@ MOCK_NPM
 chmod +x "$PERM_ROOT/bin/npm"
 
 set +e
-PATH="$PERM_ROOT/bin:$PATH" HOME="$PERM_HOME" XDG_CONFIG_HOME="$PERM_HOME/.config" \
+PATH="$PERM_ROOT/bin:$PATH" HOME="$PERM_HOME" XDG_CONFIG_HOME="$PERM_ROOT/xdg" \
   OPENCODE_CONFIG_DIR="$PERM_ROOT/opencode" MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
 PERM_RC=$?
@@ -191,10 +192,13 @@ else
 fi
 
 PERM_OPENCODE_TOOL_GLOBAL="$PERM_HOME/.config/opencode/tools/manul_fiteo_create_task.ts"
+PERM_OPENCODE_TOOL_XDG="$PERM_ROOT/xdg/opencode/tools/manul_fiteo_create_task.ts"
 PERM_OPENCODE_TOOL_CUSTOM="$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
-if [ "$PERM_RC" -eq 0 ] && [ ! -e "$PERM_OPENCODE_TOOL_GLOBAL" ] && [ ! -L "$PERM_OPENCODE_TOOL_GLOBAL" ] &&
+if [ "$PERM_RC" -eq 0 ] &&
+   [ ! -e "$PERM_OPENCODE_TOOL_GLOBAL" ] && [ ! -L "$PERM_OPENCODE_TOOL_GLOBAL" ] &&
+   [ ! -e "$PERM_OPENCODE_TOOL_XDG" ] && [ ! -L "$PERM_OPENCODE_TOOL_XDG" ] &&
    [ ! -e "$PERM_OPENCODE_TOOL_CUSTOM" ] && [ ! -L "$PERM_OPENCODE_TOOL_CUSTOM" ]; then
-  ok "Installer removes only legacy Manul registrations from global/custom OpenCode tools"
+  ok "Installer removes legacy Manul registrations from default, XDG, and custom OpenCode tool dirs"
 else
   fail "Installer left a legacy Manul tool registered globally (rc=$PERM_RC)"
 fi
