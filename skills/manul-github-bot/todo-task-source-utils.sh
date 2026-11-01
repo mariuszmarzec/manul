@@ -31,8 +31,7 @@ todo_task_repository_catalog_path() {
   fi
 
   # In standalone Manul installs the project catalog is supplied by the host
-  # globalskills checkout, whose skills directory is persisted as
-  # MANUL_HOST_SKILLS_DIR for unattended daemon/poller processes.
+  # globalskills checkout. Prefer its explicitly configured skills directory.
   local host_catalog=""
   if [ -n "${MANUL_HOST_SKILLS_DIR:-}" ]; then
     host_catalog="$MANUL_HOST_SKILLS_DIR/globalskills-repository/project-repositories.json"
@@ -40,6 +39,15 @@ todo_task_repository_catalog_path() {
       printf '%s\n' "$host_catalog"
       return 0
     fi
+  fi
+
+  # Standard standalone layout: globalskills is checked out at ~/.globalskills.
+  # Do not require MANUL_HOST_SKILLS_DIR to be present in a daemon's .env;
+  # the catalog is still discoverable in unattended poller processes.
+  host_catalog="$HOME/.globalskills/skills/globalskills-repository/project-repositories.json"
+  if [ -r "$host_catalog" ]; then
+    printf '%s\n' "$host_catalog"
+    return 0
   fi
 
   # Backward-compatible location for deployments that still colocate the
