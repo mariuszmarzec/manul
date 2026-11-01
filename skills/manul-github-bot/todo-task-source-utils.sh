@@ -621,7 +621,7 @@ todo_task_report_deliver() {
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
         todo_mcp_source_call "$source_json" create_task "$arguments" >/dev/null || return $? ;;
       todo_remote_mcp)
-        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" --argjson shareUserId "$share_user_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false,shares:[{userId:$shareUserId,permission:"EDITOR_AND_VIEWER"}]}}')"
+        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" --arg shareUserId "$share_user_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false,shares:[{userId:$shareUserId,permission:"EDITOR_AND_VIEWER"}]}}')"
         todo_mcp_source_call "$source_json" todo_create_task "$arguments" >/dev/null || return $? ;;
     esac
     tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
