@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a Fiteo Todo task through Manul's enforced share policy."""
+"""Create a Fiteo Todo task with direct root sharing or inherited subtask access."""
 
 from __future__ import annotations
 
