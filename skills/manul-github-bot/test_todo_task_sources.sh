@@ -677,5 +677,11 @@ else
   fail "Streamable HTTP MCP client tests failed"
 fi
 
+if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_remote_create_task.py"; then
+  ok "Remote Todo share-enforcement tests passed"
+else
+  fail "Remote Todo share-enforcement tests failed"
+fi
+
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
