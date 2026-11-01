@@ -221,6 +221,22 @@ test_pre_execution_failure_budget_wiring() {
 
 test_pre_execution_failure_budget_wiring
 
+
+# Test: report-only workspace state exists before the agent-start marker can fail.
+test_workspace_state_initialized_before_agent_marker() {
+  local daemon="$SCRIPT_DIR/manul-daemon.sh"
+  local workspace_line marker_line
+  workspace_line="$(grep -nF 'local REPO_DIR="" WORKDIR="" WORKSPACE_ID="" workspace_path=""' "$daemon" | head -n 1 | cut -d: -f1)"
+  marker_line="$(grep -nF 'local agent_start_changed' "$daemon" | head -n 1 | cut -d: -f1)"
+  if [[ "$workspace_line" =~ ^[0-9]+$ ]] && [[ "$marker_line" =~ ^[0-9]+$ ]] &&
+     [ "$workspace_line" -lt "$marker_line" ]; then
+    pass "workspace variables are initialized before agent-start failure can read WORKSPACE_ID"
+  else
+    fail "WORKSPACE_ID may be read before initialization in the agent-start failure path"
+  fi
+}
+test_workspace_state_initialized_before_agent_marker
+
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed"

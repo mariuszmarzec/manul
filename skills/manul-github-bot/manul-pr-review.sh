@@ -120,7 +120,6 @@ init_schema() {
   while [ "$success" = false ] && [ $retry -lt $max_retries ]; do
     local err
     err="$(sqlite3 "$DB" "
-      PRAGMA busy_timeout=5000;
       BEGIN IMMEDIATE;
       CREATE TABLE IF NOT EXISTS processed_comments (
         commentId TEXT PRIMARY KEY,
@@ -191,7 +190,7 @@ init_schema() {
     local migrate_retry=0
     while [ "$migrate_ok" = false ] && [ $migrate_retry -lt 5 ]; do
       local migrate_err
-      migrate_err="$(sqlite3 "$DB" "PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" 2>&1)" && migrate_ok=true || {
+      migrate_err="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN taskId TEXT; COMMIT;" 2>&1)" && migrate_ok=true || {
         migrate_retry=$((migrate_retry + 1))
         if [ $migrate_retry -ge 5 ]; then
           echo "ERROR: Failed to migrate processed_comments table after $migrate_retry attempts: $migrate_err" >&2

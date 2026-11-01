@@ -52,6 +52,16 @@ case "$tool" in
     fi
     task_id="$(jq '[.. | objects | .id? // empty] | max + 1' "$TODO_MCP_FIXTURE")"
     shares="$(if [ "$tool" = "todo_create_task" ]; then jq -c '.task.shares // []' <<<"$arguments"; else printf '[]'; fi)"
+    if [ "$tool" = "todo_create_task" ] && [ "${TODO_MCP_DROP_SHARE:-0}" = "1" ]; then
+      shares='[]'
+    fi
+    if [ "$tool" = "todo_create_task" ] && [ "${TODO_MCP_WRONG_SHARE_PERMISSION:-0}" = "1" ]; then
+      shares="$(jq -c 'map(.permission = "VIEWER")' <<<"$shares")"
+    fi
+    response_shares="$shares"
+    if [ "$tool" = "todo_create_task" ] && [ "${TODO_MCP_RESPONSE_WITHOUT_SHARE:-0}" = "1" ]; then
+      response_shares='[]'
+    fi
     jq --argjson parentId "$parent_id" --argjson id "$task_id" --arg description "$description" --argjson shares "$shares" '
       map(if .id == $parentId then
         .subTasks = ((.subTasks // []) + [{
@@ -61,7 +71,7 @@ case "$tool" in
       else . end)
     ' "$TODO_MCP_FIXTURE" > "$TODO_MCP_FIXTURE.next"
     mv "$TODO_MCP_FIXTURE.next" "$TODO_MCP_FIXTURE"
-    jq -cn --argjson id "$task_id" --arg description "$description" '{id:$id,description:$description}'
+    jq -cn --argjson id "$task_id" --arg description "$description" --argjson shares "$response_shares" '{id:$id,description:$description,shares:$shares}'
     ;;
   mark_tasks_done|todo_mark_tasks)
     printf '%s\t%s\n' "$tool" "$arguments" >> "$TODO_MCP_CALL_LOG"
@@ -742,8 +752,11 @@ assert_eq "remote report-only task is discovered without repository routing" "re
 remote_report_id="$(jq -r '.taskSourceId' <<<"$remote_report_task")"
 : > "$TODO_MCP_CALL_LOG"
 export TODO_MCP_FAIL_MARK=1
+export TODO_MCP_RESPONSE_WITHOUT_SHARE=1
+remote_share_diagnostics="$TEST_DIR/remote-share-diagnostics.log"
 remote_report_rc=0
-todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "Remote Fiteo report answer." >/dev/null || remote_report_rc=$?
+todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "Remote Fiteo report answer." >/dev/null 2>"$remote_share_diagnostics" || remote_report_rc=$?
+unset TODO_MCP_RESPONSE_WITHOUT_SHARE
 assert_rc "remote partial completion failure remains retryable" "2" "$remote_report_rc"
 remote_partial_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
 assert_eq "remote partial write leaves root active" "true" "$remote_partial_root_status"
@@ -752,8 +765,10 @@ assert_eq "remote partial write keeps exactly one result child" "1" "$remote_par
 remote_pending_status="$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
 assert_eq "remote result child stays pending when completion update fails" "true" "$remote_pending_status"
 unset TODO_MCP_FAIL_MARK
-remote_report_receipt="$(todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "A regenerated retry answer must reuse the persisted result.")"
+remote_report_receipt="$(todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "A regenerated retry answer must reuse the persisted result." 2>>"$remote_share_diagnostics")"
 assert_eq "remote retry returns the exact previously persisted answer" "Remote Fiteo report answer." "$(jq -r '.answer' <<<"$remote_report_receipt")"
+assert_contains "create response share state is diagnosed without trusting it over read-back" "$(cat "$remote_share_diagnostics")" "stage=create_response shares_count=0 expected_user_present=false expected_permission_match=false"
+assert_contains "persisted share is verified on read-back before completion" "$(cat "$remote_share_diagnostics")" "stage=post_create_readback shares_count=1 expected_user_present=true expected_permission_match=true"
 remote_report_share_verified="$(jq -r '.[0].subTasks[0].shares | any(.[]; .userId == "88" and .permission == "EDITOR_AND_VIEWER")' "$TODO_MCP_FIXTURE")"
 assert_eq "Manul-created remote report subtask is shared with the configured owner" "true" "$remote_report_share_verified"
 remote_result_id="$(jq -r '.resultTaskId' <<<"$remote_report_receipt")"
@@ -792,6 +807,43 @@ assert_eq "remote result creation failure leaves root active" "true" "$remote_cr
 remote_create_failure_child_count=$(jq -r ".[0].subTasks | length" "$TODO_MCP_FIXTURE")
 assert_eq "remote result creation failure writes no child" "0" "$remote_create_failure_child_count"
 
+
+
+# A missing direct share must keep the persisted result child pending.
+cat > "$TEST_DIR/remote-report-share-missing.json" <<'JSON'
+[
+  {"id":603,"ownerId":4,"description":"/manul report Missing share fixture","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-report-share-missing.json"
+remote_share_missing_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
+remote_share_missing_id="$(jq -r '.taskSourceId' <<<"$remote_share_missing_task")"
+export TODO_MCP_DROP_SHARE=1
+remote_share_missing_rc=0
+todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_share_missing_id" "Must remain pending without share." >/dev/null 2>"$TEST_DIR/remote-share-missing.log" || remote_share_missing_rc=$?
+unset TODO_MCP_DROP_SHARE
+assert_rc "missing Fiteo share fails delivery before completion" "1" "$remote_share_missing_rc"
+assert_eq "missing Fiteo share leaves result pending" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
+assert_contains "missing share diagnostic identifies read-back stage" "$(cat "$TEST_DIR/remote-share-missing.log")" "stage=post_create_readback"
+assert_contains "missing share diagnostic records absent recipient and permission" "$(cat "$TEST_DIR/remote-share-missing.log")" "expected_user_present=false expected_permission_match=false"
+assert_not_contains "share diagnostics never print the configured recipient ID" "$(cat "$TEST_DIR/remote-share-missing.log")" "88"
+
+# A share for the intended user with insufficient permission is also rejected.
+cat > "$TEST_DIR/remote-report-share-viewer.json" <<'JSON'
+[
+  {"id":604,"ownerId":4,"description":"/manul report Viewer share fixture","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-report-share-viewer.json"
+remote_share_viewer_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
+remote_share_viewer_id="$(jq -r '.taskSourceId' <<<"$remote_share_viewer_task")"
+export TODO_MCP_WRONG_SHARE_PERMISSION=1
+remote_share_viewer_rc=0
+todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_share_viewer_id" "Must remain pending with viewer permission." >/dev/null 2>"$TEST_DIR/remote-share-viewer.log" || remote_share_viewer_rc=$?
+unset TODO_MCP_WRONG_SHARE_PERMISSION
+assert_rc "viewer-only Fiteo share fails delivery" "1" "$remote_share_viewer_rc"
+assert_eq "viewer-only share leaves result pending" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
+assert_contains "viewer-only diagnostic distinguishes recipient from permission" "$(cat "$TEST_DIR/remote-share-viewer.log")" "expected_user_present=true expected_permission_match=false"
 
 echo
 if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_mcp_client.py"; then

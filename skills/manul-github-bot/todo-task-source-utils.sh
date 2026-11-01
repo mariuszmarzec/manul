@@ -480,17 +480,6 @@ todo_task_has_local_trigger() {
     grep -qE '^[[:space:]]*/manul([[:space:]]|$)'
 }
 
-todo_task_has_remote_share() {
-  local task_json="$1" user_id="$2"
-  [[ "$user_id" =~ ^[0-9]+$ ]] || return 1
-  jq -e --arg userId "$user_id" '
-    any(.shares[]?;
-      ((.userId | tostring) == $userId)
-      and .permission == "EDITOR_AND_VIEWER"
-    )
-  ' <<<"$task_json" >/dev/null 2>&1
-}
-
 # A remote task is only actionable when the command is present anywhere in
 # its task tree. Sharing alone grants visibility, never execution permission.
 todo_task_has_remote_trigger() {
@@ -529,6 +518,36 @@ todo_task_has_remote_share() {
       and .permission == "EDITOR_AND_VIEWER"
     )
   ' <<<"$task_json" >/dev/null 2>&1
+}
+
+todo_task_remote_share_diagnostics() {
+  local task_json="$1" user_id="$2"
+  [[ "$user_id" =~ ^[0-9]+$ ]] || return 1
+  jq -cn --arg userId "$user_id" '
+    (.shares // []) as $shares
+    | {
+        sharesCount: ($shares | length),
+        expectedUserPresent: any($shares[]?; ((.userId | tostring) == $userId)),
+        expectedPermissionMatch: any(
+          $shares[]?;
+          ((.userId | tostring) == $userId) and .permission == "EDITOR_AND_VIEWER"
+        )
+      }
+  ' <<<"$task_json"
+}
+
+# Log only booleans/counts. User IDs, PATs and raw MCP payloads must never enter logs.
+todo_task_log_remote_share_diagnostics() {
+  local stage="$1" task_json="$2" user_id="$3" state
+  state="$(todo_task_remote_share_diagnostics "$task_json" "$user_id")" || {
+    echo "Todo remote report share diagnostic stage=$stage response_valid=false" >&2
+    return 1
+  }
+  printf 'Todo remote report share diagnostic stage=%s shares_count=%s expected_user_present=%s expected_permission_match=%s\n' \
+    "$stage" \
+    "$(jq -r '.sharesCount' <<<"$state")" \
+    "$(jq -r '.expectedUserPresent' <<<"$state")" \
+    "$(jq -r '.expectedPermissionMatch' <<<"$state")" >&2
 }
 
 todo_task_still_current() {
@@ -606,6 +625,7 @@ todo_task_report_deliver() {
   local source_json="$1" source_type="$2" source_id="$3" generated_answer="$4"
   local task_id expected_version tasks_json root_json marker_prefix result_json result_count
   local result_id result_description result_todo arguments answer digest receipt actual_version share_user_id
+  local create_response="" create_rc=0 share_config_rc=0
   task_id="$(todo_task_id_from_source_id "$source_id")"
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
@@ -619,7 +639,12 @@ todo_task_report_deliver() {
       local manul_user_id
       manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
       todo_task_has_remote_share "$root_json" "$manul_user_id" || return 1
-      share_user_id="$(todo_task_remote_share_user_id "$source_json")" || return $? ;;
+      share_user_id="$(todo_task_remote_share_user_id "$source_json")" || share_config_rc=$?
+      if [ "$share_config_rc" -ne 0 ]; then
+        echo "Todo remote report share diagnostic stage=pre_create configured=false" >&2
+        return "$share_config_rc"
+      fi
+      echo "Todo remote report share diagnostic stage=pre_create configured=true" >&2 ;;
     *)
       return 2 ;;
   esac
@@ -652,7 +677,14 @@ todo_task_report_deliver() {
         todo_mcp_source_call "$source_json" create_task "$arguments" >/dev/null || return $? ;;
       todo_remote_mcp)
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" --arg shareUserId "$share_user_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false,shares:[{userId:$shareUserId,permission:"EDITOR_AND_VIEWER"}]}}')"
-        todo_mcp_source_call "$source_json" todo_create_task "$arguments" >/dev/null || return $? ;;
+        create_rc=0
+        create_response="$(todo_mcp_source_call "$source_json" todo_create_task "$arguments")" || create_rc=$?
+        if [ "$create_rc" -ne 0 ]; then return "$create_rc"; fi
+        if [ -n "$create_response" ] && jq -e 'type == "object"' <<<"$create_response" >/dev/null 2>&1; then
+          todo_task_log_remote_share_diagnostics "create_response" "$create_response" "$share_user_id" || true
+        else
+          echo "Todo remote report share diagnostic stage=create_response response_valid=false" >&2
+        fi ;;
     esac
     tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
     root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
@@ -675,6 +707,14 @@ todo_task_report_deliver() {
     echo "Todo report result read-back failed source-version verification" >&2
     return 1
   }
+  if [ "$source_type" = "todo_remote_mcp" ]; then
+    todo_task_log_remote_share_diagnostics "post_create_readback" "$result_json" "$share_user_id" || return 1
+    if ! todo_task_has_remote_share "$result_json" "$share_user_id"; then
+      echo "Todo remote report result share verification failed at stage=post_create_readback; result remains pending" >&2
+      return 1
+    fi
+  fi
+
   result_todo="$(jq -r 'if .isToDo == null then "true" else (.isToDo|tostring) end' <<<"$result_json")"
   if [ "$result_todo" != "false" ]; then
     case "$source_type" in
@@ -699,10 +739,12 @@ todo_task_report_deliver() {
   [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
   [ "$(jq -r '.isToDo' <<<"$result_json")" = "false" ] || return 1
   [ "$(jq -r '.description // empty' <<<"$result_json")" = "$result_description" ] || return 1
-  if [ "$source_type" = "todo_remote_mcp" ] &&
-     ! todo_task_has_remote_share "$result_json" "$share_user_id"; then
-    echo "Todo remote report result was created but its required share could not be verified" >&2
-    return 1
+  if [ "$source_type" = "todo_remote_mcp" ]; then
+    todo_task_log_remote_share_diagnostics "post_completion_readback" "$result_json" "$share_user_id" || return 1
+    if ! todo_task_has_remote_share "$result_json" "$share_user_id"; then
+      echo "Todo remote report result share verification failed at stage=post_completion_readback" >&2
+      return 1
+    fi
   fi
   actual_version="$(todo_task_fingerprint "$root_json")" || return 1
   [ "$actual_version" = "$expected_version" ] || {

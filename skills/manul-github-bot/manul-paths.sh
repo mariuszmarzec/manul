@@ -30,6 +30,30 @@ MANUL_TASKS_DIR="${MANUL_TASKS_DIR:-$MANUL_STATE_DIR/tasks}"
 MANUL_TASK_LOG_DIR="${MANUL_TASK_LOG_DIR:-$MANUL_LOG_DIR/tasks}"
 MANUL_WORKSPACE="${MANUL_WORKSPACE:-$MANUL_DIR/workspace}"
 
+# sqlite3 opens a new connection for every CLI invocation. Keep lock handling
+# consistent across dispatch, poller, heartbeat, recovery and helper processes.
+MANUL_SQLITE_BUSY_TIMEOUT_MS="${MANUL_SQLITE_BUSY_TIMEOUT_MS:-5000}"
+if ! [[ "$MANUL_SQLITE_BUSY_TIMEOUT_MS" =~ ^[1-9][0-9]{0,5}$ ]] ||
+   [ "$MANUL_SQLITE_BUSY_TIMEOUT_MS" -gt 300000 ]; then
+    MANUL_SQLITE_BUSY_TIMEOUT_MS=5000
+fi
+export MANUL_SQLITE_BUSY_TIMEOUT_MS
+
+# Wrap the external CLI rather than relying on a PRAGMA in selected SQL batches:
+# busy_timeout is connection-local, so each independently launched sqlite3 needs it.
+if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3() {
+        case "${1:-}" in
+            --version|-version|--help|-help|-?)
+                command sqlite3 "$@"
+                ;;
+            *)
+                command sqlite3 -cmd ".timeout ${MANUL_SQLITE_BUSY_TIMEOUT_MS}" "$@"
+                ;;
+        esac
+    }
+fi
+
 # Task IDs are business identifiers, not safe filename components. CI task IDs
 # include owner/repository (and therefore "/"), while most comment IDs do not.
 # Flatten path separators consistently but preserve existing filenames for IDs
