@@ -585,7 +585,9 @@ todo_task_report_deliver() {
     todo_remote_mcp)
       local manul_user_id
       manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
-      todo_task_has_remote_share "$root_json" "$manul_user_id" || return 1 ;;
+      todo_task_has_remote_share "$root_json" "$manul_user_id" || return 1
+      share_user_id="$(todo_task_remote_share_user_id "$source_json")" || return $?
+      ;;
     *)
       return 2 ;;
   esac
