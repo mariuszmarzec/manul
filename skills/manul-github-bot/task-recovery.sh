@@ -103,14 +103,97 @@ mark_task_failed() {
 }
 
 retry_failed_task() {
-    local comment_id="$1"
-    log "Retrying failed task $comment_id from scratch"
-    terminate_task_executor "$comment_id"
-    sqlite3 "$DB" "
-        UPDATE processed_comments
-        SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now')
-        WHERE commentId='$comment_id' AND status='failed';
-    " 2>/dev/null
+  local comment_id="$1"
+  log "Retrying failed task $comment_id from scratch"
+  terminate_task_executor "$comment_id"
+  sqlite3 "$DB" "
+    UPDATE processed_comments
+    SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now')
+    WHERE commentId='$comment_id' AND status='failed';
+  " 2>/dev/null
+}
+
+# Retry a task that was marked terminal 'stale'. A stale row blocks re-polling
+# because poll.sh keys processed_comments on commentId (INSERT OR IGNORE), so a
+# blind delete+re-poll would silently drop the task. Instead this resets the
+# row to queued with a cleared lease and an immediate nextAttemptAt, then
+# re-validates the underlying GitHub source so a deleted/trigger-less issue is
+# retired instead of being re-queued as a zombie.
+#
+# Source revalidation is MANDATORY, not optional: it is the only thing that
+# distinguishes a recoverable stale task from one whose source is gone. If the
+# source cannot be checked (network/config unavailable) the retry refuses to
+# proceed rather than manufacture a zombie.
+retry_stale_task() {
+  local comment_id="$1"
+  local safe_comment_id repo issue_num source_type source_id source_url
+  safe_comment_id="$(printf '%s' "$comment_id" | sed "s/'/''/g")"
+  repo="$(sqlite3 "$DB" "SELECT COALESCE(repository,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
+  issue_num="$(sqlite3 "$DB" "SELECT COALESCE(issueNumber,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
+  source_type="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceType,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
+  source_id="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceId,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
+  source_url="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceUrl,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
+
+  if [ -z "$repo" ]; then
+    log "ERROR: cannot retry stale task $comment_id — no repository found"
+    return 1
+  fi
+
+  # 1. Revalidate the source BEFORE mutating state. A stale source is terminal
+  #    and must not be re-queued.
+  local reval_rc=0
+  if [ -n "$source_type" ]; then
+    # Source-task rows carry a taskSourceType; revalidate through the provider
+    # contract so Todo/GitHub-Issues sources are checked the same way the
+    # dispatcher would check them at claim time.
+    if ! declare -f task_source_revalidate >/dev/null 2>&1; then
+      source "$SCRIPT_DIR/task-source.sh"
+    fi
+    task_source_revalidate "$MANUL_CONFIG" "$source_type" "$source_id" "$repo" "$issue_num" || reval_rc=$?
+  else
+    # Legacy comment-derived task: revalidate the comment/issue/PR itself.
+    if ! declare -f revalidate_source >/dev/null 2>&1; then
+      source "$SCRIPT_DIR/manul-daemon.sh" 2>/dev/null || true
+    fi
+    if declare -f revalidate_source >/dev/null 2>&1; then
+      revalidate_source "$comment_id" "$repo" "$issue_num" "$source_url" || reval_rc=$?
+    else
+      log "WARN: revalidate_source unavailable for legacy task $comment_id; refusing to retry without source check"
+      return 1
+    fi
+  fi
+
+  case "$reval_rc" in
+    1)
+      log "Refusing to retry stale task $comment_id — source no longer valid (terminal)"
+      return 1
+      ;;
+    2)
+      log "Refusing to retry stale task $comment_id — source revalidation failed transiently; retry later via the daemon"
+      return 1
+      ;;
+  esac
+
+  # 2. Reset the row to queued. Clear the stale terminal state, the lease and
+  #    the claim token, and schedule an immediate attempt so the daemon's
+  #    dispatcher picks it up without waiting for the backoff window.
+  log "Retrying stale task $comment_id from scratch (source revalidated)"
+  terminate_task_executor "$comment_id"
+  local changed
+  changed="$(sqlite3 "$DB" "
+    UPDATE processed_comments
+    SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL,
+        leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL,
+        preExecutionFailures=0, nextAttemptAt=datetime('now')
+    WHERE commentId='$safe_comment_id' AND status='stale';
+    SELECT changes();
+  " 2>>"$LOG" | tail -n 1)" || changed="0"
+  if [ "${changed:-0}" -ne 1 ]; then
+    log "ERROR: failed to retry stale task $comment_id (changes=${changed:-0})"
+    return 1
+  fi
+  log "Stale task $comment_id requeued as queued with immediate nextAttemptAt"
+  return 0
 }
 
 reset_all_tasks() {
@@ -197,11 +280,19 @@ case "${1:-}" in
         fi
         retry_failed_task "$1"
         ;;
+    --retry-stale)
+        shift
+        if [ -z "${1:-}" ]; then
+            echo "Error: --retry-stale requires a task id" >&2
+            exit 1
+        fi
+        retry_stale_task "$1"
+        ;;
     --health-check)
         health_check
         ;;
     *)
-        echo "Usage: $0 [--list-stuck|--reset <id>|--mark-failed <id>|--reset-all[=running|failed]|--retry <id>|--health-check]"
+        echo "Usage: $0 [--list-stuck|--reset <id>|--mark-failed <id>|--reset-all[=running|failed]|--retry <id>|--retry-stale <id>|--health-check]"
         exit 1
         ;;
 esac
