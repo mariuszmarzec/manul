@@ -51,11 +51,12 @@ case "$tool" in
       parent_id="$(jq -r '.task.parentTaskId' <<<"$arguments")"
     fi
     task_id="$(jq '[.. | objects | .id? // empty] | max + 1' "$TODO_MCP_FIXTURE")"
-    jq --argjson parentId "$parent_id" --argjson id "$task_id" --arg description "$description" '
+    shares="$(if [ "$tool" = "todo_create_task" ]; then jq -c '.task.shares // []' <<<"$arguments"; else printf '[]'; fi)"
+    jq --argjson parentId "$parent_id" --argjson id "$task_id" --arg description "$description" --argjson shares "$shares" '
       map(if .id == $parentId then
         .subTasks = ((.subTasks // []) + [{
           id:$id, description:$description, parentTaskId:$parentId,
-          subTasks:[], isToDo:true, priority:1, scheduler:null, shares:[]
+          subTasks:[], isToDo:true, priority:1, scheduler:null, shares:$shares
         }])
       else . end)
     ' "$TODO_MCP_FIXTURE" > "$TODO_MCP_FIXTURE.next"
@@ -128,7 +129,8 @@ export TODO_LOCAL_MCP_DIRECT_STATUS=401
 export TODO_LOCAL_MCP_BRIDGE_STATUS=000
 export PATH="$BIN:$PATH"
 export TODO_LOCAL_MCP_TOKEN="local-test-token"
-export FITEO_PAT="remote-test-token"
+export FITEO_MANUL_PAT="remote-test-token"
+export FITEO_MANUL_SHARE_USER_ID=88
 export TODO_MCP_CALL_LOG="$TEST_DIR/mcp-calls.log"
 touch "$TODO_MCP_CALL_LOG"
 
@@ -340,7 +342,7 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
 JSON
 
 LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"TODO_LOCAL_MCP_TOKEN"}'
-REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp"}'
+REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"url":"https://fiteo.example.test/mcp"}'
 
 echo "=== Repository routing ==="
 local_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":90,"description":"/manul Update local project"}')"
@@ -611,7 +613,7 @@ cat > "$TEST_DIR/remote-report.json" <<'JSON'
   {"id":601,"ownerId":4,"description":"/manul report Summarize remote report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
-REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserId":77,"url":"https://fiteo.example.test/mcp","tokenEnv":"FITEO_PAT"}'
+REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserId":77,"url":"https://fiteo.example.test/mcp","tokenEnv":"FITEO_MANUL_PAT"}'
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-report.json"
 remote_report_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
 assert_eq "remote report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$remote_report_task")"
@@ -630,6 +632,7 @@ assert_eq "remote result child stays pending when completion update fails" "true
 unset TODO_MCP_FAIL_MARK
 remote_report_receipt="$(todo_task_report_deliver "$REMOTE_REPORT_SOURCE" todo_remote_mcp "$remote_report_id" "A regenerated retry answer must reuse the persisted result.")"
 assert_eq "remote retry returns the exact previously persisted answer" "Remote Fiteo report answer." "$(jq -r '.answer' <<<"$remote_report_receipt")"
+assert_contains "Manul-created remote report subtask is shared with the configured owner" "$(jq -c '.[0].subTasks[0].shares' "$TODO_MCP_FIXTURE")" '"userId":"88","permission":"EDITOR_AND_VIEWER"'
 remote_result_id="$(jq -r '.resultTaskId' <<<"$remote_report_receipt")"
 remote_create_call_count=$(grep -c todo_create_task "$TODO_MCP_CALL_LOG")
 assert_eq "remote report uses Fiteo create tool only once across retry" "1" "$remote_create_call_count"
