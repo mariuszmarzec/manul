@@ -316,7 +316,7 @@ fi
 ZSHRC_TMP="$(mktemp)" || fail "Could not create temporary zshrc migration file"
 awk -v canonical="$CANONICAL_DIR/manul-shell.zsh" '
   /^[[:space:]]*(source|[.])[[:space:]]+/ &&
-  /manul-shell\.zsh([[:space:]]|$)/ &&
+  index($0, "manul-shell.zsh") > 0 &&
   index($0, canonical) == 0 &&
   index($0, ";") == 0 { next }
   { print }
