@@ -436,7 +436,7 @@ assert_eq "catalog alias records the matched phrase" "local project" "$(jq -r '.
 
 remote_resolution="$(todo_task_resolve_repository "$REMOTE_SOURCE" '{"id":91,"description":"/manul Implement remote project"}')"
 assert_eq "remote alias resolves the remote project" "owner/remote" "$(jq -r '.repository' <<<"$remote_resolution")"
-remote_skill_prompt="$(todo_task_to_source_json '{"id":91,"description":"/manul Implement remote project","subTasks":[],"isToDo":true}' todo_remote_mcp "$remote_resolution")"
+remote_skill_prompt="$(HOME="$SKILLS_HOME" todo_task_to_source_json '{"id":91,"description":"/manul Implement remote project","subTasks":[],"isToDo":true}' todo_remote_mcp "$remote_resolution")"
 assert_contains "mapped project skill is supplied in task context" "$(jq -r '.prompt' <<<"$remote_skill_prompt")" 'fiteo-docs'
 
 linked_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":92,"description":"/manul Fix this: https://github.com/owner/link-target/issues/42"}')"
