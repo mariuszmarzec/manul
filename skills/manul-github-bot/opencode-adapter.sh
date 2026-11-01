@@ -269,14 +269,14 @@ fi
 # untouched. The endpoint and PAT are stored atomically by manul-env.sh.
 _FITEO_RUNTIME_ENV_FILE="$MANUL_DIR/.env"
 if [ -f "$_FITEO_RUNTIME_ENV_FILE" ]; then
-    _fiteo_runtime_values="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s|%s" "${FITEO_BASE_URL:-}" "${FITEO_PAT:-}"' _ "$_FITEO_RUNTIME_ENV_FILE" 2>/dev/null)" || _fiteo_runtime_values=""
+    _fiteo_runtime_values="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s|%s" "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}"' _ "$_FITEO_RUNTIME_ENV_FILE" 2>/dev/null)" || _fiteo_runtime_values=""
     IFS="|" read -r _fiteo_runtime_base_url _fiteo_runtime_pat <<< "$_fiteo_runtime_values"
     if [ -n "$_fiteo_runtime_base_url" ] && [ -n "$_fiteo_runtime_pat" ]; then
         FITEO_BASE_URL="$_fiteo_runtime_base_url"
-        FITEO_PAT="$_fiteo_runtime_pat"
-        export FITEO_BASE_URL FITEO_PAT
+        FITEO_MANUL_PAT="$_fiteo_runtime_pat"
+        export FITEO_BASE_URL FITEO_MANUL_PAT
     else
-        unset FITEO_BASE_URL FITEO_PAT 2>/dev/null || true
+        unset FITEO_BASE_URL FITEO_MANUL_PAT 2>/dev/null || true
     fi
 fi
 
