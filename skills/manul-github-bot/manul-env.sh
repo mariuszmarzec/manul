@@ -247,40 +247,21 @@ EOF
     )
   fi
 
-  # Persist the non-secret Fiteo recipient ID configured for remote Todo sharing.
-  # Refresh an existing value too, so an operator can deliberately change the
-  # recipient without leaving unattended Manul processes on a stale ID.
-  local share_user_id_variable
-  if [ -f "$runtime_dir/config.json" ]; then
-    while IFS= read -r share_user_id_variable; do
-      [ -n "$share_user_id_variable" ] || continue
-      if [[ ! "$share_user_id_variable" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-        echo "  Ignoring invalid Todo share-recipient environment variable name" >&2
-        continue
-      fi
-      value="${!share_user_id_variable:-}"
-      [[ "$value" =~ ^[1-9][0-9]*$ ]] || continue
-      refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
-      if ! awk -v variable="$share_user_id_variable" '{
-        line=$0
-        sub(/^[[:space:]]*(export[[:space:]]+)?/, "", line)
-        split(line, parts, "=")
-        if (parts[1] != variable) print
-      }' "$env_file" > "$refreshed_file"; then
-        rm -f -- "$refreshed_file"
-        return 1
-      fi
-      printf "%s=%q\n" "$share_user_id_variable" "$value" >> "$refreshed_file"
-      chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
-      mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
-      echo "  Refreshed Fiteo share-recipient ID for unattended Manul tasks" >&2
-    done < <(
-      jq -r '.taskSources[]?
-        | select((.enabled != false) and .type == "todo_remote_mcp")
-        | (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")'
-        "$runtime_dir/config.json" 2>/dev/null | sort -u
-    )
+  # Persist the configured non-secret recipient for Manul-created remote Todo tasks.
+  # This is independent from the endpoint/PAT pair: remote task discovery may
+  # use a task-scoped MCP URL while the bootstrap environment supplies the ID.
+  if [[ "${FITEO_MANUL_SHARE_USER_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_MANUL_SHARE_USER_ID=/' "$env_file" > "$refreshed_file"; then
+      rm -f -- "$refreshed_file"
+      return 1
+    fi
+    printf 'FITEO_MANUL_SHARE_USER_ID=%q\\n' "$FITEO_MANUL_SHARE_USER_ID" >> "$refreshed_file"
+    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+    echo "  Refreshed Fiteo share-recipient ID for unattended Manul tasks" >&2
   fi
+
   chmod 600 "$env_file" || return 1
 
   if ! bash -n "$env_file" >/dev/null 2>&1; then
