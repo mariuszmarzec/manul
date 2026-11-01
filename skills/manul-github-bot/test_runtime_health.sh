@@ -164,7 +164,7 @@ fi
 
 PERM_OPENCODE_TOOL="$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
 if [ "$PERM_RC" -eq 0 ] && [ -L "$PERM_OPENCODE_TOOL" ] &&
-   [ "$(readlink "$PERM_OPENCODE_TOOL" 2>/dev/null || true)" = "$PERM_CANON/manul_fiteo_create_task.ts" ] &&
+   [ "$(readlink "$PERM_OPENCODE_TOOL" 2>/dev/null || true)" = "$PERM_RUN/manul_fiteo_create_task.ts" ] &&
    [ -f "$PERM_OPENCODE_TOOL" ]; then
   ok "Installer deploys the Manul Fiteo custom tool into OPENCODE_CONFIG_DIR"
 else
@@ -579,13 +579,12 @@ rm -rf "$CLI_ROOT"
 echo
 echo "Test 4: Recovery without DB backup fails safely"
 TMPROOT=$(mktemp -d /tmp/manul-runtime-test-XXXXXX)
-# Keep every installer/recovery fixture away from the runner operator's OpenCode tools.
-export OPENCODE_CONFIG_DIR="$TMPROOT/opencode"
 MISSING_DB_RUNTIME="$TMPROOT/missing-db-runtime"
 mkdir -p "$MISSING_DB_RUNTIME"
 
 set +e
 NO_BACKUP_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$MISSING_DB_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$MISSING_DB_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -630,6 +629,7 @@ ok "Canonical backup DB has all required tables"
 GOOD_RUNTIME="$TMPROOT/good-runtime"
 set +e
 GOOD_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$GOOD_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$GOOD_RUNTIME" \
   MANUL_SOURCE_DB="$BACKUP_DB" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
@@ -726,6 +726,7 @@ CONFIG_BEFORE=$(sha256sum "$GOOD_RUNTIME/config.json" | awk '{print $1}')
 
 set +e
 SECOND_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$GOOD_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$GOOD_RUNTIME" \
   MANUL_SOURCE_DB="$BACKUP_DB" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
@@ -764,6 +765,7 @@ cp "$BACKUP_DB" "$ARCHIVE_DIR/state/manul.db"
 
 set +e
 ARCHIVE_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$ARCHIVE_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$ARCHIVE_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -837,6 +839,7 @@ cp "$SCRIPT_DIR/config.json.example" "$READONLY_RUNTIME/config.json" 2>/dev/null
 
 set +e
 READONLY_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$READONLY_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$READONLY_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -963,6 +966,7 @@ cp "$SCRIPT_DIR/config.json.example" "$EMPTY_RUNTIME/config.json" 2>/dev/null ||
 
 set +e
 EMPTY_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$EMPTY_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$EMPTY_RUNTIME" \
   MANUL_SOURCE_DB="$BACKUP_DB" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
@@ -1012,6 +1016,7 @@ cp "$SCRIPT_DIR/config.json.example" "$CORRUPT_RUNTIME/config.json" 2>/dev/null 
 
 set +e
 CORRUPT_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$CORRUPT_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$CORRUPT_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -1065,6 +1070,7 @@ DB_BEFORE=$(sha256sum "$VALID_RUNTIME/state/manul.db" | awk '{print $1}')
 
 set +e
 VALID_OUTPUT=$( \
+  OPENCODE_CONFIG_DIR="$VALID_RUNTIME/opencode" \
   MANUL_RUNTIME_DIR="$VALID_RUNTIME" \
   MANUL_CANONICAL_DIR="$SCRIPT_DIR" \
   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
@@ -1390,7 +1396,7 @@ FAIL_CLOSED_RUNTIME="$FAIL_CLOSED_ROOT/runtime"
 mkdir -p "$FAIL_CLOSED_RUNTIME"
 set +e
 FAIL_CLOSED_OUTPUT=$(
-  MANUL_RUNTIME_DIR="$FAIL_CLOSED_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
+  OPENCODE_CONFIG_DIR="$FAIL_CLOSED_RUNTIME/opencode" MANUL_RUNTIME_DIR="$FAIL_CLOSED_RUNTIME"   MANUL_CANONICAL_DIR="$SCRIPT_DIR"   "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1
 )
 FAIL_CLOSED_EXIT=$?
 set -e
@@ -1428,7 +1434,7 @@ cp "$SCRIPT_DIR/config.json.example" "$PERSIST_RUNTIME/config.json"
 sqlite3 "$PERSIST_RUNTIME/state/manul.db" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER NOT NULL, commentUrl TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, createdAt TEXT); CREATE TABLE conversations(conversationId TEXT PRIMARY KEY, repository TEXT NOT NULL, issueNumber INTEGER, issueUrl TEXT, status TEXT NOT NULL DEFAULT 'OPEN', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE workspaces(workspaceId TEXT PRIMARY KEY, workspacePath TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'IDLE', currentTaskId TEXT, lastUsedAt TEXT); INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,createdAt) VALUES('persist-task','test/repo',1,'https://github.com/test/repo/issues/1','do it','queued','2026-09-22T00:00:00Z');"
 PERSIST_BEFORE="$(sqlite3 "$PERSIST_RUNTIME/state/manul.db" "SELECT COUNT(*) FROM processed_comments;")"
 set +e
-PERSIST_OUTPUT="$(MANUL_RUNTIME_DIR="$PERSIST_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1)"
+PERSIST_OUTPUT="$(OPENCODE_CONFIG_DIR="$PERSIST_RUNTIME/opencode" MANUL_RUNTIME_DIR="$PERSIST_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/repair-manul-runtime.sh" 2>&1)"
 PERSIST_EXIT=$?
 set -e
 PERSIST_AFTER="$(sqlite3 "$PERSIST_RUNTIME/state/manul.db" "SELECT COUNT(*) FROM processed_comments;" 2>/dev/null || echo 0)"
