@@ -71,12 +71,13 @@ FITEO_PAT="operator-pat-must-not-be-copied"
 UNSAFE_SECRET="must-not-be-copied"
 CUSTOM_JIRA_USER="custom-jira-user"
 CUSTOM_JIRA_PASSWORD="custom-jira-password"
+MANUL_HOST_SKILLS_DIR="$TMP/obsolete-skill-root"
 
 cat > "$RUNTIME/config.json" <<'EOF'
 {"taskSources":[{"type":"jira_tasks","enabled":true,"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD"},{"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}]}
 EOF
 
-export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
+export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD MANUL_HOST_SKILLS_DIR
 
 ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$RUNTIME")"
 
@@ -110,6 +111,12 @@ if grep -q 'UNSAFE_SECRET' "$ENV_FILE"; then
   fail "Bootstrap copied an arbitrary environment variable"
 else
   ok "Bootstrap does not copy arbitrary environment variables"
+fi
+
+if grep -q '^MANUL_HOST_SKILLS_DIR=' "$ENV_FILE"; then
+  fail "Bootstrap persisted an alternate skills root"
+else
+  ok "Bootstrap does not persist an alternate skills root"
 fi
 
 if (
@@ -292,7 +299,7 @@ CRONTAB_FILE="$TMP/crontab"
 mkdir -p "$START_RUNTIME" "$CANONICAL_RUNTIME" "$FAKE_BIN"
 
 # The startup wrapper now refreshes runtime symlinks from the canonical source.
-# Isolate that source in the test instead of relying on ~/.globalskills.
+# Isolate that source in the test instead of relying on a global skill path.
 # The installer validates the complete canonical script set. Populate an
 # isolated canonical tree with the same files as the real skill source so this
 # test exercises startup/symlink behavior rather than a deliberately incomplete

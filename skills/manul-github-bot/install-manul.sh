@@ -311,21 +311,21 @@ if [ ! -f "$ZSHRC" ]; then
     touch "$ZSHRC" || fail "Could not create $ZSHRC"
 fi
 
-# Remove the exact legacy source line before the old globalskills copy is
-# retired. Keep the existing zshrc inode/mode while filtering only that path.
-OLD_MANUL_SHELL_MARKER=".globalskills/skills/manul-github-bot/manul-shell.zsh"
-if grep -Fq "$OLD_MANUL_SHELL_MARKER" "$ZSHRC"; then
-    ZSHRC_TMP="$(mktemp)" || fail "Could not create temporary zshrc migration file"
-    awk '
-      /^[[:space:]]*(source|[.])[[:space:]]+/ &&
-      index($0, ".globalskills/skills/manul-github-bot/manul-shell.zsh") > 0 &&
-      index($0, ";") == 0 { next }
-      { print }
-    ' "$ZSHRC" > "$ZSHRC_TMP" || fail "Could not filter the stale Manul zsh entry"
-    cat "$ZSHRC_TMP" > "$ZSHRC" || fail "Could not remove the stale Manul zsh entry"
-    rm -f "$ZSHRC_TMP"
-    echo "[6/7] Removed stale globalskills Manul zsh integration"
+# Remove obsolete Manul shell integrations from a previous skill checkout.
+# Keep the current canonical source line and preserve the zshrc inode/mode.
+ZSHRC_TMP="$(mktemp)" || fail "Could not create temporary zshrc migration file"
+awk -v canonical="$CANONICAL_DIR/manul-shell.zsh" '
+  /^[[:space:]]*(source|[.])[[:space:]]+/ &&
+  index($0, "manul-shell.zsh") > 0 &&
+  index($0, canonical) == 0 &&
+  index($0, ";") == 0 { next }
+  { print }
+' "$ZSHRC" > "$ZSHRC_TMP" || fail "Could not filter stale Manul zsh entries"
+if ! cmp -s "$ZSHRC" "$ZSHRC_TMP"; then
+    cat "$ZSHRC_TMP" > "$ZSHRC" || fail "Could not remove stale Manul zsh entries"
+    echo "[6/7] Removed stale Manul zsh integration"
 fi
+rm -f "$ZSHRC_TMP"
 
 if grep -Fq "$MANUL_SHELL_LINE" "$ZSHRC"; then
     echo "[6/7] Manul zsh integration already installed"

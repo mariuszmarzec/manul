@@ -22,7 +22,7 @@ Without an explicit role, Manul uses `automation.agentRuntime` (default
 `automation.roleRuntime` (default `opencode`). Supported runtime values are
 `openclaw`, `opencode`, `codex`, and `claude-code`. OpenCode receives a role
 through its native `--agent <role>` option. Codex and Claude Code receive the
-canonical role definition from `~/.globalskills/agents/<role>.md`, with YAML
+canonical role definition from `~/.agents/agents/<role>.md`, with YAML
 frontmatter stripped and the role instructions prepended to the task prompt.
 Agent definitions remain canonical; Manul must not copy them into another
 source directory. Unknown/unconfigured roles fail closed. OpenClaw does not
@@ -523,6 +523,18 @@ compatibility is not.
 
 Manul task sources are configured as `.taskSources[]`. Each enabled source is
 an independent provider and is polled during the same cycle.
+
+### Canonical skill and agent-definition locations
+
+Mapped project skills and the Todo project catalog are read only from
+`~/.agents/skills`. The skill root is fixed: Manul must not accept an
+alternate skills-root environment variable, scan another global checkout, or
+fall back to a copy beside the Manul source/runtime. A missing skill is skipped
+with a diagnostic; it must never cause a search in a second directory.
+
+Codex and Claude Code canonical role definitions are read from
+`~/.agents/agents/<role>.md` by default. These role definitions are separate
+from project skills and are not copied into Manul or runtime-specific trees.
 
 The provider contract is normalized to:
 - `taskSourceType`

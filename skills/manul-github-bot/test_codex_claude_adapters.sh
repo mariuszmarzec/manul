@@ -162,8 +162,8 @@ for runtime in codex claude-code; do
 done
 
 # Explicit canonical roles route through ROLE_RUNTIME and receive canonical role text.
-mkdir -p "$TMP/rolehome/.globalskills/agents"
-cat > "$TMP/rolehome/.globalskills/agents/coder.md" <<'ROLE'
+mkdir -p "$TMP/rolehome/.agents/agents"
+cat > "$TMP/rolehome/.agents/agents/coder.md" <<'ROLE'
 ---
 name: coder
 description: adapter test role
