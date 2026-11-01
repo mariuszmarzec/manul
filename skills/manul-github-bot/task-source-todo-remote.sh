@@ -12,7 +12,10 @@ todo_source_remote_config() {
     echo "task-source: remote Fiteo MCP requires an HTTPS URL" >&2
     return 2
   }
-  jq -c '.tokenEnv = (.tokenEnv // "FITEO_PAT")' <<<"$source_json"
+  jq -c '
+    .tokenEnv = (.tokenEnv // "FITEO_MANUL_PAT")
+    | .shareUserIdEnv = (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")
+  ' <<<"$source_json"
 }
 
 task_source_todo_remote_poll() {
