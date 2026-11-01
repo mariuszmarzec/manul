@@ -4096,6 +4096,15 @@ poll_once() {
 
 }
 
+task_execution_kind_from_context() {
+  local context="${1:-}" kind="repository"
+  if [ -n "$context" ]; then
+    kind="$(jq -r '.execution.kind // "repository"' <<<"$context" 2>/dev/null)" || kind="repository"
+    kind="${kind:-repository}"
+  fi
+  printf '%s' "$kind"
+}
+
 dispatch_once() {
   retry_pending_terminal_lifecycle_comments || log "WARN: terminal lifecycle outbox scan failed"
 
@@ -4122,7 +4131,7 @@ dispatch_once() {
   local next_task_id next_task_context next_execution_kind
   next_task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR datetime(nextAttemptAt) <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
   next_task_context="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$(sql_escape "$next_task_id")' LIMIT 1;" 2>/dev/null)"
-  next_execution_kind="$(printf '%s' "$next_task_context" | jq -r '.execution.kind // "repository"' 2>/dev/null || echo "repository")"
+  next_execution_kind="$(task_execution_kind_from_context "$next_task_context")"
   if [ "$next_execution_kind" != "report_only" ]; then
     if ! ensure_workspace_pool; then
       log "dispatch: workspace pool reconciliation failed"
@@ -4272,7 +4281,7 @@ dispatch_once() {
     TASK_ACTION="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_ACTION="${TASK_ACTION:-IMPLEMENT}"
     local TASK_EXECUTION_KIND
-    TASK_EXECUTION_KIND="$(printf '%s' "$TASK_CONTEXT" | jq -r '.execution.kind // "repository"' 2>/dev/null || echo "repository")"
+    TASK_EXECUTION_KIND="$(task_execution_kind_from_context "$TASK_CONTEXT")"
     case "$TASK_EXECUTION_KIND" in
       repository|report_only) ;;
       *)
@@ -4314,8 +4323,8 @@ dispatch_once() {
 
     # 3.5 Pre-flight source revalidation — terminal if source no longer valid
     local reval_rc=0
-    if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
-      task_source_revalidate "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" || reval_rc=$?
+    if task_source_is_todo_type "$TASK_SOURCE_TYPE" || [ "$TASK_SOURCE_TYPE" = "github_issues" ]; then
+      task_source_revalidate "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" "$REPO" "$ISSUE_NUM" || reval_rc=$?
     else
       revalidate_source "$COMMENT_ID" "$REPO" "$ISSUE_NUM" "$COMMENT_URL" || reval_rc=$?
     fi
