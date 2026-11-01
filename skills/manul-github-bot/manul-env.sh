@@ -156,6 +156,25 @@ EOF
     echo "  Refreshed Caracal MCP endpoint/token for unattended Manul processes" >&2
   fi
 
+  # Fiteo's remote OpenCode MCP is always registered, independently of whether
+  # a Todo remote task source is enabled. Persist its endpoint and PAT together
+  # so a long-running daemon can refresh the pair without inheriting shell state.
+  if [ -n "${FITEO_BASE_URL:-}" ] && [ -n "${FITEO_PAT:-}" ]; then
+    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_BASE_URL=/ &&
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=/
+    ' "$env_file" > "$refreshed_file"; then
+      rm -f -- "$refreshed_file"
+      return 1
+    fi
+    printf 'FITEO_BASE_URL=%q\nFITEO_PAT=%q\n' \
+      "$FITEO_BASE_URL" "$FITEO_PAT" >> "$refreshed_file"
+    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+    echo "  Refreshed Fiteo MCP endpoint/PAT for unattended Manul processes" >&2
+  fi
+
   # Jira credentials may use operator-selected environment variable names.
   # Capture only names explicitly configured by enabled Jira task sources; never
   # copy arbitrary process environment variables into Manul runtime state.
