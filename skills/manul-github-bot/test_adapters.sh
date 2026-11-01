@@ -366,8 +366,8 @@ test_opencode_manul_tool_collision() {
   local tmp out rc
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin" "$tmp/home/.opencode/tools"
-  printf '%s\n' 'operator-owned tool' > "$tmp/home/.opencode/tools/manul_fiteo_create_task.ts"
+  mkdir -p "$tmp/bin" "$tmp/home" "$tmp/.opencode/tools"
+  printf '%s\n' 'operator-owned tool' > "$tmp/.opencode/tools/manul_fiteo_create_task.ts"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "unexpected OpenCode invocation" >> "$MOCK_INVOKED_FILE"
@@ -389,7 +389,7 @@ MOCK
   else
     fail "OpenCode adapter did not fail closed on a task-local custom tool collision: $out"
   fi
-  [ "$(cat "$tmp/home/.opencode/tools/manul_fiteo_create_task.ts")" = "operator-owned tool" ] \
+  [ "$(cat "$tmp/.opencode/tools/manul_fiteo_create_task.ts")" = "operator-owned tool" ] \
     && ok "OpenCode adapter preserves the operator-owned task-local tool" \
     || fail "OpenCode adapter changed the operator-owned task-local tool"
   [ ! -s "$tmp/invoked" ] \
