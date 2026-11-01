@@ -237,9 +237,24 @@ fi
 # or a byte-identical legacy copy. Never touch a different operator-owned file.
 OPENCODE_TOOL_SOURCE="$RUNTIME_DIR/manul_fiteo_create_task.ts"
 OPENCODE_TOOL_SOURCE_REAL="$(realpath -e -- "$OPENCODE_TOOL_SOURCE" 2>/dev/null || true)"
-OPENCODE_CONFIG_CANDIDATES=("${XDG_CONFIG_HOME:-$HOME/.config}/opencode")
-if [ -n "${OPENCODE_CONFIG_DIR:-}" ] && [ "$OPENCODE_CONFIG_DIR" != "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" ]; then
-    OPENCODE_CONFIG_CANDIDATES+=("$OPENCODE_CONFIG_DIR")
+# The legacy installer always used ~/.config/opencode, even when
+# XDG_CONFIG_HOME was set. Also cover the current XDG and explicit custom paths.
+OPENCODE_CONFIG_CANDIDATES=("$HOME/.config/opencode")
+XDG_OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+if [ "$XDG_OPENCODE_CONFIG_DIR" != "$HOME/.config/opencode" ]; then
+    OPENCODE_CONFIG_CANDIDATES+=("$XDG_OPENCODE_CONFIG_DIR")
+fi
+if [ -n "${OPENCODE_CONFIG_DIR:-}" ]; then
+    _opencode_config_dir_known=false
+    for _known_opencode_config_dir in "${OPENCODE_CONFIG_CANDIDATES[@]}"; do
+        if [ "$_known_opencode_config_dir" = "$OPENCODE_CONFIG_DIR" ]; then
+            _opencode_config_dir_known=true
+            break
+        fi
+    done
+    if ! $_opencode_config_dir_known; then
+        OPENCODE_CONFIG_CANDIDATES+=("$OPENCODE_CONFIG_DIR")
+    fi
 fi
 for opencode_config_dir in "${OPENCODE_CONFIG_CANDIDATES[@]}"; do
     legacy_tool="$opencode_config_dir/tools/manul_fiteo_create_task.ts"
