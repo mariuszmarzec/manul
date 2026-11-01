@@ -361,13 +361,13 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
             }
           }
       )
-    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
+    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true, "manul_fiteo_create_task": true, "fiteo_todo_create_task": false})
     | .agent = (
         (.agent // {})
         | if type == "object" then
             with_entries(
               if .key == "chat" then .
-              else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
+              else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true, "manul_fiteo_create_task": true, "fiteo_todo_create_task": false})
               end
             )
           else {}

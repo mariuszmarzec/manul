@@ -1208,10 +1208,15 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     and .mcp["fiteo"].enabled == true
     and .tools["caracal-rag_*"] == true
     and .tools["fiteo_*"] == true
+    and .tools["manul_fiteo_create_task"] == true
+    and .tools["fiteo_todo_create_task"] == false
     and .agent.coder.tools["caracal-rag_*"] == true
     and .agent.coder.tools["fiteo_*"] == true
+    and .agent.coder.tools["manul_fiteo_create_task"] == true
+    and .agent.coder.tools["fiteo_todo_create_task"] == false
     and .agent.chat.tools["caracal-rag_*"] == null
     and .agent.chat.tools["fiteo_*"] == null
+    and .agent.chat.tools["manul_fiteo_create_task"] == null
   ' "$config" >/dev/null
   : >"${MOCK_CONFIG_CHECK_FILE:?}"
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
