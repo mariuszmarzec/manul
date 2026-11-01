@@ -146,6 +146,7 @@ SHARE_ONLY="$TMP/share-only"
 mkdir -p "$SHARE_ONLY"
 cat > "$SHARE_ONLY/.env" <<MANUL_SHARE_ENV
 EXISTING_OPERATOR_SETTING=preserve-me
+FITEO_PAT=old-operator-pat
 FITEO_MANUL_SHARE_USER_ID=99
 MANUL_SHARE_ENV
 chmod 600 "$SHARE_ONLY/.env"
@@ -156,7 +157,8 @@ SHARE_ONLY_ENV_FILE="$(env -u FITEO_BASE_URL -u FITEO_MANUL_PAT -u FITEO_PAT bas
 if grep -qx 'FITEO_MANUL_SHARE_USER_ID=1' "$SHARE_ONLY_ENV_FILE" &&
    grep -qx 'EXISTING_OPERATOR_SETTING=preserve-me' "$SHARE_ONLY_ENV_FILE" &&
    ! grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
-   ! grep -q '^FITEO_PAT=' "$SHARE_ONLY_ENV_FILE"; then
+   ! grep -q '^FITEO_PAT=' "$SHARE_ONLY_ENV_FILE" &&
+    ! grep -q '^FITEO_PAT=old-operator-pat$' "$SHARE_ONLY_ENV_FILE"; then
   ok "Bootstrap refreshes the share recipient independently of Fiteo credentials"
 else
   fail "Bootstrap did not refresh the share recipient independently"

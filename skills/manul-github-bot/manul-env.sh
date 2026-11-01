@@ -95,6 +95,20 @@ EOF
     fi
   done
 
+  # FITEO_PAT belongs to the interactive/operator aicode session, not Manul.
+  # Remove it from any legacy Manul runtime file so an ACP wrapper cannot
+  # accidentally resurrect the operator identity from stale runtime state.
+  if grep -qE "^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=" "$env_file"; then
+    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+    if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=/' "$env_file" > "$refreshed_file"; then
+      rm -f -- "$refreshed_file"
+      return 1
+    fi
+    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+    echo "  Removed legacy operator Fiteo PAT from Manul runtime environment" >&2
+  fi
+
   # Canonical source locations are migration-sensitive: refresh them on every
   # installer bootstrap so a previous globalskills checkout cannot remain in
   # the unattended daemon/watchdog environment after source extraction.
