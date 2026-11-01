@@ -24,7 +24,27 @@ todo_mcp_source_repository_allowlist() {
 }
 
 todo_task_repository_catalog_path() {
-  printf '%s\n' "${TODO_TASK_REPOSITORY_CATALOG:-$TODO_TASK_SOURCE_DIR/../globalskills-repository/project-repositories.json}"
+  # An explicit override is authoritative (also used by isolated test fixtures).
+  if [ -n "${TODO_TASK_REPOSITORY_CATALOG:-}" ]; then
+    printf '%s\n' "$TODO_TASK_REPOSITORY_CATALOG"
+    return 0
+  fi
+
+  # In standalone Manul installs the project catalog is supplied by the host
+  # globalskills checkout, whose skills directory is persisted as
+  # MANUL_HOST_SKILLS_DIR for unattended daemon/poller processes.
+  local host_catalog=""
+  if [ -n "${MANUL_HOST_SKILLS_DIR:-}" ]; then
+    host_catalog="$MANUL_HOST_SKILLS_DIR/globalskills-repository/project-repositories.json"
+    if [ -r "$host_catalog" ]; then
+      printf '%s\n' "$host_catalog"
+      return 0
+    fi
+  fi
+
+  # Backward-compatible location for deployments that still colocate the
+  # catalog with the Manul skill tree.
+  printf '%s\n' "$TODO_TASK_SOURCE_DIR/../globalskills-repository/project-repositories.json"
 }
 
 # Resolve a task target only from the curated project catalog. Explicit GitHub
