@@ -99,11 +99,14 @@ class TodoRemoteCreateTaskTests(unittest.TestCase):
                 "FITEO_MANUL_SHARE_USER_ID": "88",
             },
             clear=True,
-        ), patch.object(CREATOR, "StreamableHttpClient", return_value=fake):
+        ), patch.object(CREATOR, "StreamableHttpClient", return_value=fake) as client_factory:
             result = CREATOR.create_and_verify(
                 {"description": "Manul created task", "parentTaskId": 100}
             )
 
+        client_factory.assert_called_once_with(
+            "https://fiteo.example.test/mcp", "manul-token", 30.0
+        )
         self.assertEqual(912, result["id"])
         self.assertEqual(
             ["todo_create_task", "todo_list_tasks"],
@@ -113,7 +116,6 @@ class TodoRemoteCreateTaskTests(unittest.TestCase):
             [{"userId": "88", "permission": "EDITOR_AND_VIEWER"}],
             fake.calls[0][1]["task"]["shares"],
         )
-        self.assertEqual("manul-token", fake.token)
 
     def test_readback_without_share_fails(self):
         class UnsharedFake(FakeMcpClient):
