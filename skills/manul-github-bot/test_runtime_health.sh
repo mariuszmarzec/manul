@@ -147,7 +147,7 @@ chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
 chmod 644 "$PERM_CANON/manul-queue-reset.sh"
 set +e
-MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
+OPENCODE_CONFIG_DIR="$PERM_ROOT/opencode" MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
 PERM_RC=$?
 set -e
 if [ "$PERM_RC" -eq 0 ] && [ -x "$PERM_CANON/agent-task-runner.sh" ] && [ "$(stat -c "%a" "$PERM_CANON/agent-task-runner.sh" 2>/dev/null || true)" = "755" ]; then
@@ -286,7 +286,7 @@ cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
-MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC1=$?
 set -e
@@ -298,7 +298,7 @@ fi
 
 # 2) Idempotent: second run exits 0 and leaves symlinks intact
 set +e
-MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC2=$?
 set -e
@@ -329,7 +329,7 @@ fi
 rm -f "$RUN1/manul-status.sh"
 echo "junk" > "$RUN1/manul-status.sh"
 set +e
-MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC3=$?
 set -e
@@ -343,7 +343,7 @@ fi
 rm -f "$RUN1/poll.sh"
 mkdir -p "$RUN1/poll.sh"
 set +e
-MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC4=$?
 set -e
@@ -355,7 +355,7 @@ fi
 
 # 6) Missing canonical source is fatal
 set +e
-MANUL_RUNTIME_DIR="$RUN2" MANUL_CANONICAL_DIR="$SELFHEAL_ROOT/missing" \
+OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN2" MANUL_CANONICAL_DIR="$SELFHEAL_ROOT/missing" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC5=$?
 set -e
@@ -379,7 +379,7 @@ cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "
 
 # Deploy a real runtime so the CLI can actually run
 set +e
-MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$CLI_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 set -e
 
@@ -493,7 +493,7 @@ done
 
 # 4) The repair path (installer) recreates all required symlinks from scratch
 set +e
-MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
+OPENCODE_CONFIG_DIR="$CLI_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
 RC_REPAIR=$?
 set -e
@@ -570,6 +570,8 @@ rm -rf "$CLI_ROOT"
 echo
 echo "Test 4: Recovery without DB backup fails safely"
 TMPROOT=$(mktemp -d /tmp/manul-runtime-test-XXXXXX)
+# Keep every installer/recovery fixture away from the runner operator's OpenCode tools.
+export OPENCODE_CONFIG_DIR="$TMPROOT/opencode"
 MISSING_DB_RUNTIME="$TMPROOT/missing-db-runtime"
 mkdir -p "$MISSING_DB_RUNTIME"
 
@@ -1098,7 +1100,7 @@ exit 0
 chmod +x "$FAKE_BIN/openclaw"
 set +e
 INSTALL_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-INSTALL_OUTPUT=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1)
+INSTALL_OUTPUT=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" OPENCODE_CONFIG_DIR="$INSTALL_HOME/.config/opencode" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1)
 INSTALL_EXIT=$?
 INSTALL_END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 set -e
@@ -1154,7 +1156,7 @@ else
 fi
 
 set +e
-INSTALL_OUTPUT_2=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
+INSTALL_OUTPUT_2=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" OPENCODE_CONFIG_DIR="$INSTALL_HOME/.config/opencode" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
 INSTALL_EXIT_2=$?
 set -e
 if [ "$INSTALL_EXIT_2" -eq 0 ]; then
@@ -1396,7 +1398,7 @@ INIT_RUNTIME="$INIT_ROOT/runtime"
 mkdir -p "$INIT_RUNTIME"
 set +e
 INIT_OUTPUT=$(
-  PATH="$FAKE_BIN:$PATH" MANUL_RUNTIME_DIR="$INIT_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
+  PATH="$FAKE_BIN:$PATH" HOME="$INIT_ROOT/home" OPENCODE_CONFIG_DIR="$INIT_ROOT/opencode" MANUL_RUNTIME_DIR="$INIT_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
 )
 INIT_EXIT=$?
 set -e
