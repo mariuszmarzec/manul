@@ -244,32 +244,13 @@ retry_stale_task() {
     return 1
   fi
 
-  # --- 4. Deferred, safe executor cleanup. ---
-  # A stale task has no live executor. If the dispatcher claimed the row in the
-  # window after our CAS (status is now 'running'), a fresh executor owns it and
-  # we must NOT touch its pid file at all. Otherwise the only artifact left
-  # behind is a dead pid file: remove it ONLY if its recorded PID is not alive,
-  # so a PID-reused live process is never signaled and a pid file that the
-  # dispatcher is about to overwrite is left for the dispatcher to manage.
-  local now_status
-  now_status="$(sqlite3 "$DB" "SELECT COALESCE(status,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
-  if [ "$now_status" = "running" ]; then
-    log "Stale task $comment_id was claimed by the dispatcher before cleanup; leaving the fresh executor alone"
-  else
-    local pid_file
-    pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "executor.pid")"
-    if [ -f "$pid_file" ]; then
-      local recorded_pid
-      recorded_pid="$(cat "$pid_file" 2>/dev/null || true)"
-      if [[ "$recorded_pid" =~ ^[0-9]+$ ]] && [ "$recorded_pid" -gt 0 ] && kill -0 "$recorded_pid" 2>/dev/null; then
-        log "Stale task $comment_id pid file points at a live process (pid=$recorded_pid); leaving it for the dispatcher/orphan cleanup"
-      else
-        rm -f "$pid_file" 2>>"$LOG" || true
-        log "Stale task $comment_id dead pid file removed (row not running)"
-      fi
-    fi
-  fi
-  log "Stale task $comment_id requeued as queued with immediate nextAttemptAt"
+  # --- 4. Executor/PID-file lifecycle remains daemon-owned. ---
+  # Do not inspect, signal, unlink, or otherwise mutate executor.pid here.
+  # Even a kill -0 check followed by rm has a TOCTOU window: the dispatcher
+  # can replace the dead PID marker with a fresh executor PID between those
+  # operations. The queued task's executor marker is exclusively owned by the
+  # dispatcher/runner; daemon orphan cleanup remains the only cleanup owner.
+  log "Stale task $comment_id requeued as queued with immediate nextAttemptAt; executor PID-file lifecycle remains daemon-owned"
   return 0
 }
 
