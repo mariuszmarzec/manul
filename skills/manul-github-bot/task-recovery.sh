@@ -116,81 +116,137 @@ retry_failed_task() {
 # Retry a task that was marked terminal 'stale'. A stale row blocks re-polling
 # because poll.sh keys processed_comments on commentId (INSERT OR IGNORE), so a
 # blind delete+re-poll would silently drop the task. Instead this resets the
-# row to queued with a cleared lease and an immediate nextAttemptAt, then
-# re-validates the underlying GitHub source so a deleted/trigger-less issue is
-# retired instead of being re-queued as a zombie.
+# row to queued with a cleared lease and an immediate nextAttemptAt.
 #
-# Source revalidation is MANDATORY, not optional: it is the only thing that
-# distinguishes a recoverable stale task from one whose source is gone. If the
-# source cannot be checked (network/config unavailable) the retry refuses to
-# proceed rather than manufacture a zombie.
+# Safety contract (fail-closed):
+#   * The row MUST still be status='stale' before we do anything — a task that
+#     has already moved on (queued/running/done/failed) is left untouched.
+#   * Source revalidation is MANDATORY and read-only. It is the only thing that
+#     distinguishes a recoverable stale task from one whose source is gone.
+#     Only a positive rc=0 (source fresh) proceeds. rc=1 (terminal stale),
+#     rc=2 (transient), and ANY other rc (127 command-not-found, 130 timeout,
+#     a crash, a missing revalidation function) all refuse — we never requeue a
+#     task we could not positively confirm is still valid.
+#   * The state reset is an atomic compare-and-swap guarded by the full source
+#     identity we just revalidated. If the row (or its source identity) changed
+#     between the pre-check and the write, the CAS matches 0 rows and we abort.
+#   * We never kill an executor before confirming the right to mutate, and we
+#     never kill a fresh executor the dispatcher just started.
 retry_stale_task() {
   local comment_id="$1"
-  local safe_comment_id repo issue_num source_type source_id source_url
+  local safe_comment_id
   safe_comment_id="$(printf '%s' "$comment_id" | sed "s/'/''/g")"
-  repo="$(sqlite3 "$DB" "SELECT COALESCE(repository,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
-  issue_num="$(sqlite3 "$DB" "SELECT COALESCE(issueNumber,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
-  source_type="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceType,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
-  source_id="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceId,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
-  source_url="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceUrl,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
+  # SQL-quote a value so it can be embedded in a literal safely.
+  esc() { printf '%s' "$1" | sed "s/'/''/g"; }
 
+  # --- 1. Pre-flight: require the row to exist, be 'stale', and have identity.
+  # Snapshot the full source identity now; the CAS re-asserts every field.
+  local row
+  row="$(sqlite3 -separator $'\x1f' "$DB" "
+    SELECT COALESCE(repository,''), COALESCE(issueNumber,''),
+           COALESCE(taskSourceType,''), COALESCE(taskSourceId,''),
+           COALESCE(taskSourceUrl,''), COALESCE(status,'')
+    FROM processed_comments
+    WHERE commentId='$safe_comment_id' LIMIT 1;
+  " 2>>"$LOG" || true)"
+  if [ -z "$row" ]; then
+    log "ERROR: stale task $comment_id not found; nothing to retry"
+    return 1
+  fi
+  local repo issue_num source_type source_id source_url status
+  IFS=$'\x1f' read -r repo issue_num source_type source_id source_url status <<< "$row"
+  if [ "$status" != "stale" ]; then
+    log "ERROR: task $comment_id is not stale (status=${status:-empty}); refusing to retry"
+    return 1
+  fi
   if [ -z "$repo" ]; then
     log "ERROR: cannot retry stale task $comment_id — no repository found"
     return 1
   fi
 
-  # 1. Revalidate the source BEFORE mutating state. A stale source is terminal
-  #    and must not be re-queued.
-  local reval_rc=0
+  # --- 2. MANDATORY read-only source revalidation (fail-closed). ---
+  local reval_rc
   if [ -n "$source_type" ]; then
     # Source-task rows carry a taskSourceType; revalidate through the provider
     # contract so Todo/GitHub-Issues sources are checked the same way the
     # dispatcher would check them at claim time.
     if ! declare -f task_source_revalidate >/dev/null 2>&1; then
-      source "$SCRIPT_DIR/task-source.sh"
+      source "$SCRIPT_DIR/task-source.sh" 2>>"$LOG" || true
     fi
-    task_source_revalidate "$MANUL_CONFIG" "$source_type" "$source_id" "$repo" "$issue_num" || reval_rc=$?
-  else
-    # Legacy comment-derived task: revalidate the comment/issue/PR itself.
-    if ! declare -f revalidate_source >/dev/null 2>&1; then
-      source "$SCRIPT_DIR/manul-daemon.sh" 2>/dev/null || true
-    fi
-    if declare -f revalidate_source >/dev/null 2>&1; then
-      revalidate_source "$comment_id" "$repo" "$issue_num" "$source_url" || reval_rc=$?
-    else
-      log "WARN: revalidate_source unavailable for legacy task $comment_id; refusing to retry without source check"
+    if ! declare -f task_source_revalidate >/dev/null 2>&1; then
+      log "ERROR: task_source_revalidate unavailable for $comment_id; refusing to retry without source check"
       return 1
     fi
+    task_source_revalidate "$MANUL_CONFIG" "$source_type" "$source_id" "$repo" "$issue_num"
+    reval_rc=$?
+  else
+    # Legacy comment-derived task: revalidate the comment/issue/PR itself. We
+    # source the SAFE revalidation library (not the daemon) so that a normal
+    # CLI invocation never falls through the daemon's CLI dispatcher, which
+    # would exit 2 and kill the whole recovery process.
+    if ! declare -f revalidate_source >/dev/null 2>&1; then
+      source "$SCRIPT_DIR/task-source-revalidate.sh" 2>>"$LOG" || true
+    fi
+    if ! declare -f revalidate_source >/dev/null 2>&1; then
+      log "ERROR: revalidate_source unavailable for legacy task $comment_id; refusing to retry without source check"
+      return 1
+    fi
+    revalidate_source "$comment_id" "$repo" "$issue_num" "$source_url"
+    reval_rc=$?
   fi
 
-  case "$reval_rc" in
-    1)
-      log "Refusing to retry stale task $comment_id — source no longer valid (terminal)"
-      return 1
-      ;;
-    2)
-      log "Refusing to retry stale task $comment_id — source revalidation failed transiently; retry later via the daemon"
-      return 1
-      ;;
-  esac
+  # Fail-closed: ONLY rc=0 (source fresh) may proceed. Every other outcome —
+  # terminal stale (1), transient (2), or unexpected (127, 130, crash, ...) —
+  # refuses, so we never manufacture a zombie from an unverifiable source.
+  if [ "$reval_rc" -ne 0 ]; then
+    case "$reval_rc" in
+      1) log "Refusing to retry stale task $comment_id — source no longer valid (terminal, rc=1)" ;;
+      2) log "Refusing to retry stale task $comment_id — source revalidation transient failure (rc=2); retry later via the daemon" ;;
+      *) log "ERROR: refusing to retry stale task $comment_id — source revalidation returned unexpected rc=$reval_rc (fail-closed)" ;;
+    esac
+    return 1
+  fi
 
-  # 2. Reset the row to queued. Clear the stale terminal state, the lease and
-  #    the claim token, and schedule an immediate attempt so the daemon's
-  #    dispatcher picks it up without waiting for the backoff window.
-  log "Retrying stale task $comment_id from scratch (source revalidated)"
-  terminate_task_executor "$comment_id"
+  # --- 3. Atomic compare-and-swap: stale -> queued, guarded by identity. ---
+  # The WHERE clause re-asserts status AND the full source identity we
+  # revalidated. A concurrent dispatcher/worker that changed the row, or any
+  # drift in source identity, makes the CAS match 0 rows and we abort cleanly.
+  log "Retrying stale task $comment_id from scratch (source revalidated, rc=0)"
+  local repo_sql issue_num_sql source_type_sql source_id_sql source_url_sql
+  repo_sql="$(esc "$repo")"; issue_num_sql="$(esc "$issue_num")"
+  source_type_sql="$(esc "$source_type")"; source_id_sql="$(esc "$source_id")"
+  source_url_sql="$(esc "$source_url")"
   local changed
   changed="$(sqlite3 "$DB" "
     UPDATE processed_comments
     SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL,
         leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL,
         preExecutionFailures=0, nextAttemptAt=datetime('now')
-    WHERE commentId='$safe_comment_id' AND status='stale';
+    WHERE commentId='$safe_comment_id'
+      AND status='stale'
+      AND COALESCE(repository,'')='$repo_sql'
+      AND COALESCE(CAST(issueNumber AS TEXT),'')='$issue_num_sql'
+      AND COALESCE(taskSourceType,'')='$source_type_sql'
+      AND COALESCE(taskSourceId,'')='$source_id_sql'
+      AND COALESCE(taskSourceUrl,'')='$source_url_sql';
     SELECT changes();
   " 2>>"$LOG" | tail -n 1)" || changed="0"
   if [ "${changed:-0}" -ne 1 ]; then
-    log "ERROR: failed to retry stale task $comment_id (changes=${changed:-0})"
+    log "ERROR: stale task $comment_id changed during revalidation (changes=${changed:-0}); refusing to retry"
     return 1
+  fi
+
+  # --- 4. Deferred, safe executor cleanup. ---
+  # A stale task has no live executor. If the dispatcher claimed the row in the
+  # window after our CAS (status is now 'running'), a fresh executor owns it and
+  # we must NOT kill it. Only clean up the (dead) pid file while the row is not
+  # running.
+  local now_status
+  now_status="$(sqlite3 "$DB" "SELECT COALESCE(status,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
+  if [ "$now_status" = "running" ]; then
+    log "Stale task $comment_id was claimed by the dispatcher before cleanup; leaving the fresh executor alone"
+  else
+    terminate_task_executor "$comment_id"
   fi
   log "Stale task $comment_id requeued as queued with immediate nextAttemptAt"
   return 0
