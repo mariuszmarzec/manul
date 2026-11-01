@@ -64,6 +64,8 @@ CLAUDE_BIN="$TMP/bin/claude-custom"
 CLAUDE_MODEL="claude-test-model"
 CARACAL_MCP_URL="http://127.0.0.1:3400/mcp"
 CARACAL_ACCESS_TOKEN="caracal-test-token"
+FITEO_BASE_URL="https://fiteo-test.example"
+FITEO_PAT="fiteo-test-pat"
 UNSAFE_SECRET="must-not-be-copied"
 CUSTOM_JIRA_USER="custom-jira-user"
 CUSTOM_JIRA_PASSWORD="custom-jira-password"
@@ -72,7 +74,7 @@ cat > "$RUNTIME/config.json" <<'EOF'
 {"taskSources":[{"type":"jira_tasks","enabled":true,"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD"}]}
 EOF
 
-export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
+export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN FITEO_BASE_URL FITEO_PAT UNSAFE_SECRET CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
 
 ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$RUNTIME")"
 
@@ -92,6 +94,8 @@ if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
    ! grep -q '^CLAUDE_MODEL=' "$ENV_FILE" ||
    ! grep -q '^CARACAL_MCP_URL=' "$ENV_FILE" ||
    ! grep -q '^CARACAL_ACCESS_TOKEN=' "$ENV_FILE" ||
+   ! grep -q '^FITEO_BASE_URL=' "$ENV_FILE" ||
+   ! grep -q '^FITEO_PAT=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
   fail "Bootstrap did not persist all supported provider variables"
@@ -106,7 +110,7 @@ else
 fi
 
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL CARACAL_MCP_URL CARACAL_ACCESS_TOKEN FITEO_BASE_URL FITEO_PAT
   source "$ENV_FILE"
   [ "$OPENCLAW_STATE_DIR" = "$TMP/openclaw state" ] &&
   [ "$OPENCLAW_CONFIG_PATH" = "$TMP/openclaw/config with spaces.json" ] &&
@@ -121,6 +125,8 @@ if (
   [ "$CLAUDE_MODEL" = "claude-test-model" ] &&
   [ "$CARACAL_MCP_URL" = "http://127.0.0.1:3400/mcp" ] &&
   [ "$CARACAL_ACCESS_TOKEN" = "caracal-test-token" ] &&
+  [ "$FITEO_BASE_URL" = "https://fiteo-test.example" ] &&
+  [ "$FITEO_PAT" = "fiteo-test-pat" ] &&
   [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
   [ "$CUSTOM_JIRA_PASSWORD" = "custom-jira-password" ]
 ); then
@@ -183,6 +189,32 @@ if (
 else
   fail "Bootstrap did not refresh Caracal runtime credentials correctly"
 fi
+
+# Fiteo MCP credentials are refreshed as one pair even when no Todo remote
+# task source is configured, preventing a long-lived daemon from keeping a
+# previously issued PAT after the operator updates opencode.env.
+PRESERVE_FITEO="$TMP/preserve-fiteo"
+mkdir -p "$PRESERVE_FITEO"
+cat > "$PRESERVE_FITEO/.env" <<'EOF'
+FITEO_BASE_URL=https://old-fiteo.example
+FITEO_PAT=old-fiteo-pat
+EOF
+chmod 600 "$PRESERVE_FITEO/.env"
+FITEO_BASE_URL="https://new-fiteo.example"
+FITEO_PAT="new-fiteo-pat"
+export FITEO_BASE_URL FITEO_PAT
+FITEO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE_FITEO")"
+if (
+  unset FITEO_BASE_URL FITEO_PAT
+  source "$FITEO_ENV_FILE"
+  [ "$FITEO_BASE_URL" = "https://new-fiteo.example" ] &&
+  [ "$FITEO_PAT" = "new-fiteo-pat" ]
+); then
+  ok "Bootstrap refreshes the Fiteo endpoint/PAT pair for unattended MCP sessions"
+else
+  fail "Bootstrap did not refresh the Fiteo MCP credentials correctly"
+fi
+assert_file_mode_600 "$FITEO_ENV_FILE"
 
 # Todo's token comes from aicode's inherited exported environment (e.g. .zshrc)
 # and must refresh in the runtime file even when a prior token already exists.

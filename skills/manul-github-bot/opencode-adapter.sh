@@ -264,6 +264,22 @@ if [ -f "$_TODO_LOCAL_ENV_FILE" ]; then
     fi
 fi
 
+# The daemon can outlive an aicode launch. Refresh Fiteo credentials from the
+# latest runtime file for every task, while leaving unrelated inherited values
+# untouched. The endpoint and PAT are stored atomically by manul-env.sh.
+_FITEO_RUNTIME_ENV_FILE="$MANUL_DIR/.env"
+if [ -f "$_FITEO_RUNTIME_ENV_FILE" ]; then
+    _fiteo_runtime_values="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s|%s" "${FITEO_BASE_URL:-}" "${FITEO_PAT:-}"' _ "$_FITEO_RUNTIME_ENV_FILE" 2>/dev/null)" || _fiteo_runtime_values=""
+    IFS="|" read -r _fiteo_runtime_base_url _fiteo_runtime_pat <<< "$_fiteo_runtime_values"
+    if [ -n "$_fiteo_runtime_base_url" ] && [ -n "$_fiteo_runtime_pat" ]; then
+        FITEO_BASE_URL="$_fiteo_runtime_base_url"
+        FITEO_PAT="$_fiteo_runtime_pat"
+        export FITEO_BASE_URL FITEO_PAT
+    else
+        unset FITEO_BASE_URL FITEO_PAT 2>/dev/null || true
+    fi
+fi
+
 TODO_LOCAL_MCP_AVAILABLE=0
 TODO_LOCAL_MCP_CONNECTED=0
 unset TODO_LOCAL_MCP_URL
@@ -331,16 +347,23 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
               oauth: false,
               enabled: true,
               headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
+            },
+            "fiteo": {
+              type: "remote",
+              url: "{env:FITEO_BASE_URL}/mcp",
+              oauth: false,
+              enabled: true,
+              headers: {Authorization: "Bearer {env:FITEO_PAT}"}
             }
           }
       )
-    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
     | .agent = (
         (.agent // {})
         | if type == "object" then
             with_entries(
               if .key == "chat" then .
-              else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true})
+              else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true})
               end
             )
           else {}
@@ -419,11 +442,10 @@ elif [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ] &&
     _mcp_preflight_stage="todo_local_mcp_preflight"
     _mcp_preflight_label="Todo local"
     _mcp_preflight_summary="Todo local MCP was reachable but did not report connected in OpenCode; task was not started"
-elif [ "$_caracal_preflight_rc" != "0" ]; then
-    _mcp_preflight_stage="mcp_preflight"
-    _mcp_preflight_label="OpenCode"
-    _mcp_preflight_summary="OpenCode MCP preflight command failed; task was not started"
 fi
+# OpenCode may report a non-zero aggregate MCP-list status when an optional
+# server such as Fiteo is offline. Caracal's explicit connected status is the
+# required gate; a failure from an unrelated MCP must not block this task.
 
 if [ -n "$_mcp_preflight_stage" ]; then
     log "$_mcp_preflight_label MCP preflight failed; OpenCode reported the server disconnected or unavailable"
