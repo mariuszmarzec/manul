@@ -275,6 +275,15 @@ test_opencode_success() {
 #!/usr/bin/env bash
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  tool_path="$PWD/.opencode/tools/manul_fiteo_create_task.ts"
+  if [ -n "${MOCK_TOOL_STATE_FILE:-}" ]; then
+    if [ -L "$tool_path" ] &&
+       [ "$(realpath -e -- "$tool_path" 2>/dev/null || true)" = "${MOCK_EXPECTED_MANUL_TOOL_SOURCE:-}" ]; then
+      printf '%s\n' 'task-local' > "$MOCK_TOOL_STATE_FILE"
+    else
+      printf '%s\n' 'missing-or-wrong' > "$MOCK_TOOL_STATE_FILE"
+    fi
+  fi
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
     printf '%s\n' 'caracal-rag connected'
     exit 0
@@ -297,8 +306,11 @@ MOCK
   : >"$tmp/stderr"
 
   local out
-  out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCLAW_BIN=/does/not/exist \
-    MOCK_ARGS_FILE="$tmp/args" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+  mkdir -p "$tmp/home"
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCLAW_BIN=/does/not/exist \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" \
+    MOCK_TOOL_STATE_FILE="$tmp/tool-state" MOCK_EXPECTED_MANUL_TOOL_SOURCE="$SCRIPT_DIR/manul_fiteo_create_task.ts" \
+    PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
       --task-id oc-1 --prompt "$tmp/prompt" --workspace "$tmp" \
       --agent build --attempt 1 --timeout 30 --session-id "" --auto \
@@ -335,7 +347,52 @@ MOCK
     || fail "OpenCode PYTHONPATH was not task-scoped: $(cat "$tmp/env" 2>/dev/null || true)"
   grep -qx 'PYTHONHOME=<unset>' "$tmp/env" \
     && ok "OpenCode process does not inherit stale PYTHONHOME" \
-    || fail "OpenCode inherited PYTHONHOME: $(cat "$tmp/env" 2>/dev/null || true)"
+    || fail "OpenCode inherited stale PYTHONHOME: $(cat "$tmp/env" 2>/dev/null || true)"
+  grep -qx 'task-local' "$tmp/tool-state" \
+    && ok "Manul custom tool is present for the task-local OpenCode preflight" \
+    || fail "Manul custom tool was not task-local during OpenCode preflight"
+  [ ! -e "$tmp/.opencode/tools/manul_fiteo_create_task.ts" ] && [ ! -L "$tmp/.opencode/tools/manul_fiteo_create_task.ts" ] \
+    && ok "Manul custom tool symlink is removed after task completion" \
+    || fail "Manul custom tool symlink leaked after task completion"
+  [ ! -d "$tmp/.opencode/tools" ] && [ ! -d "$tmp/.opencode" ] \
+    && ok "Adapter removes only the empty task-local config directories it created" \
+    || fail "Adapter leaked empty task-local config directories"
+}
+
+# ---------------------------------------------------------------------------
+# 7b. A project-owned tool name collision is preserved and fails closed
+# ---------------------------------------------------------------------------
+test_opencode_manul_tool_collision() {
+  local tmp out rc
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home" "$tmp/.opencode/tools"
+  printf '%s\n' 'operator-owned tool' > "$tmp/.opencode/tools/manul_fiteo_create_task.ts"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "unexpected OpenCode invocation" >> "$MOCK_INVOKED_FILE"
+exit 99
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Do the task" > "$tmp/prompt"
+  : > "$tmp/stdout"; : > "$tmp/stderr"
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    MOCK_INVOKED_FILE="$tmp/invoked" MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id oc-tool-collision \
+      --prompt "$tmp/prompt" --workspace "$tmp" --attempt 1 --timeout 10 \
+      --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | jq -e '.status == "FAILED" and .failure_code == "PRE_EXECUTION_FAILURE" and .diagnostics.stage == "manul_tool_scope"' >/dev/null; then
+    ok "OpenCode adapter fails closed on a task-local Manul tool name collision"
+  else
+    fail "OpenCode adapter did not fail closed on a task-local custom tool collision: $out"
+  fi
+  [ "$(cat "$tmp/.opencode/tools/manul_fiteo_create_task.ts")" = "operator-owned tool" ] \
+    && ok "OpenCode adapter preserves the operator-owned task-local tool" \
+    || fail "OpenCode adapter changed the operator-owned task-local tool"
+  [ ! -s "$tmp/invoked" ] \
+    && ok "OpenCode is not launched after a task-local tool collision" \
+    || fail "OpenCode was launched despite a task-local tool collision"
 }
 
 # ---------------------------------------------------------------------------
@@ -1642,6 +1699,7 @@ test_openclaw_failure
 test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
+test_opencode_manul_tool_collision
 test_opencode_no_progress_timeout
 test_opencode_active_tool_jsonl_progress
 test_opencode_active_step_jsonl_progress

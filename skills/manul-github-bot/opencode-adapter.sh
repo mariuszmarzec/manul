@@ -166,16 +166,104 @@ log() {
     echo "[$(date -Is)] opencode-adapter: $*" >>"$OPT_STDERR_FILE"
 }
 
-# Keep the provider/global config immutable. OpenCode needs an explicit
-# external-directory allow for the active lease only, while shared config
-# denies all sibling workspaces under the configured MANUL_WORKSPACE.
+# Keep provider/global config immutable. OpenCode's global tool directory is
+# shared by aicode and interactive sessions, so Manul's Fiteo helper must be
+# visible only from this task workspace. The runtime installer removes any
+# obsolete global registration; this temporary project-local link is cleaned
+# on every adapter exit.
 OPENCODE_TASK_CONFIG_DIR=""
+OPENCODE_MANUL_TOOL_SOURCE=""
+OPENCODE_MANUL_TOOL_TARGET=""
+OPENCODE_MANUL_TOOL_CREATED=false
+OPENCODE_PROJECT_TOOLS_DIR=""
+OPENCODE_PROJECT_TOOLS_DIR_CREATED=false
+OPENCODE_PROJECT_CONFIG_DIR=""
+OPENCODE_PROJECT_CONFIG_DIR_CREATED=false
+
 cleanup_opencode_task_config() {
+    if [ "$OPENCODE_MANUL_TOOL_CREATED" = "true" ] &&
+       [ -n "${OPENCODE_MANUL_TOOL_TARGET:-}" ] &&
+       [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
+        _cleanup_tool_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
+        if [ -n "${OPENCODE_MANUL_TOOL_SOURCE:-}" ] &&
+           [ "$_cleanup_tool_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
+            rm -f -- "$OPENCODE_MANUL_TOOL_TARGET"
+        fi
+    fi
+    if [ "$OPENCODE_PROJECT_TOOLS_DIR_CREATED" = "true" ] &&
+       [ -n "${OPENCODE_PROJECT_TOOLS_DIR:-}" ] &&
+       [ -d "$OPENCODE_PROJECT_TOOLS_DIR" ] && [ ! -L "$OPENCODE_PROJECT_TOOLS_DIR" ]; then
+        rmdir -- "$OPENCODE_PROJECT_TOOLS_DIR" 2>/dev/null || true
+    fi
+    if [ "$OPENCODE_PROJECT_CONFIG_DIR_CREATED" = "true" ] &&
+       [ -n "${OPENCODE_PROJECT_CONFIG_DIR:-}" ] &&
+       [ -d "$OPENCODE_PROJECT_CONFIG_DIR" ] && [ ! -L "$OPENCODE_PROJECT_CONFIG_DIR" ]; then
+        rmdir -- "$OPENCODE_PROJECT_CONFIG_DIR" 2>/dev/null || true
+    fi
     if [ -n "${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
         rm -rf -- "$OPENCODE_TASK_CONFIG_DIR"
         OPENCODE_TASK_CONFIG_DIR=""
     fi
 }
+
+prepare_opencode_manul_tool() {
+    local project_config tools_dir existing_real
+    OPENCODE_MANUL_TOOL_SOURCE="$(realpath -e -- "$MANUL_SCRIPT_DIR/manul_fiteo_create_task.ts" 2>/dev/null || true)"
+    if [ -z "$OPENCODE_MANUL_TOOL_SOURCE" ] || [ ! -f "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
+        log "Manul Fiteo custom tool source is missing from the canonical runtime"
+        return 1
+    fi
+
+    project_config="$OPT_WORKSPACE/.opencode"
+    tools_dir="$project_config/tools"
+    OPENCODE_PROJECT_CONFIG_DIR="$project_config"
+    OPENCODE_PROJECT_TOOLS_DIR="$tools_dir"
+    OPENCODE_MANUL_TOOL_TARGET="$tools_dir/manul_fiteo_create_task.ts"
+
+    # Do not follow project-controlled symlinks or overwrite existing config.
+    if [ -L "$project_config" ] || { [ -e "$project_config" ] && [ ! -d "$project_config" ]; }; then
+        log "refusing to inject Manul tool: workspace .opencode is not a real directory"
+        return 1
+    fi
+    if [ ! -d "$project_config" ]; then
+        if ! mkdir -- "$project_config"; then return 1; fi
+        OPENCODE_PROJECT_CONFIG_DIR_CREATED=true
+    fi
+
+    if [ -L "$tools_dir" ] || { [ -e "$tools_dir" ] && [ ! -d "$tools_dir" ]; }; then
+        log "refusing to inject Manul tool: workspace .opencode/tools is not a real directory"
+        return 1
+    fi
+    if [ ! -d "$tools_dir" ]; then
+        if ! mkdir -- "$tools_dir"; then return 1; fi
+        OPENCODE_PROJECT_TOOLS_DIR_CREATED=true
+    fi
+
+    if [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
+        existing_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
+        if [ "$existing_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
+            # This is a stale link from an interrupted previous Manul attempt,
+            # or an already prepared link owned by this exact runtime. Adopt it
+            # so the EXIT trap removes it after the current invocation.
+            OPENCODE_MANUL_TOOL_CREATED=true
+            log "adopted existing Manul Fiteo custom-tool link for this task invocation"
+            return 0
+        fi
+        log "refusing to overwrite an existing workspace custom-tool symlink"
+        return 1
+    fi
+    if [ -e "$OPENCODE_MANUL_TOOL_TARGET" ]; then
+        log "refusing to overwrite an existing workspace custom tool"
+        return 1
+    fi
+    if ! ln -s "$OPENCODE_MANUL_TOOL_SOURCE" "$OPENCODE_MANUL_TOOL_TARGET"; then
+        log "failed to create task-local Manul Fiteo custom-tool link"
+        return 1
+    fi
+    OPENCODE_MANUL_TOOL_CREATED=true
+    log "registered Manul Fiteo custom tool only in the active task workspace"
+}
+
 trap cleanup_opencode_task_config EXIT HUP INT TERM
 
 # Respect a configured provider path, but also cover OpenCode's canonical
@@ -221,6 +309,16 @@ if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -f "$_OPENCODE_BASE_CONFIG" ]; then
     fi
 else
     _workspace_real="$(realpath -e -- "$OPT_WORKSPACE" 2>/dev/null || true)"
+fi
+
+if [ -z "$_workspace_real" ] || [ ! -d "$_workspace_real" ]; then
+    printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Cannot resolve OpenCode task workspace","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+    exit 66
+fi
+
+if ! prepare_opencode_manul_tool; then
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Unable to prepare task-scoped Manul Fiteo custom tool without overwriting workspace configuration","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"manul_tool_scope","agent_started":false}}\n' "$OPT_TASK_ID"
+    exit 78
 fi
 
 # Caracal is a required capability for Manul's OpenCode runtime. Never start

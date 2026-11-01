@@ -3,3 +3,6 @@ skills/manul-github-bot/config.json
 
 # Local CI outputs.
 test-results/
+
+# OpenCode custom-tool runtime dependency installed beside the canonical Manul skill.
+node_modules/
