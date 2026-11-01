@@ -115,10 +115,12 @@ task_source_github_issues_revalidate() {
   if ! jq -e --arg trigger "$trigger" '
     (.body // "")
     | split("\n")
-    | any(.[]; (sub("^[ \t]*"; "") as $line
-      | ($line == $trigger
-        or ($line | startswith($trigger + " "))
-        or ($line | startswith($trigger + "\t"))))
+    | any(.[]; . as $line
+      | ($line | sub("^[ \t]*"; "")) as $trimmed
+      | ($trimmed == $trigger)
+        or ($trimmed | startswith($trigger + " "))
+        or ($trimmed | startswith($trigger + "\t"))
+    )
   ' <<<"$issue_json" >/dev/null 2>&1; then
     echo "task-source: GitHub issue $source_id no longer contains the configured trigger" >&2
     return 1
