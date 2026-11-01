@@ -162,6 +162,15 @@ else
   fail "Installer did not restore canonical queue-reset execute bit (rc=$PERM_RC)"
 fi
 
+PERM_OPENCODE_TOOL="$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
+if [ "$PERM_RC" -eq 0 ] && [ -L "$PERM_OPENCODE_TOOL" ] &&
+   [ "$(readlink "$PERM_OPENCODE_TOOL" 2>/dev/null || true)" = "$PERM_CANON/manul_fiteo_create_task.ts" ] &&
+   [ -f "$PERM_OPENCODE_TOOL" ]; then
+  ok "Installer deploys the Manul Fiteo custom tool into OPENCODE_CONFIG_DIR"
+else
+  fail "Installer did not deploy the Manul Fiteo custom tool into OPENCODE_CONFIG_DIR"
+fi
+
 if [ -L "$PERM_RUN/agent-task-runner.sh" ] && [ -x "$PERM_RUN/agent-task-runner.sh" ]; then
   ok "Installed task runner symlink is executable"
 else
@@ -1395,7 +1404,7 @@ rm -rf "$FAIL_CLOSED_ROOT"
 # ── Test: explicit installer opt-in is the only fresh-DB path ────────────────
 INIT_ROOT="$(mktemp -d /tmp/manul-init-optin-XXXXXX)"
 INIT_RUNTIME="$INIT_ROOT/runtime"
-mkdir -p "$INIT_RUNTIME"
+mkdir -p "$INIT_RUNTIME" "$INIT_ROOT/home"
 set +e
 INIT_OUTPUT=$(
   PATH="$FAKE_BIN:$PATH" HOME="$INIT_ROOT/home" OPENCODE_CONFIG_DIR="$INIT_ROOT/opencode" MANUL_RUNTIME_DIR="$INIT_RUNTIME" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" --init-state 2>&1
