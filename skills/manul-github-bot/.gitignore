@@ -1,0 +1,18 @@
+# Manul runtime state
+*.db
+*.db-*
+*.log
+*.pid
+*.flock
+last-poll
+current_activity
+
+# Runtime directories / temporary state
+workspaces/
+repo-locks/
+task-locks/
+
+# Temporary test/runtime files
+*.tmp
+*.out
+*.err
