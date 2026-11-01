@@ -215,6 +215,8 @@ if [ -f "$OPENCODE_PLUGIN_PACKAGE" ] && command -v node >/dev/null 2>&1 &&
 fi
 if $OPENCODE_PLUGIN_INSTALLED; then
     echo "OK OpenCode tool dependency: @opencode-ai/plugin@$OPENCODE_PLUGIN_VERSION"
+elif $DRY_RUN; then
+    echo "[dry-run] Would install @opencode-ai/plugin@$OPENCODE_PLUGIN_VERSION beside the canonical Manul tool"
 elif command -v npm >/dev/null 2>&1; then
     echo "Installing OpenCode tool dependency: @opencode-ai/plugin@$OPENCODE_PLUGIN_VERSION"
     if npm install --prefix "$CANONICAL_DIR" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
@@ -235,8 +237,8 @@ fi
 # or a byte-identical legacy copy. Never touch a different operator-owned file.
 OPENCODE_TOOL_SOURCE="$RUNTIME_DIR/manul_fiteo_create_task.ts"
 OPENCODE_TOOL_SOURCE_REAL="$(realpath -e -- "$OPENCODE_TOOL_SOURCE" 2>/dev/null || true)"
-OPENCODE_CONFIG_CANDIDATES=("$HOME/.config/opencode")
-if [ -n "${OPENCODE_CONFIG_DIR:-}" ] && [ "$OPENCODE_CONFIG_DIR" != "$HOME/.config/opencode" ]; then
+OPENCODE_CONFIG_CANDIDATES=("${XDG_CONFIG_HOME:-$HOME/.config}/opencode")
+if [ -n "${OPENCODE_CONFIG_DIR:-}" ] && [ "$OPENCODE_CONFIG_DIR" != "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" ]; then
     OPENCODE_CONFIG_CANDIDATES+=("$OPENCODE_CONFIG_DIR")
 fi
 for opencode_config_dir in "${OPENCODE_CONFIG_CANDIDATES[@]}"; do
@@ -263,6 +265,30 @@ for opencode_config_dir in "${OPENCODE_CONFIG_CANDIDATES[@]}"; do
         fi
     elif [ -e "$legacy_tool" ]; then
         echo "Preserving unrelated OpenCode custom tool: $legacy_tool"
+    fi
+done
+
+# Verify every runtime symlink. A missing or misplaced entry is a hard failure.
+echo
+echo "=== Verification ==="
+VERIFY_FAILURES=0
+for script in "${SCRIPTS[@]}"; do
+    runtime_path="$RUNTIME_DIR/$script"
+    canonical_file="$CANONICAL_DIR/$script"
+    if [ ! -f "$canonical_file" ]; then
+        continue
+    fi
+    if [ -L "$runtime_path" ]; then
+        target="$(readlink "$runtime_path" 2>/dev/null || true)"
+        if [ "$target" = "$canonical_file" ] && [ -f "$runtime_path" ]; then
+            echo "OK $script -> $target"
+        else
+            echo "FAIL $script -> BROKEN: target=$target" >&2
+            VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
+        fi
+    else
+        echo "FAIL $script: NOT a symlink" >&2
+        VERIFY_FAILURES=$((VERIFY_FAILURES + 1))
     fi
 done
 
