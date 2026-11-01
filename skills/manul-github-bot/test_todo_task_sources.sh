@@ -137,13 +137,14 @@ export FITEO_PAT="operator-only-token"
 export TODO_MCP_CALL_LOG="$TEST_DIR/mcp-calls.log"
 touch "$TODO_MCP_CALL_LOG"
 
-# Project skills are provided by the host environment, not bundled with Manul.
-HOST_SKILLS_DIR="$TEST_DIR/host-skills"
-mkdir -p "$HOST_SKILLS_DIR/fiteo-backend-api"
-cat > "$HOST_SKILLS_DIR/fiteo-backend-api/SKILL.md" <<'SKILL'
+# Project skill context is read exclusively from the canonical agent skills
+# directory. Keep the fixture isolated by assigning HOME at each call site.
+SKILLS_HOME="$TEST_DIR/skills-home"
+SKILLS_DIR="$SKILLS_HOME/.agents/skills"
+mkdir -p "$SKILLS_DIR/fiteo-backend-api"
+cat > "$SKILLS_DIR/fiteo-backend-api/SKILL.md" <<'SKILL'
 Fiteo API integration guidance. The documentation source is fiteo-docs.
 SKILL
-export MANUL_HOST_SKILLS_DIR="$HOST_SKILLS_DIR"
 
 cat > "$TEST_DIR/project-repositories.json" <<'JSON'
 {
@@ -162,14 +163,16 @@ JSON
 # Load the shared resolver before testing its default path.
 source "$SCRIPT_DIR/todo-task-source-utils.sh"
 
-# The standard standalone layout must work even when the daemon environment
-# does not define MANUL_HOST_SKILLS_DIR.
+# The repository catalog and mapped skill files resolve from the same fixed
+# ~/.agents/skills root, independently of the calling shell's HOME.
 DEFAULT_HOST_HOME="$TEST_DIR/default-host-home"
 DEFAULT_HOST_CATALOG="$DEFAULT_HOST_HOME/.agents/skills/globalskills-repository/project-repositories.json"
 mkdir -p "$(dirname "$DEFAULT_HOST_CATALOG")"
 cp "$TEST_DIR/project-repositories.json" "$DEFAULT_HOST_CATALOG"
-DEFAULT_CATALOG_RESOLVED="$(HOME="$DEFAULT_HOST_HOME" MANUL_HOST_SKILLS_DIR= TODO_TASK_REPOSITORY_CATALOG= todo_task_repository_catalog_path)"
-assert_eq "default repository catalog resolves from ~/.agents/skills without MANUL_HOST_SKILLS_DIR" "$DEFAULT_HOST_CATALOG" "$DEFAULT_CATALOG_RESOLVED"
+DEFAULT_CATALOG_RESOLVED="$(HOME="$DEFAULT_HOST_HOME" TODO_TASK_REPOSITORY_CATALOG= todo_task_repository_catalog_path)"
+assert_eq "default repository catalog resolves from the canonical ~/.agents/skills root" "$DEFAULT_HOST_CATALOG" "$DEFAULT_CATALOG_RESOLVED"
+skill_context="$(HOME="$SKILLS_HOME" todo_task_resolved_skill_context '{"skills":["fiteo-backend-api"]}')"
+assert_contains "mapped skill context is loaded from ~/.agents/skills" "$skill_context" "Fiteo API integration guidance"
 
 export TODO_TASK_REPOSITORY_CATALOG="$TEST_DIR/project-repositories.json"
 
@@ -566,17 +569,17 @@ cat > "$TEST_DIR/remote-question.json" <<'JSON'
 JSON
 REMOTE_QUESTION_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
 
-# Exercise the production default: the catalog is provided by globalskills,
-# not bundled alongside the standalone Manul checkout.
-HOST_REPOSITORY_CATALOG="$MANUL_HOST_SKILLS_DIR/globalskills-repository/project-repositories.json"
+# Exercise the production default: the catalog is read from the canonical
+# agent skills tree, not bundled alongside the standalone Manul checkout.
+HOST_REPOSITORY_CATALOG="$SKILLS_DIR/globalskills-repository/project-repositories.json"
 mkdir -p "$(dirname "$HOST_REPOSITORY_CATALOG")"
 cp "$TODO_TASK_REPOSITORY_CATALOG" "$HOST_REPOSITORY_CATALOG"
 SAVED_TODO_TASK_REPOSITORY_CATALOG="$TODO_TASK_REPOSITORY_CATALOG"
 unset TODO_TASK_REPOSITORY_CATALOG
-assert_eq "default Todo repository catalog resolves through MANUL_HOST_SKILLS_DIR" "$HOST_REPOSITORY_CATALOG" "$(todo_task_repository_catalog_path)"
+assert_eq "default Todo repository catalog resolves from ~/.agents/skills" "$HOST_REPOSITORY_CATALOG" "$(HOME="$SKILLS_HOME" todo_task_repository_catalog_path)"
 
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-question.json"
-remote_question_task="$(task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE")"
+remote_question_task="$(HOME="$SKILLS_HOME" task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE")"
 assert_eq "plain remote /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$remote_question_task")"
 assert_contains "plain remote /manul question keeps its prompt" "$(jq -r '.prompt' <<<"$remote_question_task")" "what day is today?"
 assert_eq "plain remote /manul question does not require repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$remote_question_task")"
