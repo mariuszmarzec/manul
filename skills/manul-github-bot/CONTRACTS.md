@@ -22,7 +22,7 @@ Without an explicit role, Manul uses `automation.agentRuntime` (default
 `automation.roleRuntime` (default `opencode`). Supported runtime values are
 `openclaw`, `opencode`, `codex`, and `claude-code`. OpenCode receives a role
 through its native `--agent <role>` option. Codex and Claude Code receive the
-canonical role definition from `~/.globalskills/agents/<role>.md`, with YAML
+canonical role definition from `~/.agents/agents/<role>.md`, with YAML
 frontmatter stripped and the role instructions prepended to the task prompt.
 Agent definitions remain canonical; Manul must not copy them into another
 source directory. Unknown/unconfigured roles fail closed. OpenClaw does not
