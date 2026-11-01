@@ -57,6 +57,18 @@ A stale running task is either:
 - requeued for another execution attempt, preserving its attempt count; or
 - marked failed when the configured maximum attempts has been reached.
 
+Manual `--retry-stale` recovery requeues a terminal `stale` row through an
+atomic compare-and-swap guarded by the full source identity. It must NEVER
+terminate an executor and must NEVER remove a pid file that points at a live
+process. A stale row has no live executor by construction (`mark_task_stale`
+runs only pre-flight, before any executor is launched), so the only artifact
+left behind is a dead pid file; removing that dead pid file is the only cleanup
+this path performs, and only when the recorded PID is not alive. If the
+dispatcher claimed the row in the window after the CAS (status is now
+`running`), the fresh executor is left entirely alone — its pid file and
+claim token are preserved. Orphaned-executor termination is the daemon's
+`cleanup_orphaned_task_executors` responsibility, never the recovery CLI's.
+
 ## 3. Attempt counting
 
 `attempts` is the bounded budget for actual agent-runtime executions, not workspace/checkout preparation.

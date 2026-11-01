@@ -74,6 +74,10 @@ case "$url" in
   */issues/9999) [ -n "${DB:-}" ] && sqlite3 "$DB" "UPDATE processed_comments SET taskSourceId='owner/repo#1111' WHERE commentId='source:github_issues:owner/repo#9999';" 2>/dev/null || true; echo '{"state":"open","body":"/manul x","user":{"login":"alice"}}' ;;
   # Legacy issue:7777 → fresh comment, used for the deferred-executor-cleanup test
   */issues/comments/7777) echo '{"id":7777}' ;;
+  # Legacy issue:race-live → fresh comment, live-PID core-safety test
+  */issues/comments/race-live) echo '{"id":10001}' ;;
+  # Legacy issue:retry-race → fresh comment, post-CAS dispatcher-claim race test
+  */issues/comments/retry-race) echo '{"id":10002}' ;;
   # Legacy issue:8888 → fresh comment, used for the production-CLI test (MANUL_TESTING unset)
   */issues/comments/8888) echo '{"id":8888}' ;;
   *) echo "unexpected gh fixture: $url" >&2; exit 1 ;;
@@ -316,7 +320,8 @@ echo "$OUTPUT" | grep -qi "changed during revalidation" && pass "Race CAS abort 
 
 # ---------------------------------------------------------------------------
 # Test 14: DEFERRED EXECUTOR CLEANUP — a stale row with a dead executor pid file
-# is requeued; the dead pid file is removed because the row is no longer running.
+# is requeued; the dead pid file is removed (only if the recorded PID is dead —
+# this path never signals a process).
 # ---------------------------------------------------------------------------
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,createdAt) VALUES('issue:7777','owner/repo',1,'stale',1,datetime('now'));"
 CLEAN_PID_FILE="$(pid_file 'issue:7777')"
@@ -329,7 +334,83 @@ assert_eq "Deferred-cleanup: stale task requeued" "queued" "$STATUS"
 [ ! -f "$CLEAN_PID_FILE" ] && pass "Deferred-cleanup: dead pid file removed" || fail "Deferred-cleanup: dead pid file removed"
 
 # ---------------------------------------------------------------------------
-# Test 15: SOURCE-IDENTITY DRIFT — taskSourceId changes between snapshot and CAS.
+# Test 15 (NEW): POST-CAS DISPATCHER-CLAIM RACE — deterministic regression for
+# the TOCTOU where retry read status='queued' right after its CAS, then the
+# dispatcher claimed the row (queued->running), started a fresh executor, and
+# the old cleanup killed that fresh executor through its pid file. The fixed
+# path must never kill anything: after the fake sqlite3 models the claim, the
+# live fresh executor survives, its pid file is intact, and the claim token is
+# preserved.
+# ---------------------------------------------------------------------------
+RACE_BIN="$TEST_DIR/race-bin"
+mkdir -p "$RACE_BIN"
+cat >"$RACE_BIN/sqlite3" <<'EOF'
+#!/usr/bin/env bash
+# Hermetic stub: intercepts ONLY the deferred-cleanup status SELECT for
+# commentId='issue:retry-race' (the unique pattern
+# "COALESCE(status,'') FROM processed_comments WHERE commentId='issue:retry-race'")
+# and models the dispatcher claiming the row right after retry's CAS: flip to
+# running with a claim token and write the fresh executor's PID file. Every
+# other query (pre-flight snapshot, CAS, changes()) is passed through to the
+# real sqlite3 unchanged.
+sql=""
+for a in "$@"; do
+  case "$a" in
+    -*) ;;
+    *) sql="$a" ;;
+  esac
+done
+if printf '%s' "$sql" | grep -qF "SELECT COALESCE(status,'') FROM processed_comments WHERE commentId='issue:retry-race'"; then
+  if [ -n "${RACE_LIVE_PID:-}" ]; then
+    printf '%s' "$RACE_LIVE_PID" >"$RACE_PID_FILE"
+  fi
+  /usr/bin/sqlite3 "$1" "UPDATE processed_comments SET status='running', claimToken='tok-race-42', workerPid=$RACE_LIVE_PID, attempts=1, nextAttemptAt=NULL, processedAt=datetime('now') WHERE commentId='issue:retry-race';"
+fi
+exec /usr/bin/sqlite3 "$@"
+EOF
+chmod +x "$RACE_BIN/sqlite3"
+
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,createdAt) VALUES('issue:retry-race','owner/repo',1,'stale',1,datetime('now'));"
+sleep 60 & _RACE_LIVE_PID=$!
+RACE_PID_FILE="$(pid_file 'issue:retry-race')"
+mkdir -p "$(dirname "$RACE_PID_FILE")"
+OUTPUT=$(RACE_LIVE_PID="$_RACE_LIVE_PID" RACE_PID_FILE="$RACE_PID_FILE" PATH="$RACE_BIN:$PATH" bash "$SCRIPT_DIR/task-recovery.sh" --retry-stale 'issue:retry-race' 2>&1) || true
+RACE_STATUS=$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='issue:retry-race';")
+RACE_CLAIM=$(sqlite3 "$DB" "SELECT COALESCE(claimToken,'') FROM processed_comments WHERE commentId='issue:retry-race';")
+assert_eq "Post-CAS race: row left at running (dispatcher claim preserved)" "running" "$RACE_STATUS"
+assert_eq "Post-CAS race: dispatcher claim token preserved" "tok-race-42" "$RACE_CLAIM"
+kill -0 "$_RACE_LIVE_PID" 2>/dev/null && pass "Post-CAS race: fresh executor NOT killed" || fail "Post-CAS race: fresh executor was killed"
+[ -f "$RACE_PID_FILE" ] && pass "Post-CAS race: fresh executor pid file preserved" || fail "Post-CAS race: fresh executor pid file removed"
+[ "$(cat "$RACE_PID_FILE")" = "$_RACE_LIVE_PID" ] && pass "Post-CAS race: pid file content untouched" || fail "Post-CAS race: pid file content untouched"
+if echo "$OUTPUT" | grep -qi "terminating\|Terminating"; then
+  fail "Post-CAS race: retry must never terminate an executor from this path"
+else
+  pass "Post-CAS race: no termination attempted from retry"
+fi
+kill "$_RACE_LIVE_PID" 2>/dev/null || true; wait "$_RACE_LIVE_PID" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# Test 16 (NEW): LIVE-PID CORE SAFETY — a stale row whose pid file points at a
+# LIVE process must leave that process and the pid file untouched, even though
+# the row ends up queued. This is the invariant that makes the post-CAS race
+# harmless: retry-stale never signals a process and never removes a pid file
+# that points at something alive.
+# ---------------------------------------------------------------------------
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,createdAt) VALUES('issue:race-live','owner/repo',1,'stale',1,datetime('now'));"
+sleep 60 & _LIVE_PID=$!
+LIVE_PID_FILE="$(pid_file 'issue:race-live')"
+mkdir -p "$(dirname "$LIVE_PID_FILE")"
+printf '%s' "$_LIVE_PID" >"$LIVE_PID_FILE"
+OUTPUT=$(bash "$SCRIPT_DIR/task-recovery.sh" --retry-stale 'issue:race-live' 2>&1) || true
+STATUS=$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='issue:race-live';")
+assert_eq "Live-pid safety: task requeued" "queued" "$STATUS"
+kill -0 "$_LIVE_PID" 2>/dev/null && pass "Live-pid safety: live process NOT killed" || fail "Live-pid safety: live process was killed"
+[ -f "$LIVE_PID_FILE" ] && pass "Live-pid safety: live pid file preserved" || fail "Live-pid safety: live pid file removed"
+[ "$(cat "$LIVE_PID_FILE" 2>/dev/null)" = "$_LIVE_PID" ] && pass "Live-pid safety: pid file content untouched" || fail "Live-pid safety: pid file content untouched"
+kill "$_LIVE_PID" 2>/dev/null || true; wait "$_LIVE_PID" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# Test 17: SOURCE-IDENTITY DRIFT — taskSourceId changes between snapshot and CAS.
 # Revalidation of the SNAPSHOT id still passes (rc=0), but the CAS re-asserts
 # the snapshot identity and must abort on 0 changed rows.
 # ---------------------------------------------------------------------------

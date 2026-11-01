@@ -130,8 +130,16 @@ retry_failed_task() {
 #   * The state reset is an atomic compare-and-swap guarded by the full source
 #     identity we just revalidated. If the row (or its source identity) changed
 #     between the pre-check and the write, the CAS matches 0 rows and we abort.
-#   * We never kill an executor before confirming the right to mutate, and we
-#     never kill a fresh executor the dispatcher just started.
+#   * We NEVER kill an executor from this path and we NEVER remove a pid file
+   #     that points at a live process. A stale task has no live executor by
+   #     construction (mark_task_stale runs only pre-flight, before any executor
+   #     is launched), so the only artifact left behind is a dead pid file. We
+   #     remove that dead pid file only when its recorded PID is not alive, which
+   #     is safe even if the dispatcher claimed the row and launched a fresh
+   #     executor in the window between our status read and the cleanup: the
+   #     fresh executor writes its own PID, and our alive-check refuses to touch
+   #     a pid file pointing at a live process. Orphan cleanup in the daemon is
+   #     the designated owner for any executor that really needs terminating.
 retry_stale_task() {
   local comment_id="$1"
   local safe_comment_id
@@ -239,14 +247,27 @@ retry_stale_task() {
   # --- 4. Deferred, safe executor cleanup. ---
   # A stale task has no live executor. If the dispatcher claimed the row in the
   # window after our CAS (status is now 'running'), a fresh executor owns it and
-  # we must NOT kill it. Only clean up the (dead) pid file while the row is not
-  # running.
+  # we must NOT touch its pid file at all. Otherwise the only artifact left
+  # behind is a dead pid file: remove it ONLY if its recorded PID is not alive,
+  # so a PID-reused live process is never signaled and a pid file that the
+  # dispatcher is about to overwrite is left for the dispatcher to manage.
   local now_status
   now_status="$(sqlite3 "$DB" "SELECT COALESCE(status,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG" || true)"
   if [ "$now_status" = "running" ]; then
     log "Stale task $comment_id was claimed by the dispatcher before cleanup; leaving the fresh executor alone"
   else
-    terminate_task_executor "$comment_id"
+    local pid_file
+    pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "executor.pid")"
+    if [ -f "$pid_file" ]; then
+      local recorded_pid
+      recorded_pid="$(cat "$pid_file" 2>/dev/null || true)"
+      if [[ "$recorded_pid" =~ ^[0-9]+$ ]] && [ "$recorded_pid" -gt 0 ] && kill -0 "$recorded_pid" 2>/dev/null; then
+        log "Stale task $comment_id pid file points at a live process (pid=$recorded_pid); leaving it for the dispatcher/orphan cleanup"
+      else
+        rm -f "$pid_file" 2>>"$LOG" || true
+        log "Stale task $comment_id dead pid file removed (row not running)"
+      fi
+    fi
   fi
   log "Stale task $comment_id requeued as queued with immediate nextAttemptAt"
   return 0
