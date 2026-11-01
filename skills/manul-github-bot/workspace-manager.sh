@@ -412,6 +412,10 @@ workspace_prepare_pr_branch() {
     echo "workspace_prepare_pr_branch: preserving dirty checkout already on PR head '$branch' at $workdir" >&2
   fi
 
+  if ! workspace_sync_submodules "$workdir"; then
+    echo "workspace_prepare_pr_branch: submodule initialization failed for '$branch'" >&2
+    return 1
+  fi
   [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" = "$branch" ]
 }
 
@@ -608,6 +612,23 @@ workspace_migrate_legacy_checkout() {
 
 # Prepare the primary checkout inside the task root. Never erase an existing
 # mismatched checkout because it may hold unpushed commits or user changes.
+# Initialize nested repositories after every branch change. The shared
+# repository cache is intentionally only a bare source; it does not guarantee
+# that nested Git submodules have been initialized in task-local checkouts.
+workspace_sync_submodules() {
+  local workdir="$1"
+  [ -f "$workdir/.gitmodules" ] || return 0
+
+  if ! git -C "$workdir" submodule sync --recursive >&2; then
+    echo "workspace_sync_submodules: failed to synchronize submodule URLs in $workdir" >&2
+    return 1
+  fi
+  if ! git -C "$workdir" submodule update --init --recursive >&2; then
+    echo "workspace_sync_submodules: failed to initialize nested repositories in $workdir" >&2
+    return 1
+  fi
+}
+
 workspace_prepare_primary_checkout() {
   local workspace_root="$1" repository="$2" repo_cache="$3"
   local checkout actual_origin
@@ -626,6 +647,10 @@ workspace_prepare_primary_checkout() {
       return 1
     fi
     git -C "$checkout" remote set-url origin "https://github.com/$repository" || return 1
+  fi
+  if ! workspace_sync_submodules "$checkout"; then
+    echo "workspace_prepare_primary_checkout: nested repository initialization failed for '$repository'" >&2
+    return 1
   fi
   mkdir -p "$(realpath -e "$workspace_root")/tmp" || return 1
   printf '%s\n' "$checkout"
@@ -697,7 +722,7 @@ workspace_recover_primary_checkout() {
   # repairs a checkout whose local Git metadata is unusable, without guessing a
   # default branch. If the requested branch cannot be fetched, leave the old
   # checkout at its original path and report the blocker.
-  if ! git clone --quiet --single-branch --branch "$branch" --no-hardlinks "$origin_url" "$temp_checkout"; then
+  if ! git clone --quiet --recurse-submodules --single-branch --branch "$branch" --no-hardlinks "$origin_url" "$temp_checkout"; then
     [ ! -e "$temp_checkout" ] || rm -rf -- "$temp_checkout"
     echo "workspace_recover_primary_checkout: could not clone remote branch '$branch' from '$origin_url'" >&2
     return 1
@@ -790,6 +815,10 @@ workspace_prepare_task_base_branch() {
   fi
 
   if [ -z "$failed_step" ]; then
+    if ! workspace_sync_submodules "$workdir"; then
+      echo "workspace_prepare_task_base_branch: submodule initialization failed for '$branch'" >&2
+      return 1
+    fi
     return 0
   fi
 
