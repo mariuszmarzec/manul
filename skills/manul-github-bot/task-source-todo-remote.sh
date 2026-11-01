@@ -13,7 +13,7 @@ todo_source_remote_config() {
     return 2
   }
   jq -c '
-    .tokenEnv = (.tokenEnv // "FITEO_MANUL_PAT")
+    .tokenEnv = "FITEO_MANUL_PAT"
     | .shareUserIdEnv = (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")
   ' <<<"$source_json"
 }
