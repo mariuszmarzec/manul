@@ -52,7 +52,7 @@ CURRENT_PROMPT_FILE="$(manul_task_file_path "$LOG_DIR" "$OPT_TASK_ID" "attempt-$
 ROLE_BODY_FILE="$(manul_task_file_path "$LOG_DIR" "$OPT_TASK_ID" "attempt-$OPT_ATTEMPT.codex.role")"
 trap 'rm -f -- "$ROLE_BODY_FILE"' EXIT HUP INT TERM
 if [ -n "$OPT_AGENT" ]; then
-  ROLE_DIR="$MANUL_AGENT_DEFINITIONS_DIR"; [ -n "$ROLE_DIR" ] || ROLE_DIR="$HOME/.globalskills/agents"
+  ROLE_DIR="$MANUL_AGENT_DEFINITIONS_DIR"; [ -n "$ROLE_DIR" ] || ROLE_DIR="$HOME/.agents/agents"
   ROLE_FILE="$ROLE_DIR/$OPT_AGENT.md"
   [ -r "$ROLE_FILE" ] || fail 66 "Canonical role definition not found for '$OPT_AGENT' at $ROLE_FILE"
   awk 'NR == 1 && $0 == "---" { front=1; next } front && $0 == "---" { front=0; next } !front { print }' "$ROLE_FILE" > "$ROLE_BODY_FILE"
