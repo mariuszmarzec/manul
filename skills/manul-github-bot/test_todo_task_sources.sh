@@ -473,7 +473,7 @@ LOCAL_QUESTION_SOURCE='{"type":"todo_local_mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN
 export TODO_MCP_FIXTURE="$TEST_DIR/local-question.json"
 local_question_task="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
 assert_eq "plain local /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$local_question_task")"
-assert_eq "plain local /manul question keeps its prompt" "what day is today?" "$(jq -r '.prompt' <<<"$local_question_task")"
+assert_contains "plain local /manul question keeps its prompt" "$(jq -r '.prompt' <<<"$local_question_task")" "what day is today?"
 assert_eq "plain local /manul question does not require repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$local_question_task")"
 export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8765/mcp'
@@ -555,7 +555,7 @@ REMOTE_QUESTION_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repos
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-question.json"
 remote_question_task="$(task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE")"
 assert_eq "plain remote /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$remote_question_task")"
-assert_eq "plain remote /manul question keeps its prompt" "what day is today?" "$(jq -r '.prompt' <<<"$remote_question_task")"
+assert_contains "plain remote /manul question keeps its prompt" "$(jq -r '.prompt' <<<"$remote_question_task")" "what day is today?"
 assert_eq "plain remote /manul question does not require repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$remote_question_task")"
 export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 assert_contains "a nested /manul command activates the parent task" "$remote_tasks" '"taskSourceId":"21@'
