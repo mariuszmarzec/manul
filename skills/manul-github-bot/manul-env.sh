@@ -256,7 +256,7 @@ EOF
       rm -f -- "$refreshed_file"
       return 1
     fi
-    printf 'FITEO_MANUL_SHARE_USER_ID=%q\\n' "$FITEO_MANUL_SHARE_USER_ID" >> "$refreshed_file"
+    printf 'FITEO_MANUL_SHARE_USER_ID=%q\n' "$FITEO_MANUL_SHARE_USER_ID" >> "$refreshed_file"
     chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
     mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
     echo "  Refreshed Fiteo share-recipient ID for unattended Manul tasks" >&2
