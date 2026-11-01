@@ -38,8 +38,8 @@ todo_source_remote_config() {
   local source_json="$1" url_template url manul_user_id_env manul_user_id
   url_template="$(jq -r '.url // empty' <<<"$source_json")"
   url="$(todo_source_expand_env_placeholders "$url_template")" || return $?
-  [[ "$url" == https://* ]] || {
-    echo "task-source: remote Fiteo MCP requires an HTTPS URL after environment expansion" >&2
+  [[ "$url" == https://* || "$url" == http://* ]] || {
+    echo "task-source: remote Fiteo MCP requires an HTTP(S) URL after environment expansion" >&2
     return 2
   }
 
@@ -74,7 +74,7 @@ todo_source_remote_config() {
 
 task_source_todo_remote_poll() {
   local source_json manul_user_id tasks_json shared_task_json normalized resolution task_id
-  source_json="$(todo_source_remote_config "$1")"
+  source_json="$(todo_source_remote_config "$1")" || return $?
   manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
   [[ "$manul_user_id" =~ ^[1-9][0-9]*$ ]] || {
     echo "task-source: todo_remote_mcp requires a positive numeric manulUserId" >&2
@@ -130,12 +130,12 @@ task_source_todo_remote_poll() {
 
 task_source_todo_remote_revalidate() {
   local source_json="$1" source_id="$2"
-  source_json="$(todo_source_remote_config "$source_json")"
+  source_json="$(todo_source_remote_config "$source_json")" || return $?
   todo_task_still_current "$source_json" todo_remote_mcp "$source_id"
 }
 
 task_source_todo_remote_complete() {
   local source_json="$1" source_id="$2"
-  source_json="$(todo_source_remote_config "$source_json")"
+  source_json="$(todo_source_remote_config "$source_json")" || return $?
   todo_task_mark_done "$source_json" todo_remote_mcp "$source_id"
 }

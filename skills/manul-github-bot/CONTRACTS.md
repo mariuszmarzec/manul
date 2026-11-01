@@ -570,7 +570,7 @@ retries; changing the catalog does not silently retarget existing queue rows.
 
 The two Todo providers are separate adapters with different MCP tool names and
 credentials. Local uses the existing loopback bridge and `TODO_LOCAL_MCP_TOKEN`;
-remote uses Fiteo's HTTPS `/mcp` endpoint and a PAT from an environment variable.
+remote uses Fiteo's HTTP(S) `/mcp` endpoint and a PAT from an environment variable. HTTPS is required on untrusted/public networks because HTTP does not encrypt the Bearer token in transit.
 Tokens never appear in normalized task JSON or configuration values.
 
 A Todo root is queued once with its complete subtask tree. Descendants are ordered
@@ -726,3 +726,23 @@ tasks can never establish their own eligibility. Missing provenance or a
 database/query error must fail closed and skip automatic fixes. This prevents
 Manul from taking ownership of CI failures on unrelated PRs.
 
+
+
+## 24. Runtime update contract
+
+The operator-facing `manul --update` command updates an existing canonical
+checkout and deploys its scripts into the existing runtime:
+
+- The canonical checkout must be the standalone `mariuszmarzec/manul` repository
+  on `main`, with a clean working tree.
+- Updates fetch `origin/main` and use fast-forward-only semantics. Local commits
+  ahead of or diverged from the remote are never reset, rebased, or overwritten.
+- The command invokes the normal installer without `--init-state`. A missing
+  or empty `~/.manul/state/manul.db` is a hard failure; update must never create
+  a fresh database implicitly.
+- Existing configuration, environment, task state, artifacts, logs, locks and
+  workspaces remain owned by the runtime and are not reset by the updater.
+- The updater does not stop or restart the daemon, claim/requeue tasks, terminate
+  workers, or edit leases/locks. A running daemon may retain functions loaded
+  before deployment; any restart is a separate operator action after active
+  task and lease ownership has been inspected.

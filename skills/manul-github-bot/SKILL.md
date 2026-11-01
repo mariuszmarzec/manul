@@ -245,7 +245,7 @@ Configure `repositoryAllowlist` to narrow which catalog repositories the Todo
 sources may target. Unknown, ambiguous, and disallowed targets are logged and
 not queued; Manul must never fall back to a hardcoded Todo repository.
 
-The local adapter connects directly to Todo Desktop at `http://127.0.0.1:8765/mcp` on native Linux/macOS hosts. Inside WSL it first tries the same loopback endpoint and falls back to the existing WSL bridge at `http://127.0.0.1:8766/mcp` when direct loopback is unavailable. Both paths use `TODO_LOCAL_MCP_TOKEN`. The remote adapter requires an HTTPS MCP URL and Manul's dedicated PAT supplied through `FITEO_MANUL_PAT`. Its URL can be configured as `"{env:FITEO_BASE_URL}/mcp"`, and `manulUserIdEnv` can point to `MANUL_USER_ID` (a positive numeric ID). Never use the operator's `FITEO_PAT` for Manul's task-scoped Fiteo connection. When creating a Todo task through Fiteo, always use the `manul_fiteo_create_task` custom tool rather than calling `fiteo_todo_create_task` directly: the custom tool adds the required `EDITOR_AND_VIEWER` share and verifies it by reading the new task back. It requires `FITEO_MANUL_SHARE_USER_ID`, the numeric Fiteo ID of the intended Mariusz recipient. Neither token nor recipient ID belongs in `config.json`.
+The local adapter connects directly to Todo Desktop at `http://127.0.0.1:8765/mcp` on native Linux/macOS hosts. Inside WSL it first tries the same loopback endpoint and falls back to the existing WSL bridge at `http://127.0.0.1:8766/mcp` when direct loopback is unavailable. Both paths use `TODO_LOCAL_MCP_TOKEN`. The remote adapter accepts an HTTP or HTTPS MCP URL and uses Manul's dedicated PAT supplied through `FITEO_MANUL_PAT`. HTTPS is strongly recommended outside a trusted private network: an HTTP connection does not encrypt the Bearer token in transit. Its URL can be configured as `"{env:FITEO_BASE_URL}/mcp"`, and `manulUserIdEnv` can point to `MANUL_USER_ID` (a positive numeric ID). Never use the operator's `FITEO_PAT` for Manul's task-scoped Fiteo connection. When creating a Todo task through Fiteo, always use the `manul_fiteo_create_task` custom tool rather than calling `fiteo_todo_create_task` directly: the custom tool adds the required `EDITOR_AND_VIEWER` share and verifies it by reading the new task back. It requires `FITEO_MANUL_SHARE_USER_ID`, the numeric Fiteo ID of the intended Mariusz recipient. Neither token nor recipient ID belongs in `config.json`.
 
 A Todo root is one Manul task. Its nested subtasks are included as ordered implementation steps in pre-order, preserving the order returned by Todo; they are not queued as independent tasks. Manul revalidates the source tree before execution and marks the root and descendants done only after repository delivery has been verified. For Fiteo, descendants are updated before the root so a partial failure can be retried while the root remains active.
 
@@ -414,6 +414,7 @@ See `GITHUB_CONTROL_PROTOCOL.md` for machine-readable details.
 The local control interface consists of:
 
 ```
+manul --update
 manul-submit.sh
 manul-status.sh
 manul-result.sh
@@ -441,6 +442,7 @@ See `LOCAL_INTERFACE.md` and `ORCHESTRATOR.md`.
 | `manul-submit.sh` | Submit local tasks |
 | `manul-wait.sh` | Wait for task completion/blocking |
 | `manul-orchestrator.sh` | External conversation/review orchestration |
+| `update-manul.sh` | Fast-forward the canonical checkout and redeploy runtime symlinks without resetting state or restarting the daemon |
 
 `task-health-check.sh` is legacy/deprecated and must not be installed as an automatic recovery mechanism.
 
@@ -568,6 +570,13 @@ The ACPX plugin must already be installed and enabled. The launcher fails if
 it cannot configure the `opencode` ACP target or if Caracal is not connected.
 Selecting an OpenCode model provider alone is not ACP delegation; this setup
 specifically configures the ACPX `opencode` harness.
+
+For an existing installation, run `manul --update`. It fetches only
+`origin/main`, refuses local changes or a non-fast-forward checkout, and runs
+the canonical installer without `--init-state`. Runtime data is preserved.
+The command does not stop or restart the daemon or alter task/lease state; a
+running daemon may retain functions loaded before the update. Inspect active
+tasks and leases before deciding whether a restart is needed.
 
 The current installer deliberately does not start the daemon automatically.
 

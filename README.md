@@ -52,7 +52,14 @@ To start or inspect Manul:
 manul start
 manul status
 manul stop
+manul --update
 ```
+
+For an existing installation, `manul --update` fetches `origin/main` using
+fast-forward-only semantics and then runs the canonical installer to redeploy
+runtime symlinks. It refuses a dirty/diverged checkout and never initializes a
+missing database. It preserves runtime data and deliberately does not restart
+a running daemon; inspect active tasks and leases before any later restart.
 
 For a non-default checkout location, keep `MANUL_CANONICAL_DIR` exported in
 the interactive environment. When host skills are installed separately, set

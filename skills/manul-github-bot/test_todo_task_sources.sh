@@ -349,6 +349,16 @@ LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","own
 REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp"}'
 remote_resolved_config="$(todo_source_remote_config "$REMOTE_SOURCE")"
 assert_eq "remote URL expands the Fiteo base URL environment placeholder" "https://fiteo.example.test/mcp" "$(jq -r '.url' <<<"$remote_resolved_config")"
+export FITEO_BASE_URL="http://fiteo.example.test"
+remote_http_config="$(todo_source_remote_config "$REMOTE_SOURCE")"
+assert_eq "remote Fiteo adapter accepts an HTTP endpoint" "http://fiteo.example.test/mcp" "$(jq -r '.url' <<<"$remote_http_config")"
+export FITEO_BASE_URL="https://fiteo.example.test"
+export FITEO_BASE_URL="ftp://fiteo.example.test"
+invalid_scheme_rc=0
+todo_source_remote_config "$REMOTE_SOURCE" >/dev/null 2>"$TEST_DIR/invalid-fiteo-scheme.log" || invalid_scheme_rc=$?
+assert_rc "remote Fiteo adapter rejects unsupported URL schemes" "2" "$invalid_scheme_rc"
+assert_contains "unsupported URL scheme diagnostic names HTTP(S)" "$(cat "$TEST_DIR/invalid-fiteo-scheme.log")" "HTTP(S)"
+export FITEO_BASE_URL="https://fiteo.example.test"
 assert_eq "remote Manul user ID is resolved from the configured environment variable" "77" "$(jq -r '.manulUserId' <<<"$remote_resolved_config")"
 assert_eq "resolved remote Manul user ID is normalized as a JSON number" "number" "$(jq -r '.manulUserId | type' <<<"$remote_resolved_config")"
 

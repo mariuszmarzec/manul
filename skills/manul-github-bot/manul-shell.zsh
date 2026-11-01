@@ -28,6 +28,7 @@ MANUL_RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
 MANUL_INSTALLER="$MANUL_CANONICAL_DIR/install-manul.sh"
 MANUL_REPAIR="$MANUL_CANONICAL_DIR/repair-manul-runtime.sh"
 MANUL_AUTOMATION="$MANUL_CANONICAL_DIR/start-manul-automation.sh"
+MANUL_UPDATER="$MANUL_CANONICAL_DIR/update-manul.sh"
 
 manul-ensure-runtime() {
     if [ ! -d "$MANUL_RUNTIME_DIR" ] \
@@ -72,14 +73,21 @@ manul() {
         --stop) action="stop" ;;
         --restart) action="restart" ;;
         --status) action="status" ;;
+        --update) action="update" ;;
     esac
 
     case "$action" in
+        update)
+            # Updating must not require or repair the runtime first: the updater
+            # validates the existing DB and invokes the canonical installer.
+            "$MANUL_UPDATER" "$@"
+            return $?
+            ;;
         start|stop|restart|status)
             ;;
         *)
-            echo "Usage: manul [--start|--stop|--restart|--status]" >&2
-            echo "       manul [start|stop|restart|status]" >&2
+            echo "Usage: manul [--start|--stop|--restart|--status|--update]" >&2
+            echo "       manul [start|stop|restart|status|update]" >&2
             return 2
             ;;
     esac
