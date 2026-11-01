@@ -271,7 +271,7 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
           {
             "id": 23,
             "ownerId": 4,
-            "description": "Shared nested step",
+            "description": "/manul start working on this task\nShared nested step instructions",
             "addedTime": "2026-10-01T10:02:00",
             "modifiedTime": "2026-10-01T10:02:00",
             "parentTaskId": 22,
@@ -461,12 +461,36 @@ remote_task="$(printf '%s\n' "$remote_tasks" | jq -c '.')"
 assert_contains "remote root source type is normalized" "$remote_task" '"taskSourceType":"todo_remote_mcp"'
 assert_eq "remote Fiteo adapter assigns repository from shared task description" "owner/remote" "$(jq -r '.metadata.repository' <<<"$remote_task")"
 assert_eq "remote source persists alias provenance" "remote project" "$(jq -r '.metadata.repositoryResolution.matchedAlias' <<<"$remote_task")"
+assert_contains "a nested /manul command activates the parent task" "$remote_tasks" '"taskSourceId":"21@'
+remote_prompt="$(jq -r '.prompt' <<<"$remote_task")"
+assert_contains "nested trigger instruction is retained in the parent prompt" "$remote_prompt" 'start working on this task'
+assert_contains "nested subtask context is retained in the parent prompt" "$remote_prompt" 'Shared nested step instructions'
+assert_not_contains "remote prompt strips the executable /manul marker" "$remote_prompt" '/manul'
 assert_not_contains "viewer-only task is excluded" "$remote_tasks" '"taskSourceId":"24@'
 assert_not_contains "unshared task is excluded" "$remote_tasks" '"taskSourceId":"25@'
 remote_id="$(jq -r '.taskSourceId' <<<"$remote_task")"
 assert_eq "remote revalidation accepts unchanged tree" "0" "$(
   task_source_todo_remote_revalidate "$REMOTE_SOURCE" "$remote_id"; echo $?
 )"
+
+# A shared remote task without a trigger is visible to the source but must not
+# enter the execution queue.
+jq '.[0].subTasks[0].subTasks[0].description = "Shared nested step without trigger"' \
+  "$TEST_DIR/remote.json" > "$TEST_DIR/remote-no-trigger.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-no-trigger.json"
+remote_untriggered_tasks="$(task_source_todo_remote_poll "$REMOTE_SOURCE")"
+assert_eq "shared remote root without any /manul command is not queued" "0" "$(printf '%s\\n' "$remote_untriggered_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
+export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
+
+# Removing the descendant trigger after queueing invalidates remote revalidation.
+jq '.[0].subTasks[0].subTasks[0].description = "Shared nested step without trigger"' \
+  "$TEST_DIR/remote.json" > "$TEST_DIR/remote-trigger-removed.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-trigger-removed.json"
+remote_trigger_removed_rc=0
+task_source_todo_remote_revalidate "$REMOTE_SOURCE" "$remote_id" || remote_trigger_removed_rc=$?
+assert_rc "remote revalidation rejects a removed nested trigger" "1" "$remote_trigger_removed_rc"
+
+export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 
 # A completed child and changed modifiedTime must not invalidate a retry while
 # the root remains active; the structural fingerprint deliberately ignores
