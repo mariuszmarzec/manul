@@ -159,6 +159,9 @@ cat > "$TEST_DIR/project-repositories.json" <<'JSON'
   ]
 }
 JSON
+# Load the shared resolver before testing its default path.
+source "$SCRIPT_DIR/todo-task-source-utils.sh"
+
 # The standard standalone layout must work even when the daemon environment
 # does not define MANUL_HOST_SKILLS_DIR.
 DEFAULT_HOST_HOME="$TEST_DIR/default-host-home"
@@ -166,7 +169,7 @@ DEFAULT_HOST_CATALOG="$DEFAULT_HOST_HOME/.agents/skills/globalskills-repository/
 mkdir -p "$(dirname "$DEFAULT_HOST_CATALOG")"
 cp "$TEST_DIR/project-repositories.json" "$DEFAULT_HOST_CATALOG"
 DEFAULT_CATALOG_RESOLVED="$(HOME="$DEFAULT_HOST_HOME" MANUL_HOST_SKILLS_DIR= TODO_TASK_REPOSITORY_CATALOG= todo_task_repository_catalog_path)"
-assert_eq "default repository catalog resolves from ~/.globalskills without MANUL_HOST_SKILLS_DIR" "$DEFAULT_HOST_CATALOG" "$DEFAULT_CATALOG_RESOLVED"
+assert_eq "default repository catalog resolves from ~/.agents/skills without MANUL_HOST_SKILLS_DIR" "$DEFAULT_HOST_CATALOG" "$DEFAULT_CATALOG_RESOLVED"
 
 export TODO_TASK_REPOSITORY_CATALOG="$TEST_DIR/project-repositories.json"
 
