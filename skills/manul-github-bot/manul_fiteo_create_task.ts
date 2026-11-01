@@ -5,7 +5,7 @@ import path from "node:path"
 
 export default tool({
   description:
-    "Create a Fiteo Todo task from a Manul task. This is the required creation path: it automatically shares the new task with the configured Mariusz account using EDITOR_AND_VIEWER and verifies the share by reading the task back. Use this instead of the raw fiteo_todo_create_task MCP tool, which is blocked in Manul sessions.",
+    "Create a Fiteo Todo task from a Manul task. Root tasks are shared with the configured Mariusz account using EDITOR_AND_VIEWER. Subtasks inherit access from their existing parent and are verified under that parent without adding duplicate direct shares. Use this instead of the raw fiteo_todo_create_task MCP tool, which is blocked in Manul sessions.",
   args: {
     description: tool.schema.string().describe("Task description"),
     parentTaskId: tool.schema.number().int().positive().nullable().optional().describe("Parent task ID for a subtask, or null for a root task"),
@@ -21,8 +21,8 @@ export default tool({
     if (!process.env.FITEO_MANUL_PAT) {
       throw new Error("FITEO_MANUL_PAT is missing; refusing to use the operator's Fiteo PAT")
     }
-    if (!process.env.FITEO_MANUL_SHARE_USER_ID) {
-      throw new Error("FITEO_MANUL_SHARE_USER_ID is missing; cannot enforce the required task share")
+    if (args.parentTaskId == null && !process.env.FITEO_MANUL_SHARE_USER_ID) {
+      throw new Error("FITEO_MANUL_SHARE_USER_ID is missing; root-task creation requires a direct share")
     }
 
     const canonicalDir =
