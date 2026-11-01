@@ -669,6 +669,9 @@ cat > "$TEST_DIR/remote-report.json" <<'JSON'
 ]
 JSON
 REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":true,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
+# The lower-level delivery helper expects the source config to be normalized,
+# just as task_source_report_deliver does in the production dispatch path.
+REMOTE_REPORT_SOURCE="$(todo_source_remote_config "$REMOTE_REPORT_SOURCE")"
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-report.json"
 remote_report_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
 assert_eq "remote report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$remote_report_task")"
