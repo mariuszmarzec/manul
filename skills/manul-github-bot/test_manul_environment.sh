@@ -97,7 +97,7 @@ if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
    ! grep -q '^CARACAL_ACCESS_TOKEN=' "$ENV_FILE" ||
    ! grep -q '^FITEO_BASE_URL=' "$ENV_FILE" ||
    ! grep -q '^FITEO_MANUL_PAT=' "$ENV_FILE" ||
-   ! grep -q '^FITEO_MANUL_SHARE_USER_ID=1   ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
+   ! grep -q '^FITEO_MANUL_SHARE_USER_ID=1$' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
   fail "Bootstrap did not persist all supported provider variables"
 else

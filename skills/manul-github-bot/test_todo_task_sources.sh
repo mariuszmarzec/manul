@@ -482,7 +482,7 @@ jq '.[0].subTasks[0].subTasks[0].description = "Shared nested step without trigg
   "$TEST_DIR/remote.json" > "$TEST_DIR/remote-no-trigger.json"
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-no-trigger.json"
 remote_untriggered_tasks="$(task_source_todo_remote_poll "$REMOTE_SOURCE")"
-assert_eq "shared remote root without any /manul command is not queued" "0" "$(printf '%s\\n' "$remote_untriggered_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
+assert_eq "shared remote root without any /manul command is not queued" "0" "$(printf '%s\n' "$remote_untriggered_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
 export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 
 # Removing the descendant trigger after queueing invalidates remote revalidation.

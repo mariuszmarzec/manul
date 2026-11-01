@@ -234,8 +234,8 @@ EOF
   fi
 
   # Persist the non-secret Fiteo recipient ID configured for remote Todo sharing.
-  # Capture it independently of the Fiteo endpoint/PAT pair so deployments
-  # using only the task-source URL still survive unattended daemon restarts.
+  # Refresh an existing value too, so an operator can deliberately change the
+  # recipient without leaving unattended Manul processes on a stale ID.
   local share_user_id_variable
   if [ -f "$runtime_dir/config.json" ]; then
     while IFS= read -r share_user_id_variable; do
@@ -245,20 +245,28 @@ EOF
         continue
       fi
       value="${!share_user_id_variable:-}"
-      if [[ "$value" =~ ^[1-9][0-9]*$ ]] &&
-         ! grep -qE "^[[:space:]]*(export[[:space:]]+)?${share_user_id_variable}=" "$env_file"; then
-        printf "%s=%q\\n" "$share_user_id_variable" "$value" >> "$env_file"
-        echo "  Captured Fiteo share-recipient ID for unattended Manul tasks" >&2
+      [[ "$value" =~ ^[1-9][0-9]*$ ]] || continue
+      refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
+      if ! awk -v variable="$share_user_id_variable" '{
+        line=$0
+        sub(/^[[:space:]]*(export[[:space:]]+)?/, "", line)
+        split(line, parts, "=")
+        if (parts[1] != variable) print
+      }' "$env_file" > "$refreshed_file"; then
+        rm -f -- "$refreshed_file"
+        return 1
       fi
+      printf "%s=%q\n" "$share_user_id_variable" "$value" >> "$refreshed_file"
+      chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+      mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+      echo "  Refreshed Fiteo share-recipient ID for unattended Manul tasks" >&2
     done < <(
-      jq -r '
-        .taskSources[]?
-        | select(.type == "todo_remote_mcp")
-        | (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")
-      ' "$runtime_dir/config.json" 2>/dev/null | sort -u
+      jq -r '.taskSources[]?
+        | select((.enabled != false) and .type == "todo_remote_mcp")
+        | (.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID")'
+        "$runtime_dir/config.json" 2>/dev/null | sort -u
     )
   fi
-
   chmod 600 "$env_file" || return 1
 
   if ! bash -n "$env_file" >/dev/null 2>&1; then
