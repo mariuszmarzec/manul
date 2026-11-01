@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-import todo_mcp_client  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location(
     "todo_remote_create_task", SCRIPT_DIR / "todo-remote-create-task.py"
@@ -136,7 +135,7 @@ class TodoRemoteCreateTaskTests(unittest.TestCase):
             },
             clear=True,
         ), patch.object(CREATOR, "StreamableHttpClient", return_value=fake):
-            with self.assertRaises(todo_mcp_client.McpClientError):
+            with self.assertRaises(CREATOR.McpClientError):
                 CREATOR.create_and_verify({"description": "Unshared task"})
 
 
