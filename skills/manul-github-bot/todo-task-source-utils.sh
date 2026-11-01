@@ -480,6 +480,24 @@ todo_task_has_remote_trigger() {
   ' <<<"$1" >/dev/null 2>&1
 }
 
+todo_task_remote_share_user_id() {
+  local source_json="$1" variable user_id
+  user_id="$(jq -r '.shareUserId // empty' <<<"$source_json")"
+  if [ -z "$user_id" ]; then
+    variable="$(jq -r '.shareUserIdEnv // "FITEO_MANUL_SHARE_USER_ID"' <<<"$source_json")"
+    [[ "$variable" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+      echo "Todo remote share user environment variable name is invalid" >&2
+      return 2
+    }
+    user_id="${!variable:-}"
+  fi
+  [[ "$user_id" =~ ^[1-9][0-9]*$ ]] || {
+    echo "Todo remote task creation requires a valid numeric Fiteo user ID for mariusz.marzec00@gmail.com (configure FITEO_MANUL_SHARE_USER_ID)" >&2
+    return 2
+  }
+  printf '%s' "$user_id"
+}
+
 todo_task_still_current() {
   local source_json="$1" source_type="$2" source_id="$3"
   local task_id expected_version tasks_json task_json actual_version
@@ -554,7 +572,7 @@ todo_task_mark_done() {
 todo_task_report_deliver() {
   local source_json="$1" source_type="$2" source_id="$3" generated_answer="$4"
   local task_id expected_version tasks_json root_json marker_prefix result_json result_count
-  local result_id result_description result_todo arguments answer digest receipt actual_version
+  local result_id result_description result_todo arguments answer digest receipt actual_version share_user_id
   task_id="$(todo_task_id_from_source_id "$source_id")"
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
@@ -599,7 +617,8 @@ todo_task_report_deliver() {
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
         todo_mcp_source_call "$source_json" create_task "$arguments" >/dev/null || return $? ;;
       todo_remote_mcp)
-        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}}')"
+        share_user_id="$(todo_task_remote_share_user_id "$source_json")" || return $?
+        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" --arg shareUserId "$share_user_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false,shares:[{userId:$shareUserId,permission:"EDITOR_AND_VIEWER"}]}}')"
         todo_mcp_source_call "$source_json" todo_create_task "$arguments" >/dev/null || return $? ;;
     esac
     tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
@@ -647,6 +666,11 @@ todo_task_report_deliver() {
   [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
   [ "$(jq -r '.isToDo' <<<"$result_json")" = "false" ] || return 1
   [ "$(jq -r '.description // empty' <<<"$result_json")" = "$result_description" ] || return 1
+  if [ "$source_type" = "todo_remote_mcp" ] &&
+     ! todo_task_has_remote_share "$result_json" "$share_user_id"; then
+    echo "Todo remote report result was created but its required Mariusz share could not be verified" >&2
+    return 1
+  fi
   actual_version="$(todo_task_fingerprint "$root_json")" || return 1
   [ "$actual_version" = "$expected_version" ] || {
     echo "Todo source changed while the report result was being verified" >&2
