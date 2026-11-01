@@ -312,7 +312,7 @@ else
 fi
 
 if [ -z "$_workspace_real" ] || [ ! -d "$_workspace_real" ]; then
-    printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Cannot resolve OpenCode task workspace","session_id":"","duration_s":0}\\n' "$OPT_TASK_ID"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Cannot resolve OpenCode task workspace","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
     exit 66
 fi
 
