@@ -54,7 +54,7 @@ export default tool({
       throw new Error("Manul Todo task creation helper could not start")
     }
     if (result.status !== 0) {
-      const detail = (result.stderr || "Fiteo task creation or share verification failed").trim()
+      const detail = (result.stderr || "Fiteo task creation or access verification failed").trim()
       throw new Error(detail.slice(0, 600))
     }
     return result.stdout.trim()
