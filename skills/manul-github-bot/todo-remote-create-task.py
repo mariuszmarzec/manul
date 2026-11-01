@@ -10,7 +10,20 @@ import sys
 from typing import Any
 from urllib.parse import urlsplit
 
-from todo_mcp_client import McpClientError, StreamableHttpClient
+import importlib.util
+from pathlib import Path
+
+# The canonical MCP client keeps its executable hyphenated filename. Load it
+# by path so this helper works the same from the Manul runtime symlink.
+_client_path = Path(__file__).resolve().with_name("todo-mcp-client.py")
+_client_spec = importlib.util.spec_from_file_location("manul_todo_mcp_client", _client_path)
+if _client_spec is None or _client_spec.loader is None:
+    raise ImportError(f"Cannot load Manul Todo MCP client from {_client_path}")
+_client_module = importlib.util.module_from_spec(_client_spec)
+sys.modules[_client_spec.name] = _client_module
+_client_spec.loader.exec_module(_client_module)
+McpClientError = _client_module.McpClientError
+StreamableHttpClient = _client_module.StreamableHttpClient
 
 
 ALLOWED_TASK_FIELDS = {
