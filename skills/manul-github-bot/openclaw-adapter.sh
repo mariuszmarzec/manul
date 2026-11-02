@@ -90,6 +90,48 @@ fi
 OPENCLAW_BIN="$RESOLVED_OPENCLAW_BIN"
 export OPENCLAW_BIN
 
+# Canonical Manul roles are Markdown instructions, not OpenClaw config-agent IDs.
+# Execute them through the same OpenClaw backend by injecting the selected role
+# definition into a task-local prompt and keeping OpenClaw's entry point on main.
+EXECUTION_PROMPT="$OPT_PROMPT"
+OPENCLAW_AGENT_ID="${OPT_AGENT:-main}"
+ROLE_BODY_FILE=""
+ROLE_PROMPT_FILE=""
+if [ -n "$OPT_AGENT" ] && [ "$OPT_AGENT" != "main" ]; then
+    if [[ ! "$OPT_AGENT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        jq -cn --arg taskId "$OPT_TASK_ID" --arg role "$OPT_AGENT" \
+            '{status:"FAILED",task_id:$taskId,exit_code:66,summary:("Invalid canonical role name: " + $role),session_id:"",duration_s:0}'
+        exit 66
+    fi
+
+    ROLE_DIR="${MANUL_AGENT_DEFINITIONS_DIR:-$HOME/.agents/agents}"
+    ROLE_FILE="$ROLE_DIR/$OPT_AGENT.md"
+    if [ ! -r "$ROLE_FILE" ]; then
+        jq -cn --arg taskId "$OPT_TASK_ID" --arg role "$OPT_AGENT" --arg path "$ROLE_FILE" \
+            '{status:"FAILED",task_id:$taskId,exit_code:66,summary:("Canonical role definition not found for " + $role + " at " + $path),session_id:"",duration_s:0}'
+        exit 66
+    fi
+
+    ROLE_BODY_FILE="$(manul_task_file_path "$MANUL_TASK_LOG_DIR" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.openclaw.role")"
+    ROLE_PROMPT_FILE="$(manul_task_file_path "$MANUL_TASK_LOG_DIR" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.openclaw.prompt")"
+    trap 'rm -f -- "$ROLE_BODY_FILE" "$ROLE_PROMPT_FILE"' EXIT HUP INT TERM
+    if ! awk 'NR == 1 && $0 == "---" { front=1; next } front && $0 == "---" { front=0; next } !front { print }' "$ROLE_FILE" > "$ROLE_BODY_FILE"; then
+        jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:1,summary:"Could not read canonical role instructions",session_id:"",duration_s:0}'
+        exit 1
+    fi
+    if ! {
+        printf 'Use canonical Manul role %s; preserve the lifecycle protocol in the task prompt.\n\n' "$OPT_AGENT"
+        cat "$ROLE_BODY_FILE"
+        printf '\n\n--- Original Manul task prompt ---\n'
+        cat "$OPT_PROMPT"
+    } > "$ROLE_PROMPT_FILE"; then
+        jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:1,summary:"Could not prepare canonical role prompt",session_id:"",duration_s:0}'
+        exit 1
+    fi
+    EXECUTION_PROMPT="$ROLE_PROMPT_FILE"
+    OPENCLAW_AGENT_ID="main"
+fi
+
 # --- Session key derivation ---
 _TASK_NAME="$(basename "$OPT_PROMPT")"
 _TASK_NAME="${_TASK_NAME//[^a-zA-Z0-9_.-]/-}"
@@ -138,10 +180,10 @@ _pr_result="$(ProcessRunner.run \
     --timeout "$OPENCLAW_AGENT_TIMEOUT" \
     --cwd "$OPT_WORKSPACE" \
     -- "$OPENCLAW_BIN" agent \
-        --agent "${OPT_AGENT:-main}" \
+        --agent "$OPENCLAW_AGENT_ID" \
         --session-key "$SESSION_KEY" \
         --timeout "$OPENCLAW_AGENT_TIMEOUT" \
-        --message-file "$OPT_PROMPT")"
+        --message-file "$EXECUTION_PROMPT")"
 _pr_header="$(printf '%s\n' "$_pr_result" | head -1)"
 _pr_rc="$(printf '%s' "$_pr_header" | cut -d'|' -f1)"
 _pr_dur="$(printf '%s' "$_pr_header" | cut -d'|' -f2)"
