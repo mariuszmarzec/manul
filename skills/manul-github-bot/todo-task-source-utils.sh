@@ -56,6 +56,9 @@ todo_task_resolve_repository() {
   }
 
   description="$(jq -r '.description // ""' <<<"$task_json")"
+  # The leading /manul command is a trigger, not a repository alias.
+  # Strip it before matching catalog aliases so plain questions stay report-only.
+  description="$(todo_strip_manul_trigger "$description")"
   explicit_matches="$(
     grep -Eo 'https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' <<<"$description" \
       | sed -E 's#^https?://github\.com/##; s#\.git$##' \
