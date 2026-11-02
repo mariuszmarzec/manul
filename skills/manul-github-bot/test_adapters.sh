@@ -1642,30 +1642,31 @@ PY_PATH_COMPARE
 # 12. Default/config runtime selection
 # ---------------------------------------------------------------------------
 test_runtime_selection() {
-  local tmp
+  local tmp runtime
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   mkdir -p "$tmp/runtime"
-  printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"openclaw"}}' >"$tmp/runtime/config.json"
+  # The obsolete config field and environment variables must never select a
+  # second runtime. Only automation.agentRuntime controls backend dispatch.
+  printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"codex"}}' >"$tmp/runtime/config.json"
 
-  local runtime
-  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
-    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
-  [ "$runtime" = "opencode|openclaw" ] \
-    && ok "manul-paths reads automatic and role runtimes from config" \
-    || fail "manul-paths ignored runtime settings (got $runtime)"
-
-  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
-    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
-  [ "$runtime" = "openclaw|opencode" ] \
-    && ok "OpenClaw stays the default automatic runtime and OpenCode the role runtime" \
-    || fail "Default runtimes changed unexpectedly: $runtime"
-
-  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=opencode MANUL_ROLE_RUNTIME="" \
-    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=claude-code MANUL_ROLE_RUNTIME=claude-code \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
   [ "$runtime" = "opencode" ] \
-    && ok "ROLE_RUNTIME environment override takes precedence over roleRuntime config" \
-    || fail "ROLE_RUNTIME override did not take precedence (got $runtime)"
+    && ok "agentRuntime controls selection; obsolete roleRuntime and env overrides are ignored" \
+    || fail "Obsolete role runtime affected backend selection (got $runtime)"
+
+  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=claude-code MANUL_ROLE_RUNTIME=claude-code \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "openclaw" ] \
+    && ok "OpenClaw remains the sole default runtime when agentRuntime is absent" \
+    || fail "Default agent runtime changed unexpectedly: $runtime"
+
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME=codex MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=opencode \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "codex" ] \
+    && ok "AGENT_RUNTIME environment override takes precedence over agentRuntime config" \
+    || fail "AGENT_RUNTIME override did not take precedence (got $runtime)"
 }
 
 # ---------------------------------------------------------------------------
