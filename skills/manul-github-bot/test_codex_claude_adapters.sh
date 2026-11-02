@@ -161,7 +161,7 @@ for runtime in codex claude-code; do
     && ok "AgentExecutor dispatches tasks to $runtime" || no "AgentExecutor failed to dispatch $runtime (rc=$route_rc)"
 done
 
-# Explicit canonical roles route through ROLE_RUNTIME and receive canonical role text.
+# Explicit canonical roles use AGENT_RUNTIME and receive canonical role text.
 mkdir -p "$TMP/rolehome/.agents/agents"
 cat > "$TMP/rolehome/.agents/agents/coder.md" <<'ROLE'
 ---
@@ -181,10 +181,10 @@ for runtime in codex claude-code; do
     '{taskId:$id,prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:$workspace,agent:"coder",attempt:1,timeout:10,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' > "$ctx"
   set +e
   if [ "$runtime" = "codex" ]; then
-    HOME="$TMP/rolehome" CODEX_BIN="$TMP/bin/codex" CODEX_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-codex.args" MOCK_PROMPT_FILE="$TMP/role-route-codex.prompt" MANUL_DIR="$role_runtime" ROLE_RUNTIME=codex \
+    HOME="$TMP/rolehome" CODEX_BIN="$TMP/bin/codex" CODEX_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-codex.args" MOCK_PROMPT_FILE="$TMP/role-route-codex.prompt" MANUL_DIR="$role_runtime" AGENT_RUNTIME=codex \
       bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$result"
   else
-    HOME="$TMP/rolehome" CLAUDE_BIN="$TMP/bin/claude" CLAUDE_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-claude-code.args" MOCK_PROMPT_FILE="$TMP/role-route-claude-code.prompt" MANUL_DIR="$role_runtime" ROLE_RUNTIME=claude-code \
+    HOME="$TMP/rolehome" CLAUDE_BIN="$TMP/bin/claude" CLAUDE_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-claude-code.args" MOCK_PROMPT_FILE="$TMP/role-route-claude-code.prompt" MANUL_DIR="$role_runtime" AGENT_RUNTIME=claude-code \
       bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$result"
   fi
   role_rc=$?
@@ -196,8 +196,8 @@ done
 
 # Exercise runtime validation via the shared production path resolver.
 printf '%s\n' '{"automation":{"agentRuntime":"codex","roleRuntime":"claude-code"}}' > "$TMP/runtime/config.json"
-selection="$(MANUL_DIR="$TMP/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
-[ "$selection" = "codex|claude-code" ] && ok "manul-paths accepts Codex automatic and Claude role runtimes" || no "runtime selection returned $selection"
+selection="$(MANUL_DIR="$TMP/runtime" ROLE_RUNTIME=claude-code MANUL_ROLE_RUNTIME=claude-code bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+[ "$selection" = "codex" ] && ok "manul-paths uses agentRuntime and ignores the obsolete role runtime" || no "runtime selection returned $selection"
 
 printf '\nResults: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
