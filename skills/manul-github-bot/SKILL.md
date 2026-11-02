@@ -38,7 +38,14 @@ The current implementation uses:
 MANUL_DIR=${MANUL_DIR:-$HOME/.manul}
 ```
 
-Path resolution and runtime validation are centralized in\n`manul-paths.sh`. The single `AGENT_RUNTIME` setting (default: `openclaw`)\nselects the backend for every task, whether or not a canonical role is\nexplicit. Supported values are `openclaw`, `opencode`, `codex`, and\n`claude-code`. The config key is `automation.agentRuntime`; the installer\nremoves the obsolete `automation.roleRuntime` key from existing configs.\nLegacy `ROLE_RUNTIME` environment overrides are ignored. There is no\n`OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
+Path resolution and runtime validation are centralized in
+`manul-paths.sh`. The single `AGENT_RUNTIME` setting (default: `openclaw`)
+selects the backend for every task, whether or not a canonical role is
+explicit. Supported values are `openclaw`, `opencode`, `codex`, and
+`claude-code`. The config key is `automation.agentRuntime`; the installer
+removes the obsolete `automation.roleRuntime` key from existing configs.
+Legacy `ROLE_RUNTIME` environment overrides are ignored. There is no
+`OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
 
 The OpenCode adapter can resume an existing session internally when the
 runtime explicitly reports its step limit. The maximum number of additional
@@ -167,14 +174,16 @@ The daemon never invokes an agent runtime directly. It calls
 `AgentExecutionController.execute`, which routes through `AgentExecutor`:
 
 ```
-All tasks -> AGENT_RUNTIME -> OpenClaw / OpenCode / Codex / Claude Code\nRole selection -> adapter input, never a second runtime selector
+All tasks -> AGENT_RUNTIME -> OpenClaw / OpenCode / Codex / Claude Code
+Role selection -> adapter input, never a second runtime selector
 ```
 
 This means a plain `/manul run <task>` uses the configured backend (OpenClaw by default), and `/manul run --agent coder <task>` uses that same backend with the canonical coder instructions. OpenCode uses its native `--agent` option. OpenClaw, Codex, and Claude Code prepend the role definition from `~/.agents/agents/<role>.md` to the original prompt; OpenClaw invokes its configured `main` entry point rather than interpreting `coder` as an OpenClaw config-agent ID. This is direct CLI execution through the selected adapter, not an ACP session spawned by OpenClaw.
 
 Use `/manul --auto run <task>` to run one task directly through OpenCode's
 native `opencode run --auto` option. Manul persists this per-task choice in
-the queue and passes the flag only to the OpenCode adapter; it is an explicit\nper-task override, not another configured runtime. OpenClaw does not support this mode.
+the queue and passes the flag only to the OpenCode adapter; it is an explicit
+per-task override, not another configured runtime. OpenClaw does not support this mode.
 
 Codex and Claude Code are non-interactive CLI backends. Codex runs with the `workspace-write` sandbox and explicit non-interactive approval policy. Claude Code uses `--print --output-format stream-json --permission-mode acceptEdits`; it never enables `--dangerously-skip-permissions` or `bypassPermissions`. Shell/MCP actions must be permitted by the operator's existing Claude Code settings. Codex CLI's `workspace-write` mode keeps command network access disabled by default. If Manul tasks must use remote `git`/`gh` operations, enable `[sandbox_workspace_write] network_access = true` in the operator's `$CODEX_HOME/config.toml` (normally `~/.codex/config.toml`); Manul does not silently override that security setting. Network access broadens the destinations a task can contact, so leave it disabled for offline tasks or configure Codex's network proxy/domain policy as appropriate.
 
@@ -646,7 +655,11 @@ Use task recovery only for manual intervention; normal stale recovery belongs to
 ### Explicit role does not execute
 
 Check that the role is present in `agents[]` in `~/.manul/config.json`, then
-the configured `automation.agentRuntime`. OpenCode uses its native\n`--agent <role>` option; OpenClaw, Codex, and Claude Code receive the canonical\nrole instructions from `~/.agents/agents/<role>.md` in the prompt. OpenClaw\nuses its `main` entry point. An unknown role or missing canonical role\ndefinition fails before the runtime starts.
+the configured `automation.agentRuntime`. OpenCode uses its native
+`--agent <role>` option; OpenClaw, Codex, and Claude Code receive the canonical
+role instructions from `~/.agents/agents/<role>.md` in the prompt. OpenClaw
+uses its `main` entry point. An unknown role or missing canonical role
+definition fails before the runtime starts.
 
 ### OpenClaw execution failure
 
