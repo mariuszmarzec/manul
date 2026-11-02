@@ -181,7 +181,7 @@ for runtime in codex claude-code; do
     '{taskId:$id,prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:$workspace,agent:"coder",attempt:1,timeout:10,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' > "$ctx"
   set +e
   if [ "$runtime" = "codex" ]; then
-    HOME="$TMP/rolehome" CODEX_BIN="$TMP/bin/codex" CODEX_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-codex.args" MOCK_PROMPT_FILE="$TMP/role-route-codex.prompt" MANUL_DIR="$role_runtime" ROLE_RUNTIME=codex \
+    HOME="$TMP/rolehome" CODEX_BIN="$TMP/bin/codex" CODEX_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-codex.args" MOCK_PROMPT_FILE="$TMP/role-route-codex.prompt" MANUL_DIR="$role_runtime" AGENT_RUNTIME=codex \
       bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$result"
   else
     HOME="$TMP/rolehome" CLAUDE_BIN="$TMP/bin/claude" CLAUDE_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-claude-code.args" MOCK_PROMPT_FILE="$TMP/role-route-claude-code.prompt" MANUL_DIR="$role_runtime" ROLE_RUNTIME=claude-code \
