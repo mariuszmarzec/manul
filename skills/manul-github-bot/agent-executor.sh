@@ -117,7 +117,7 @@ AgentExecutor.execute() {
         execution_runtime="opencode"
     fi
 
-    # Route to the selected automatic runtime or the configured role runtime.
+    # Route through the single configured runtime (or explicit task override).
     local adapter_script
     case "$execution_runtime" in
         openclaw)
