@@ -1753,6 +1753,7 @@ test_process_runner_mock
 test_process_runner_cwd_env
 test_process_runner_idle_timeout
 test_openclaw_success
+test_openclaw_explicit_role
 test_openclaw_no_marker
 test_openclaw_failure
 test_openclaw_missing
