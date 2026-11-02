@@ -161,7 +161,7 @@ for runtime in codex claude-code; do
     && ok "AgentExecutor dispatches tasks to $runtime" || no "AgentExecutor failed to dispatch $runtime (rc=$route_rc)"
 done
 
-# Explicit canonical roles route through ROLE_RUNTIME and receive canonical role text.
+# Explicit canonical roles use AGENT_RUNTIME and receive canonical role text.
 mkdir -p "$TMP/rolehome/.agents/agents"
 cat > "$TMP/rolehome/.agents/agents/coder.md" <<'ROLE'
 ---
