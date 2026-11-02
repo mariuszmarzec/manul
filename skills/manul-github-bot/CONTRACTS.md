@@ -17,16 +17,7 @@ Supported commands parsed from a `/manul` command are:
 | `/manul status` | query conversation status |
 | `/manul close` | close a conversation |
 
-Without an explicit role, Manul uses `automation.agentRuntime` (default
-`openclaw`). With an explicit canonical role, it uses
-`automation.roleRuntime` (default `opencode`). Supported runtime values are
-`openclaw`, `opencode`, `codex`, and `claude-code`. OpenCode receives a role
-through its native `--agent <role>` option. Codex and Claude Code receive the
-canonical role definition from `~/.agents/agents/<role>.md`, with YAML
-frontmatter stripped and the role instructions prepended to the task prompt.
-Agent definitions remain canonical; Manul must not copy them into another
-source directory. Unknown/unconfigured roles fail closed. OpenClaw does not
-receive canonical worker roles as its config-agent selector.
+Every task uses automation.agentRuntime (default openclaw), whether or not a canonical role is explicit. OpenCode receives a role through its native --agent <role> option. OpenClaw, Codex, and Claude Code receive the canonical role definition from ~/.agents/agents/<role>.md, with YAML frontmatter stripped and the role instructions prepended to the task prompt. OpenClaw continues to use its configured main entry point rather than treating a canonical role as an OpenClaw config-agent ID. Agent definitions remain canonical; Manul must not copy them into another source directory. Unknown/unconfigured roles fail closed.
 
 Routine ambiguity should be resolved by the agent. User input is requested only for a materially important unresolved decision.
 
@@ -406,8 +397,7 @@ The example configuration currently defines:
 - polling interval;
 - allowed users/repositories;
 - agent names;
-- `automation.agentRuntime` (default `openclaw`) for tasks without an explicit role;
-- `automation.roleRuntime` (default `opencode`) for explicitly named canonical roles;
+- `automation.agentRuntime` (default `openclaw`) as the sole backend selector for all tasks;
 - PR automation;
 - rebase behaviour;
 - retry/context limits;
@@ -437,12 +427,7 @@ Manul task contracts are runtime-neutral. The daemon never invokes an agent
 runtime directly; it calls `AgentExecutionController.execute`, which routes
 through `AgentExecutor` to a backend adapter.
 
-Adapters are independent backends behind a single `ProcessRunner.run()`
-process boundary. `automation.agentRuntime` (default OpenClaw) selects the
-automatic entry point; `automation.roleRuntime` (default OpenCode) selects the
-runtime for explicitly named canonical roles. Both accept `openclaw`, `opencode`,
-`codex`, and `claude-code`. Adapters must not spawn subprocesses directly and
-must not depend on each other.
+Adapters are independent backends behind a single ProcessRunner.run() process boundary. The single automation.agentRuntime setting (default OpenClaw) selects the backend for every task. Role selection is adapter input, not backend selection. Supported values are openclaw, opencode, codex, and claude-code. Adapters must not spawn subprocesses directly and must not depend on each other.
 
 The adapter owns runtime session invocation/resume mechanics. Manul owns the
 persisted `processed_comments.session_id` pointer: retain it only when the
