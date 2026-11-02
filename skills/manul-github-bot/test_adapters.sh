@@ -167,6 +167,65 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 3a. Explicit canonical OpenClaw role is prompt-injected on the same backend
+# ---------------------------------------------------------------------------
+test_openclaw_explicit_role() {
+  local tmp out
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home/.agents/agents"
+  cat >"$tmp/home/.agents/agents/coder.md" <<'ROLE'
+---
+name: coder
+description: adapter test role
+---
+OPENCLAW_CANONICAL_CODER_INSTRUCTIONS
+ROLE
+  cat >"$tmp/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"$MOCK_ARGS_FILE"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--message-file" ]; then
+    cat "$2" >"$MOCK_MESSAGE_FILE"
+    break
+  fi
+  shift
+done
+printf '%s\n' 'TASK_DONE openclaw canonical role completed'
+MOCK
+  chmod +x "$tmp/bin/openclaw"
+  printf '%s\n' 'Original Manul task prompt' >"$tmp/prompt"
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_MESSAGE_FILE="$tmp/message" \
+    AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/openclaw-adapter.sh" \
+      --task-id oc-explicit-role --prompt "$tmp/prompt" --workspace "$tmp" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenClaw executes an explicit canonical role"
+  grep -q -- '--agent main' "$tmp/args" \
+    && ok "OpenClaw canonical role uses the configured main entry point" \
+    || fail "OpenClaw canonical role did not use main"
+  ! grep -q -- '--agent coder' "$tmp/args" \
+    && ok "Canonical Manul role is not confused with an OpenClaw config-agent ID" \
+    || fail "Canonical role was incorrectly passed as an OpenClaw config-agent ID"
+  grep -Fq 'OPENCLAW_CANONICAL_CODER_INSTRUCTIONS' "$tmp/message" \
+    && ok "OpenClaw receives canonical role instructions in its task prompt" \
+    || fail "OpenClaw did not receive canonical role instructions"
+  grep -Fq 'Original Manul task prompt' "$tmp/message" \
+    && ok "OpenClaw role prompt preserves the original task" \
+    || fail "OpenClaw role prompt lost the original task"
+  ! grep -Fq 'description: adapter test role' "$tmp/message" \
+    && ok "OpenClaw role prompt strips YAML frontmatter" \
+    || fail "OpenClaw role prompt retained YAML frontmatter"
+  [ ! -e "$tmp/runtime/logs/tasks/task-oc-explicit-role.attempt-1.openclaw.role" ] \
+    && [ ! -e "$tmp/runtime/logs/tasks/task-oc-explicit-role.attempt-1.openclaw.prompt" ] \
+    && ok "OpenClaw removes temporary role prompt files after execution" \
+    || fail "OpenClaw leaked temporary role prompt files"
+}
+
+# ---------------------------------------------------------------------------
 # 3b. OpenClaw clean exit without Manul completion marker
 # ---------------------------------------------------------------------------
 test_openclaw_no_marker() {
