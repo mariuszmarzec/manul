@@ -30,19 +30,11 @@ GitHub
         OpenClawAdapter  OpenCodeAdapter  CodexAdapter  ClaudeCodeAdapter
                 ^          ^
                 |          |
-       automatic runtime   explicit role runtime
-       (agentRuntime)      (roleRuntime)
+       one configured runtime for all tasks
+       (automation.agentRuntime)
 ```
 
-The daemon is runtime-neutral: it reaches an agent runtime only through
-`AgentExecutionController` → `AgentExecutor` → one of the OpenClaw, OpenCode,
-Codex CLI, or Claude Code backend adapters.
-`automation.agentRuntime` controls automatic entry-point selection (default
-OpenClaw); `automation.roleRuntime` controls execution of explicitly selected
-canonical roles (default OpenCode). With these defaults, a task without an
-explicit role runs through OpenClaw, while an explicit `coder` role runs through
-the OpenCode CLI using `--agent coder`. This is direct CLI routing, not an ACP
-session spawned inside OpenClaw.
+The daemon is runtime-neutral: it reaches the runtime only through AgentExecutionController → AgentExecutor → exactly one backend adapter. The single automation.agentRuntime setting (default openclaw) selects that backend for every task, whether or not a canonical role is explicit. Role selection changes how the chosen adapter applies the role: OpenCode uses its native --agent <role> option, while OpenClaw, Codex, and Claude Code prepend canonical role instructions to the task prompt. OpenClaw uses its configured main entry point; it does not treat canonical role names as OpenClaw config-agent IDs.
 
 ### Current source/runtime split
 
@@ -56,7 +48,7 @@ Current default runtime:
 
 The installer deploys the runtime scripts as symlinks from the canonical skill directory and keeps runtime data such as the SQLite DB, logs, locks and task files in the runtime directory.
 
-Path and runtime selection are centralized in `manul-paths.sh`, which resolves `MANUL_DIR` to `$HOME/.manul` and validates both `AGENT_RUNTIME` and `ROLE_RUNTIME` against the known adapter set. Their config keys are `automation.agentRuntime` and `automation.roleRuntime`. There is no `OPENCLAW_MANUL_DIR` alias and no fallback to `~/.openclaw/manul`.
+Path and runtime selection are centralized in manul-paths.sh, which resolves MANUL_DIR to $HOME/.manul and validates the single AGENT_RUNTIME selection against the known adapter set. Its config key is automation.agentRuntime. The installer removes the obsolete automation.roleRuntime key from existing configurations. There is no OPENCLAW_MANUL_DIR alias and no fallback to ~/.openclaw/manul.
 
 ### Current runtime ownership
 
@@ -250,7 +242,7 @@ Manul still owns the claim-scoped SQLite pointer that tells a retry which runtim
 session to continue; it does not interpret or manipulate the runtime's session
 internals.
 
-OpenClaw, OpenCode, Codex CLI, and Claude Code adapters are implemented behind the same `AgentExecutor` boundary. Explicit canonical roles use the configured `ROLE_RUNTIME` (OpenCode by default). OpenCode maps a role to its native `--agent` option; Codex and Claude Code prepend the canonical role definition to the prompt because those CLIs do not implement the same OpenCode role contract. If `ROLE_RUNTIME=openclaw`, explicit role routing fails closed rather than treating a role name as an OpenClaw config-agent ID.
+OpenClaw, OpenCode, Codex CLI, and Claude Code adapters are implemented behind the same AgentExecutor boundary. Every task uses the configured AGENT_RUNTIME. OpenCode maps a canonical role to its native --agent option; OpenClaw, Codex, and Claude Code prepend the canonical role definition to the prompt because those CLIs do not share OpenCode's role contract. OpenClaw always uses its configured main entry point for canonical Manul roles; a role name is never misinterpreted as an OpenClaw config-agent ID.
 
 ## Ownership rule
 
