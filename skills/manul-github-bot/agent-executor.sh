@@ -92,9 +92,8 @@ AgentExecutor.execute() {
         agent=""
     fi
 
-    # Preserve the selected runtime for tasks without an explicit canonical role.
-    # Explicit role names are worker roles and are executed by ROLE_RUNTIME.
-    # OpenCode uses native --agent routing; Codex/Claude inject canonical role text.
+    # Every task uses the same configured backend. A selected role changes the
+    # adapter's role handling, never the runtime chosen for execution.
     local execution_runtime="$AGENT_RUNTIME"
     if [ -n "$agent" ] && [ "$agent" != "main" ]; then
         local allowed_agents_json
@@ -110,23 +109,10 @@ AgentExecutor.execute() {
             AgentExecutor_ExitCode=1
             return 1
         fi
-
-        execution_runtime="$ROLE_RUNTIME"
-        # OpenClaw's --agent selects an OpenClaw config entry, not a Markdown
-        # worker role. Keep that distinction explicit until a native OpenClaw
-        # role adapter exists, rather than dispatching the role to "main".
-        if [ "$execution_runtime" = "openclaw" ] && [ "$auto_accept" != "true" ]; then
-            local routing_error
-            routing_error="Canonical role '$agent' cannot run on OpenClaw directly; set automation.roleRuntime to opencode, codex, or claude-code"
-            jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
-              '{status:"FAILED",task_id:$taskId,exit_code:1,summary:$summary,session_id:"",duration_s:0}'
-            AgentExecutor_ExitCode=1
-            return 1
-        fi
     fi
 
-    # --auto belongs to OpenCode. It overrides the automatic runtime and
-    # roleRuntime for this task, and is never passed to the OpenClaw adapter.
+    # --auto is an explicit per-task OpenCode override. It does not introduce
+    # another configured runtime and is never passed to the OpenClaw adapter.
     if [ "$auto_accept" = "true" ]; then
         execution_runtime="opencode"
     fi
