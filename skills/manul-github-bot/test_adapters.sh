@@ -167,6 +167,121 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 3a. Explicit canonical OpenClaw role is prompt-injected on the same backend
+# ---------------------------------------------------------------------------
+test_openclaw_explicit_role() {
+  local tmp out
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home/.agents/agents"
+  cat >"$tmp/home/.agents/agents/coder.md" <<'ROLE'
+---
+name: coder
+description: adapter test role
+---
+OPENCLAW_CANONICAL_CODER_INSTRUCTIONS
+ROLE
+  cat >"$tmp/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"$MOCK_ARGS_FILE"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--message-file" ]; then
+    cat "$2" >"$MOCK_MESSAGE_FILE"
+    break
+  fi
+  shift
+done
+printf '%s\n' 'TASK_DONE openclaw canonical role completed'
+MOCK
+  chmod +x "$tmp/bin/openclaw"
+  printf '%s\n' 'Original Manul task prompt' >"$tmp/prompt"
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_MESSAGE_FILE="$tmp/message" \
+    AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/openclaw-adapter.sh" \
+      --task-id oc-explicit-role --prompt "$tmp/prompt" --workspace "$tmp" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenClaw executes an explicit canonical role"
+  grep -q -- '--agent main' "$tmp/args" \
+    && ok "OpenClaw canonical role uses the configured main entry point" \
+    || fail "OpenClaw canonical role did not use main"
+  ! grep -q -- '--agent coder' "$tmp/args" \
+    && ok "Canonical Manul role is not confused with an OpenClaw config-agent ID" \
+    || fail "Canonical role was incorrectly passed as an OpenClaw config-agent ID"
+  grep -Fq 'OPENCLAW_CANONICAL_CODER_INSTRUCTIONS' "$tmp/message" \
+    && ok "OpenClaw receives canonical role instructions in its task prompt" \
+    || fail "OpenClaw did not receive canonical role instructions"
+  grep -Fq 'Original Manul task prompt' "$tmp/message" \
+    && ok "OpenClaw role prompt preserves the original task" \
+    || fail "OpenClaw role prompt lost the original task"
+  ! grep -Fq 'description: adapter test role' "$tmp/message" \
+    && ok "OpenClaw role prompt strips YAML frontmatter" \
+    || fail "OpenClaw role prompt retained YAML frontmatter"
+  [ ! -e "$tmp/runtime/logs/tasks/task-oc-explicit-role.attempt-1.openclaw.role" ] \
+    && [ ! -e "$tmp/runtime/logs/tasks/task-oc-explicit-role.attempt-1.openclaw.prompt" ] \
+    && ok "OpenClaw removes temporary role prompt files after execution" \
+    || fail "OpenClaw leaked temporary role prompt files"
+}
+
+# ---------------------------------------------------------------------------
+# 3b. AgentExecutor keeps explicit OpenClaw roles on agentRuntime
+# ---------------------------------------------------------------------------
+test_agent_executor_openclaw_role_dispatch() {
+  local tmp out
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home/.agents/agents" "$tmp/runtime"
+  cat >"$tmp/runtime/config.json" <<'JSON'
+{"agents":["coder"],"automation":{"agentRuntime":"openclaw","roleRuntime":"opencode"}}
+JSON
+  cat >"$tmp/home/.agents/agents/coder.md" <<'ROLE'
+---
+name: coder
+description: dispatcher test role
+---
+EXECUTOR_OPENCLAW_ROLE_BODY
+ROLE
+  cat >"$tmp/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"$MOCK_OPENCLAW_ARGS"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--message-file" ]; then cat "$2" >"$MOCK_OPENCLAW_MESSAGE"; break; fi
+  shift
+done
+printf '%s\n' 'TASK_DONE executor-openclaw-role'
+MOCK
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' 'unexpected opencode role dispatch' >>"$MOCK_OPENCODE_PROOF"
+exit 99
+MOCK
+  chmod +x "$tmp/bin/openclaw" "$tmp/bin/opencode"
+  printf '%s\n' 'Executor original task prompt' >"$tmp/prompt"
+  jq -n --arg prompt "$tmp/prompt" --arg workdir "$tmp" --arg stdout "$tmp/stdout" --arg stderr "$tmp/stderr" \
+    '{taskId:"executor-openclaw-role",prompt:$prompt,workspace:$workdir,workspaceRoot:$workdir,workdir:$workdir,agent:"coder",attempt:1,timeout:30,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' >"$tmp/context.json"
+
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" \
+    ROLE_RUNTIME=opencode MANUL_ROLE_RUNTIME=opencode OPENCLAW_BIN="$tmp/bin/openclaw" \
+    OPENCODE_BIN="$tmp/bin/opencode" MOCK_OPENCLAW_ARGS="$tmp/openclaw.args" \
+    MOCK_OPENCLAW_MESSAGE="$tmp/openclaw.message" MOCK_OPENCODE_PROOF="$tmp/opencode.proof" \
+    MANUL_DIR="$tmp/runtime" bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json")"
+
+  assert_json_status "$out" "COMPLETED" "AgentExecutor runs an explicit canonical role with agentRuntime=openclaw"
+  grep -q -- '--agent main' "$tmp/openclaw.args" \
+    && ok "AgentExecutor sends OpenClaw roles to the main entry point" \
+    || fail "AgentExecutor did not use the OpenClaw main entry point"
+  grep -Fq 'EXECUTOR_OPENCLAW_ROLE_BODY' "$tmp/openclaw.message" \
+    && ok "AgentExecutor passes the canonical role prompt to OpenClaw" \
+    || fail "AgentExecutor did not pass the canonical role prompt"
+  [ ! -s "$tmp/opencode.proof" ] \
+    && ok "Legacy roleRuntime cannot reroute an explicit role to OpenCode" \
+    || fail "Explicit role was incorrectly routed through roleRuntime"
+}
+
+# ---------------------------------------------------------------------------
 # 3b. OpenClaw clean exit without Manul completion marker
 # ---------------------------------------------------------------------------
 test_openclaw_no_marker() {
@@ -1583,30 +1698,31 @@ PY_PATH_COMPARE
 # 12. Default/config runtime selection
 # ---------------------------------------------------------------------------
 test_runtime_selection() {
-  local tmp
+  local tmp runtime
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   mkdir -p "$tmp/runtime"
-  printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"openclaw"}}' >"$tmp/runtime/config.json"
+  # The obsolete config field and environment variables must never select a
+  # second runtime. Only automation.agentRuntime controls backend dispatch.
+  printf '%s\n' '{"automation":{"agentRuntime":"opencode","roleRuntime":"codex"}}' >"$tmp/runtime/config.json"
 
-  local runtime
-  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
-    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
-  [ "$runtime" = "opencode|openclaw" ] \
-    && ok "manul-paths reads automatic and role runtimes from config" \
-    || fail "manul-paths ignored runtime settings (got $runtime)"
-
-  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME="" MANUL_ROLE_RUNTIME="" \
-    bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
-  [ "$runtime" = "openclaw|opencode" ] \
-    && ok "OpenClaw stays the default automatic runtime and OpenCode the role runtime" \
-    || fail "Default runtimes changed unexpectedly: $runtime"
-
-  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=opencode MANUL_ROLE_RUNTIME="" \
-    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=claude-code MANUL_ROLE_RUNTIME=claude-code \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
   [ "$runtime" = "opencode" ] \
-    && ok "ROLE_RUNTIME environment override takes precedence over roleRuntime config" \
-    || fail "ROLE_RUNTIME override did not take precedence (got $runtime)"
+    && ok "agentRuntime controls selection; obsolete roleRuntime and env overrides are ignored" \
+    || fail "Obsolete role runtime affected backend selection (got $runtime)"
+
+  runtime="$(MANUL_DIR="$tmp/other" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=claude-code MANUL_ROLE_RUNTIME=claude-code \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "openclaw" ] \
+    && ok "OpenClaw remains the sole default runtime when agentRuntime is absent" \
+    || fail "Default agent runtime changed unexpectedly: $runtime"
+
+  runtime="$(MANUL_DIR="$tmp/runtime" AGENT_RUNTIME=codex MANUL_AGENT_RUNTIME="" ROLE_RUNTIME=opencode \
+    bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+  [ "$runtime" = "codex" ] \
+    && ok "AGENT_RUNTIME environment override takes precedence over agentRuntime config" \
+    || fail "AGENT_RUNTIME override did not take precedence (got $runtime)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1694,6 +1810,8 @@ test_process_runner_mock
 test_process_runner_cwd_env
 test_process_runner_idle_timeout
 test_openclaw_success
+test_openclaw_explicit_role
+test_agent_executor_openclaw_role_dispatch
 test_openclaw_no_marker
 test_openclaw_failure
 test_openclaw_missing

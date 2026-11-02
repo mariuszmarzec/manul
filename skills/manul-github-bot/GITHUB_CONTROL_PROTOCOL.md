@@ -39,27 +39,9 @@ the `agent` field is empty and Manul uses the configured automatic entry point.
 The daemon must preserve the stored role in the execution context; an empty
 value means automatic selection, not an implicit `main`.
 
-The automatic entry-point runtime is configured through
-`automation.agentRuntime` (default: `openclaw`). Explicit canonical worker
-roles are routed through `automation.roleRuntime` (default: `opencode`).
-This separation lets ordinary tasks continue to use OpenClaw while explicit
-roles can use any supported role runtime. OpenCode maps a role to its native
-`opencode run --agent <role>` option; Codex and Claude Code prepend the canonical
-role instructions to the prompt because those CLIs have different role models.
+The single backend runtime is configured through automation.agentRuntime (default openclaw) and is used for both ordinary tasks and tasks with an explicit canonical role. OpenCode passes a role through its native opencode run --agent <role> option. OpenClaw, Codex, and Claude Code load the canonical definition from ~/.agents/agents/<role>.md, strip YAML frontmatter, and prepend its instructions to the original task prompt. OpenClaw still invokes its configured main entry point; the canonical role name is not passed as an OpenClaw config-agent ID. Unknown/unconfigured roles fail before a runtime starts; they are not silently converted into another role.
 
-OpenClaw's `--agent` selects an OpenClaw configuration entry, not a Markdown
-role definition. If `automation.roleRuntime` is set to `openclaw`, Manul fails
-closed for explicit canonical worker roles rather than silently executing them
-under `main`. Unknown/unconfigured roles also fail before a runtime starts;
-they must not be converted into prompt text or silently fall back to another
-role.
-
-The per-task `--auto` flag can be placed immediately after `/manul` (for
-example, `/manul --auto run add tests`) or inside the run arguments. Manul
-stores the flag with the queued task and routes that task directly to OpenCode,
-passing its native `opencode run --auto` option. This mode deliberately bypasses
-both automatic runtime selection and `automation.roleRuntime`; the OpenClaw
-adapter does not implement `--auto`.
+The per-task --auto flag can be placed immediately after /manul (for example, /manul --auto run add tests) or inside the run arguments. Manul stores the flag with the queued task and routes that task directly to OpenCode, passing its native opencode run --auto option. This remains an explicit per-task override; it does not create a second runtime setting. OpenClaw does not implement --auto.
 
 ## Event format
 
@@ -245,15 +227,9 @@ Manul executes tasks through
 `AgentExecutionController` → `AgentExecutor` → a backend adapter; the daemon
 never invokes an adapter script directly.
 
-- No explicit role: `automation.agentRuntime` (default `openclaw`) selects the
-  automatic entry point.
-- Explicit canonical role: `automation.roleRuntime` (default `opencode`)
-  selects the runtime. OpenCode receives the role through native
-  `--agent <role>`; Codex and Claude Code receive canonical role instructions
-  in the task prompt. Supported values are `openclaw`, `opencode`, `codex`, and
-  `claude-code`.
-- Unknown roles and explicit roles with `roleRuntime: "openclaw"` fail closed;
-  they do not fall back to a different role or OpenClaw's `main`.
+- Every task uses automation.agentRuntime (default openclaw), regardless of whether a canonical role was selected.
+- OpenCode receives the role through native --agent <role>; OpenClaw, Codex, and Claude Code receive canonical role instructions in the task prompt. OpenClaw uses its main entry point and does not treat a canonical role as an OpenClaw config-agent ID.
+- Unknown/unconfigured roles fail closed before dispatch. The installer removes the obsolete automation.roleRuntime key from existing configs.
 
 The adapter owns runtime session mechanics. Manul persists
 `processed_comments.session_id` only when the current claim returns
@@ -264,10 +240,7 @@ is not the same as the user-input command `/manul continue <answer>`.
 
 The canonical source for Manul code remains
 `~/.manul-repo/skills/manul-github-bot/`; `~/.manul` is the runtime
-directory for configuration, state, logs, locks, and workspace data. Existing
-configuration files do not require a migration: `manul-paths.sh` supplies the
-default runtime values if `automation.agentRuntime` or `automation.roleRuntime`
-is omitted.
+directory for configuration, state, logs, locks, and workspace data. Existing configuration files are migrated by the installer to remove the obsolete automation.roleRuntime key. The sole backend selector is automation.agentRuntime; when omitted, manul-paths.sh defaults it to openclaw.
 
 ## Testing
 

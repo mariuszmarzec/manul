@@ -148,6 +148,27 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
 fi
 
+# Runtime selection is a single setting: automation.agentRuntime. Remove the
+# obsolete roleRuntime key from existing installations without replacing any
+# other operator-managed configuration.
+CONFIG_FILE="$RUNTIME_DIR/config.json"
+if jq -e '((.automation? // {}) | if type == "object" then has("roleRuntime") else false end)' "$CONFIG_FILE" >/dev/null 2>&1; then
+    CONFIG_TMP="$(mktemp "$RUNTIME_DIR/.config.json.XXXXXX")" || fail "Could not prepare config migration"
+    if ! jq 'if (.automation | type) == "object" then .automation |= del(.roleRuntime) else . end' "$CONFIG_FILE" > "$CONFIG_TMP"; then
+        rm -f -- "$CONFIG_TMP"
+        fail "Could not remove obsolete automation.roleRuntime"
+    fi
+    chmod --reference="$CONFIG_FILE" "$CONFIG_TMP" 2>/dev/null || {
+        rm -f -- "$CONFIG_TMP"
+        fail "Could not preserve config.json permissions during migration"
+    }
+    mv -f -- "$CONFIG_TMP" "$CONFIG_FILE" || {
+        rm -f -- "$CONFIG_TMP"
+        fail "Could not install migrated config.json"
+    }
+    echo "  Removed obsolete automation.roleRuntime; all tasks use automation.agentRuntime"
+fi
+
 # The Todo MCP task-source adapters use the Python standard library client.
 # Keep Python optional for installations that do not enable either Todo source.
 if jq -e 'any(.taskSources[]?; (.enabled != false) and (.type == "todo_local_mcp" or .type == "todo_remote_mcp"))' "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
