@@ -226,6 +226,62 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 3b. AgentExecutor keeps explicit OpenClaw roles on agentRuntime
+# ---------------------------------------------------------------------------
+test_agent_executor_openclaw_role_dispatch() {
+  local tmp out
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home/.agents/agents" "$tmp/runtime"
+  cat >"$tmp/runtime/config.json" <<'JSON'
+{"agents":["coder"],"automation":{"agentRuntime":"openclaw","roleRuntime":"opencode"}}
+JSON
+  cat >"$tmp/home/.agents/agents/coder.md" <<'ROLE'
+---
+name: coder
+description: dispatcher test role
+---
+EXECUTOR_OPENCLAW_ROLE_BODY
+ROLE
+  cat >"$tmp/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"$MOCK_OPENCLAW_ARGS"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--message-file" ]; then cat "$2" >"$MOCK_OPENCLAW_MESSAGE"; break; fi
+  shift
+done
+printf '%s\n' 'TASK_DONE executor-openclaw-role'
+MOCK
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' 'unexpected opencode role dispatch' >>"$MOCK_OPENCODE_PROOF"
+exit 99
+MOCK
+  chmod +x "$tmp/bin/openclaw" "$tmp/bin/opencode"
+  printf '%s\n' 'Executor original task prompt' >"$tmp/prompt"
+  jq -n --arg prompt "$tmp/prompt" --arg workdir "$tmp" --arg stdout "$tmp/stdout" --arg stderr "$tmp/stderr" \
+    '{taskId:"executor-openclaw-role",prompt:$prompt,workspace:$workdir,workspaceRoot:$workdir,workdir:$workdir,agent:"coder",attempt:1,timeout:30,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' >"$tmp/context.json"
+
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" \
+    ROLE_RUNTIME=opencode MANUL_ROLE_RUNTIME=opencode OPENCLAW_BIN="$tmp/bin/openclaw" \
+    OPENCODE_BIN="$tmp/bin/opencode" MOCK_OPENCLAW_ARGS="$tmp/openclaw.args" \
+    MOCK_OPENCLAW_MESSAGE="$tmp/openclaw.message" MOCK_OPENCODE_PROOF="$tmp/opencode.proof" \
+    MANUL_DIR="$tmp/runtime" bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json")"
+
+  assert_json_status "$out" "COMPLETED" "AgentExecutor runs an explicit canonical role with agentRuntime=openclaw"
+  grep -q -- '--agent main' "$tmp/openclaw.args" \
+    && ok "AgentExecutor sends OpenClaw roles to the main entry point" \
+    || fail "AgentExecutor did not use the OpenClaw main entry point"
+  grep -Fq 'EXECUTOR_OPENCLAW_ROLE_BODY' "$tmp/openclaw.message" \
+    && ok "AgentExecutor passes the canonical role prompt to OpenClaw" \
+    || fail "AgentExecutor did not pass the canonical role prompt"
+  [ ! -s "$tmp/opencode.proof" ] \
+    && ok "Legacy roleRuntime cannot reroute an explicit role to OpenCode" \
+    || fail "Explicit role was incorrectly routed through roleRuntime"
+}
+
+# ---------------------------------------------------------------------------
 # 3b. OpenClaw clean exit without Manul completion marker
 # ---------------------------------------------------------------------------
 test_openclaw_no_marker() {
@@ -1755,6 +1811,7 @@ test_process_runner_cwd_env
 test_process_runner_idle_timeout
 test_openclaw_success
 test_openclaw_explicit_role
+test_agent_executor_openclaw_role_dispatch
 test_openclaw_no_marker
 test_openclaw_failure
 test_openclaw_missing
