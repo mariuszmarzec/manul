@@ -1218,6 +1218,12 @@ else
   fail "Fresh installer did not install watchdog cron entry"
 fi
 
+# Seed the legacy split setting plus unrelated operator data. The installer
+# must remove only roleRuntime while preserving agentRuntime and custom fields.
+jq '.automation.roleRuntime = "opencode" | .operatorMigrationSentinel = "preserve-me"' \
+  "$INSTALL_ROOT/config.json" > "$INSTALL_ROOT/config.json.tmp"
+mv "$INSTALL_ROOT/config.json.tmp" "$INSTALL_ROOT/config.json"
+
 set +e
 INSTALL_OUTPUT_2=$(PATH="$FAKE_BIN:$PATH" HOME="$INSTALL_HOME" OPENCODE_CONFIG_DIR="$INSTALL_HOME/.config/opencode" MANUL_RUNTIME_DIR="$INSTALL_ROOT" MANUL_CANONICAL_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/install-manul.sh" 2>&1)
 INSTALL_EXIT_2=$?
@@ -1228,6 +1234,11 @@ if [ "$INSTALL_EXIT_2" -eq 0 ]; then
     ok "Canonical installer preserves the existing installation baseline"
   else
     fail "Canonical installer moved the existing baseline ($INSTALL_BASELINE_VALUE -> $INSTALL_BASELINE_AFTER)"
+  fi
+  if jq -e '(.automation | has("roleRuntime") | not) and .automation.agentRuntime == "openclaw" and .operatorMigrationSentinel == "preserve-me"' "$INSTALL_ROOT/config.json" >/dev/null 2>&1; then
+    ok "Installer removes obsolete roleRuntime and preserves the single runtime setting plus operator config"
+  else
+    fail "Installer did not safely migrate roleRuntime in existing config"
   fi
   ok "Canonical installer remains idempotent after explicit initialization"
 else
