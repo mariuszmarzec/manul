@@ -4352,8 +4352,8 @@ This is a report-only Todo task. No repository is assigned and no repository che
 - Do not post GitHub comments or invoke GitHub write APIs.
 - Use the Todo task description and ordered subtask context already included above. For current or externally changing facts, use authorized web/search tools and cite trustworthy sources in your answer.
 - The scratch directory below exists only as the agent working directory; it is not a repository and must not be populated with cloned repositories.
-- Return a complete, directly useful answer in plain text/Markdown. Do not output TASK_NEEDS_USER blocks. When the answer is complete, emit TASK_DONE on its own final line.
-- If the request cannot be answered safely or required evidence is unavailable, emit TASK_FAILED: followed by the concrete reason. Never claim success without a complete answer.
+- Return a complete, directly useful answer in plain text/Markdown. Do not output TASK_NEEDS_USER blocks. When the answer is complete, emit TASK_DONE as plain text on its own final line, without Markdown backticks or code fences, and do not put prose after it.
+- If the request cannot be answered safely or required evidence is unavailable, emit TASK_FAILED: followed by the concrete reason as plain text on its own final line, without Markdown backticks or code fences. Never claim success without a complete answer.
 
 ## Isolated scratch directory
 __WORKDIR__
