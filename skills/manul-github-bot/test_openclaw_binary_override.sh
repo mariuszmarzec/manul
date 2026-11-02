@@ -60,6 +60,46 @@ else
 fi
 
 
+# Markdown inline-code formatting around a standalone completion marker is
+# accepted because LLMs sometimes preserve Markdown formatting in final output.
+mkdir -p "$tmp/bin/markdown"
+cat >"$tmp/bin/markdown-openclaw" <<'MOCK'
+#!/usr/bin/env bash
+cat <<'ANSWER'
+Jestem tu, działam i jestem gotowy do dalszych zadań.
+`TASK_DONE`
+ANSWER
+exit 0
+MOCK
+chmod +x "$tmp/bin/markdown-openclaw"
+: >"$tmp/stdout-markdown"
+: >"$tmp/stderr-markdown"
+
+set +e
+markdown_out="$(PATH="/usr/bin:/bin" \
+  OPENCLAW_BIN="$tmp/bin/markdown-openclaw" \
+  AGENT_RUNTIME=openclaw \
+  MANUL_DIR="$tmp/runtime" \
+  bash "$SCRIPT_DIR/openclaw-adapter.sh" \
+    --task-id oc-markdown \
+    --prompt "$tmp/prompt" \
+    --workspace "$tmp" \
+    --attempt 1 \
+    --timeout 30 \
+    --session-id "" \
+    --stdout-file "$tmp/stdout-markdown" \
+    --stderr-file "$tmp/stderr-markdown" 2>/dev/null)"
+markdown_rc=$?
+set -e
+
+markdown_status="$(printf '%s' "$markdown_out" | jq -r '.status // empty' 2>/dev/null || true)"
+if [ "$markdown_rc" -eq 0 ] && [ "$markdown_status" = "COMPLETED" ]; then
+  echo "PASS: standalone Markdown-wrapped TASK_DONE is accepted"
+else
+  echo "FAIL: Markdown-wrapped TASK_DONE was rejected (rc=$markdown_rc status=$markdown_status output=$markdown_out)"
+  exit 1
+fi
+
 # The adapter must not convert a clean process exit without an explicit
 # TASK_DONE marker into a successful Manul completion.
 mkdir -p "$tmp/bin/plain"

@@ -165,17 +165,65 @@ _status="FAILED"
 _summary=""
 _session_id="$SESSION_KEY"
 
-if [ "$rc" -eq 0 ] && grep -qE '^TASK_NEEDS_USER_BEGIN([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
+# Only a standalone protocol line is significant. OpenClaw may wrap that line
+# in Markdown inline-code delimiters even when the prompt asks for plain text;
+# accept that harmless formatting without matching mentions inside prose.
+_openclaw_normalize_marker_line() {
+    local line="$1" backtick
+    printf -v backtick '\x60'
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    if [[ "$line" == "$backtick"* && "$line" == *"$backtick" ]]; then
+        while [[ "$line" == "$backtick"* ]]; do line="${line#"$backtick"}"; done
+        while [[ "$line" == *"$backtick" ]]; do line="${line%"$backtick"}"; done
+    fi
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    printf '%s' "$line"
+}
+
+_openclaw_has_marker() {
+    local marker="$1" line normalized
+    while IFS= read -r line || [ -n "$line" ]; do
+        normalized="$(_openclaw_normalize_marker_line "$line")"
+        case "$marker" in
+            TASK_NEEDS_USER_BEGIN)
+                [[ "$normalized" =~ ^TASK_NEEDS_USER_BEGIN([[:space:]]|$) ]] && return 0
+                ;;
+            TASK_FAILED)
+                [[ "$normalized" =~ ^TASK_FAILED([[:space:]:]|$) ]] && return 0
+                ;;
+            TASK_DONE)
+                [[ "$normalized" =~ ^TASK_DONE([[:space:]]|$) ]] && return 0
+                ;;
+        esac
+    done < "$OPT_STDOUT_FILE"
+    return 1
+}
+
+_openclaw_done_summary() {
+    local line normalized
+    while IFS= read -r line || [ -n "$line" ]; do
+        normalized="$(_openclaw_normalize_marker_line "$line")"
+        if [[ "$normalized" =~ ^TASK_DONE[[:space:]]+(.+)$ ]]; then
+            printf '%s' "${BASH_REMATCH[1]}"
+            return 0
+        fi
+    done < "$OPT_STDOUT_FILE"
+    return 0
+}
+
+if [ "$rc" -eq 0 ] && _openclaw_has_marker TASK_NEEDS_USER_BEGIN; then
     _status="BLOCKED"
     _exit_code=0
     _summary="OpenClaw agent needs user input"
-elif [ "$rc" -eq 0 ] && grep -qE '^TASK_FAILED([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
+elif [ "$rc" -eq 0 ] && _openclaw_has_marker TASK_FAILED; then
     _status="FAILED"
     _summary="OpenClaw agent reported TASK_FAILED"
-elif [ "$rc" -eq 0 ] && grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
+elif [ "$rc" -eq 0 ] && _openclaw_has_marker TASK_DONE; then
     _status="COMPLETED"
     _exit_code=0
-    _summary="$(awk '/^TASK_DONE[[:space:]]/ {sub(/^TASK_DONE[[:space:]]+/, ""); print; exit}' "$OPT_STDOUT_FILE" 2>/dev/null || true)"
+    _summary="$(_openclaw_done_summary)"
     : "${_summary:=Agent completed}"
 elif [ "$rc" -eq 0 ]; then
     # A clean OpenClaw process exit is NOT a successful Manul task completion.
