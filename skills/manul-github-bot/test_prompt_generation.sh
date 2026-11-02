@@ -814,6 +814,7 @@ if assert_file_contains "generated prompt requires safe body-file edit" "$WORK/p
 if assert_file_contains "generated prompt requires PR head/body read-back" "$WORK/prompt.md" "gh pr view <PR_NUMBER> --json body,url,headRefName,baseRefName,headRefOid"; then :; else :; fi
 if assert_file_contains "generated prompt blocks TASK_DONE when description verification fails" "$WORK/prompt.md" 'do NOT emit `TASK_DONE`'; then :; else :; fi
 if assert_file_contains "production daemon contains mandatory PR description policy" "$SCRIPT_DIR/manul-daemon.sh" "PR Description Freshness (MANDATORY DELIVERY CONTRACT)"; then :; else :; fi
+if assert_file_contains "production report-only prompt requires plain standalone lifecycle markers" "$SCRIPT_DIR/manul-daemon.sh" "without Markdown backticks or code fences"; then :; else :; fi
 if assert_file_contains "production prompt enforces canonical path handling" "$SCRIPT_DIR/manul-daemon.sh" "Canonical Path Handling — Mandatory"; then :; else :; fi
 if assert_file_contains "execution context carries a primary checkout path" "$SCRIPT_DIR/manul-daemon.sh" '--arg workdir "$WORKDIR"'; then :; else :; fi
 if assert_file_contains "execution context carries the task workspace root" "$SCRIPT_DIR/manul-daemon.sh" '--arg workspaceRoot "$workspace_path"'; then :; else :; fi
