@@ -368,6 +368,7 @@ todo_task_prompt() {
     fi
     if todo_task_is_report_only "$task_json"; then
       printf '\nThis is an informational report-only task. Do not modify a repository, create a branch, or create a PR. Manul will save the final answer as a completed subtask under this Todo task and verify it before completing the task tree.\n'
+      printf 'The final output must end with a standalone completion marker on its own line: TASK_DONE or TASK_FAILED: <brief reason>. Write the marker as plain text, without Markdown backticks or code fences. Do not put any prose after the marker.\n'
     else
       printf '\nAfter the implementation is complete and its PR is verified, Manul will mark this Todo task and its subtasks done. Do not change Todo completion state yourself.\n'
     fi
