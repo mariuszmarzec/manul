@@ -170,6 +170,7 @@ cat > "$TEST_DIR/project-repositories.json" <<'JSON'
     {"name":"owner/link-target","aliases":["linked project"],"description":"Explicit link target","skills":[]},
     {"name":"owner/fiteo","aliases":["fiteo"],"description":"Fiteo backend","skills":[]},
     {"name":"owner/fiteo-app","aliases":["fiteo app"],"description":"Fiteo mobile app","skills":[]},
+    {"name":"owner/manul","aliases":["manul","manul bot"],"description":"Manul task orchestrator","skills":[]},
     {"name":"owner/ambiguous-a","aliases":["shared module"],"description":"Ambiguous project A","skills":[]},
     {"name":"owner/ambiguous-b","aliases":["shared module"],"description":"Ambiguous project B","skills":[]}
   ]
@@ -584,7 +585,8 @@ assert_eq "remote source persists alias provenance" "remote project" "$(jq -r '.
 # report keyword or allowReportOnly opt-in is required.
 cat > "$TEST_DIR/remote-question.json" <<'JSON'
 [
-  {"id":590,"ownerId":4,"description":"/manul what day is today?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
+  {"id":590,"ownerId":4,"description":"/manul jak wyglada helloworld w kotlinie? tylko odpowiedz bez kodzenia","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]},
+  {"id":591,"ownerId":4,"description":"/manul daj znać czy żyjesz","addedTime":"2026-10-01T10:01:00","modifiedTime":"2026-10-01T10:01:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
 REMOTE_QUESTION_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
@@ -599,10 +601,12 @@ unset TODO_TASK_REPOSITORY_CATALOG
 assert_eq "default Todo repository catalog resolves from ~/.agents/skills" "$HOST_REPOSITORY_CATALOG" "$(HOME="$SKILLS_HOME" todo_task_repository_catalog_path)"
 
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-question.json"
-remote_question_task="$(HOME="$SKILLS_HOME" task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE")"
-assert_eq "plain remote /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$remote_question_task")"
-assert_contains "plain remote /manul question keeps its prompt" "$(jq -r '.prompt' <<<"$remote_question_task")" "what day is today?"
-assert_eq "plain remote /manul question does not require repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$remote_question_task")"
+remote_question_tasks="$(HOME="$SKILLS_HOME" task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE" | jq -sc '.')"
+assert_eq "both ordinary remote /manul prompts are discovered" "2" "$(jq 'length' <<<"$remote_question_tasks")"
+assert_eq "remote questions stay report-only even when the catalog has a manul alias" "[\"report_only\",\"report_only\"]" "$(jq -c '[.[].execution.kind]' <<<"$remote_question_tasks")"
+assert_contains "remote Kotlin question keeps its original prompt" "$(jq -r '.[].prompt' <<<"$remote_question_tasks")" "jak wyglada helloworld w kotlinie? tylko odpowiedz bez kodzenia"
+assert_contains "remote liveness question keeps its original prompt" "$(jq -r '.[].prompt' <<<"$remote_question_tasks")" "daj znać czy żyjesz"
+assert_eq "remote questions do not require repository metadata" "2" "$(jq '[.[] | select((.metadata.repository // null) == null)] | length' <<<"$remote_question_tasks")"
 export TODO_TASK_REPOSITORY_CATALOG="$SAVED_TODO_TASK_REPOSITORY_CATALOG"
 export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 assert_contains "a nested /manul command activates the parent task" "$remote_tasks" '"taskSourceId":"21@'
