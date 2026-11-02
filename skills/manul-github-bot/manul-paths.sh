@@ -116,26 +116,6 @@ case "$AGENT_RUNTIME" in
         ;;
 esac
 
-# Role execution is separate from the automatic/default entry-point runtime.
-# OpenCode uses its native --agent switch. Codex and Claude Code receive the
-# canonical role instructions through their independent adapters.
-_CONFIG_ROLE_RUNTIME=""
-if [ -f "$MANUL_CONFIG" ] && command -v jq >/dev/null 2>&1; then
-    _CONFIG_ROLE_RUNTIME="$(jq -r '.automation.roleRuntime // ""' "$MANUL_CONFIG" 2>/dev/null || true)"
-fi
-ROLE_RUNTIME="${ROLE_RUNTIME:-${MANUL_ROLE_RUNTIME:-${_CONFIG_ROLE_RUNTIME:-opencode}}}"
-
-case "$ROLE_RUNTIME" in
-    openclaw|opencode|codex|claude-code) ;;
-    "")
-        ROLE_RUNTIME="opencode"
-        ;;
-    *)
-        echo "ERROR: Unknown role runtime '$ROLE_RUNTIME'. Must be 'openclaw', 'opencode', 'codex', or 'claude-code'." >&2
-        exit 1
-        ;;
-esac
-
 # Ensure MANUL_STATE_DIR exists before we need it. Individual components may
 # also create subdirs on demand; this is the canonical location guarantee.
 mkdir -p "$MANUL_STATE_DIR" \
