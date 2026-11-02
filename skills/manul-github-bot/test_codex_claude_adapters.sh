@@ -184,7 +184,7 @@ for runtime in codex claude-code; do
     HOME="$TMP/rolehome" CODEX_BIN="$TMP/bin/codex" CODEX_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-codex.args" MOCK_PROMPT_FILE="$TMP/role-route-codex.prompt" MANUL_DIR="$role_runtime" AGENT_RUNTIME=codex \
       bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$result"
   else
-    HOME="$TMP/rolehome" CLAUDE_BIN="$TMP/bin/claude" CLAUDE_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-claude-code.args" MOCK_PROMPT_FILE="$TMP/role-route-claude-code.prompt" MANUL_DIR="$role_runtime" ROLE_RUNTIME=claude-code \
+    HOME="$TMP/rolehome" CLAUDE_BIN="$TMP/bin/claude" CLAUDE_MODEL="mock-model" MOCK_MODE="success" MOCK_ARGS_FILE="$TMP/role-route-claude-code.args" MOCK_PROMPT_FILE="$TMP/role-route-claude-code.prompt" MANUL_DIR="$role_runtime" AGENT_RUNTIME=claude-code \
       bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$ctx" > "$result"
   fi
   role_rc=$?
