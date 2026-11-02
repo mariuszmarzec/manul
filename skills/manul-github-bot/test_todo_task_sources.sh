@@ -675,6 +675,8 @@ JSON
 LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
 export TODO_MCP_FIXTURE="$TEST_DIR/local-report.json"
 local_report_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
+local_report_prompt="$(jq -r '.prompt' <<<"$local_report_task")"
+assert_contains "local report-only prompt requires a plain standalone completion marker" "$local_report_prompt" "without Markdown backticks or code fences"
 assert_eq "local report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$local_report_task")"
 assert_eq "local report-only task carries no repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$local_report_task")"
 local_report_id="$(jq -r '.taskSourceId' <<<"$local_report_task")"
@@ -765,6 +767,8 @@ REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"reposit
 REMOTE_REPORT_SOURCE="$(todo_source_remote_config "$REMOTE_REPORT_SOURCE")"
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-report.json"
 remote_report_task="$(task_source_todo_remote_poll "$REMOTE_REPORT_SOURCE")"
+remote_report_prompt="$(jq -r '.prompt' <<<"$remote_report_task")"
+assert_contains "remote report-only prompt requires a plain standalone completion marker" "$remote_report_prompt" "without Markdown backticks or code fences"
 assert_eq "remote report-only task is discovered without repository routing" "report_only" "$(jq -r '.execution.kind' <<<"$remote_report_task")"
 remote_report_id="$(jq -r '.taskSourceId' <<<"$remote_report_task")"
 : > "$TODO_MCP_CALL_LOG"
