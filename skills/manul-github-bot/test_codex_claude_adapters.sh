@@ -196,8 +196,8 @@ done
 
 # Exercise runtime validation via the shared production path resolver.
 printf '%s\n' '{"automation":{"agentRuntime":"codex","roleRuntime":"claude-code"}}' > "$TMP/runtime/config.json"
-selection="$(MANUL_DIR="$TMP/runtime" bash -c 'source "$1/manul-paths.sh"; printf "%s|%s" "$AGENT_RUNTIME" "$ROLE_RUNTIME"' _ "$SCRIPT_DIR")"
-[ "$selection" = "codex|claude-code" ] && ok "manul-paths accepts Codex automatic and Claude role runtimes" || no "runtime selection returned $selection"
+selection="$(MANUL_DIR="$TMP/runtime" ROLE_RUNTIME=claude-code MANUL_ROLE_RUNTIME=claude-code bash -c 'source "$1/manul-paths.sh"; printf "%s" "$AGENT_RUNTIME"' _ "$SCRIPT_DIR")"
+[ "$selection" = "codex" ] && ok "manul-paths uses agentRuntime and ignores the obsolete role runtime" || no "runtime selection returned $selection"
 
 printf '\nResults: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
