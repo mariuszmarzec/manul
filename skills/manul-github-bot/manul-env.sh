@@ -30,7 +30,7 @@ manul_env_load() {
 
   set -a
   # shellcheck disable=SC1090
-  . "$env_file"
+  . <(awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/' "$env_file")
   set +a
 }
 
@@ -135,16 +135,15 @@ EOF
     echo "  Refreshed standalone Manul source paths" >&2
   fi
 
-  if [ -n "${TODO_LOCAL_MCP_TOKEN:-}" ]; then
+  if grep -qE '^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=' "$env_file"; then
     refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
     if ! awk '$0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/' "$env_file" > "$refreshed_file"; then
       rm -f -- "$refreshed_file"
       return 1
     fi
-    printf 'TODO_LOCAL_MCP_TOKEN=%q\n' "$TODO_LOCAL_MCP_TOKEN" >> "$refreshed_file"
     chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
     mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
-    echo "  Refreshed Todo local MCP token for unattended Manul processes" >&2
+    echo "  Removed legacy local Todo MCP credential from Manul runtime environment" >&2
   fi
 
   # Refresh URL and token together in one atomic file replacement. Task runners
@@ -250,8 +249,7 @@ EOF
       jq -r '
         .taskSources[]?
         | select((.enabled != false))
-        | if .type == "todo_local_mcp" then (.tokenEnv // "TODO_LOCAL_MCP_TOKEN")
-          elif .type == "todo_remote_mcp" then (.tokenEnv // "FITEO_MANUL_PAT")
+        | if .type == "todo_remote_mcp" then (.tokenEnv // "FITEO_MANUL_PAT")
           else empty
           end
       ' "$runtime_dir/config.json" 2>/dev/null | sort -u

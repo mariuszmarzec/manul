@@ -574,8 +574,11 @@ static repository. The route already stored with a queued task is reused across
 retries; changing the catalog does not silently retarget existing queue rows.
 
 The two Todo providers are separate adapters with different MCP tool names and
-credentials. Local uses the existing loopback bridge and `TODO_LOCAL_MCP_TOKEN`;
-remote uses Fiteo's HTTP(S) `/mcp` endpoint and a PAT from an environment variable. HTTPS is required on untrusted/public networks because HTTP does not encrypt the Bearer token in transit.
+authentication. Local uses the existing loopback bridge without a bearer token
+and is available only after an unauthenticated MCP initialize plus read-only
+`tools/list` handshake succeeds. Remote uses Fiteo's HTTP(S) `/mcp` endpoint
+and a PAT from an environment variable. HTTPS is required on untrusted/public
+networks because HTTP does not encrypt the bearer token in transit.
 Tokens never appear in normalized task JSON or configuration values.
 
 A Todo root is queued once with its complete subtask tree. Descendants are ordered

@@ -19,6 +19,8 @@ class FakeMcpHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     requests = []
     token = "fixture-token"
+    require_auth = False
+    auth_status = 401
 
     def log_message(self, *_args):
         return
@@ -35,11 +37,11 @@ class FakeMcpHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_POST(self):
-        if self.headers.get("Authorization") != f"Bearer {self.token}":
-            self._respond(status=401)
-            return
         payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         self.requests.append((payload, dict(self.headers)))
+        if self.require_auth and self.headers.get("Authorization") != f"Bearer {self.token}":
+            self._respond(status=self.auth_status)
+            return
         method = payload.get("method")
         if method == "initialize":
             self._respond(
@@ -56,6 +58,14 @@ class FakeMcpHandler(BaseHTTPRequestHandler):
             )
         elif method == "notifications/initialized":
             self._respond(status=202)
+        elif method == "tools/list":
+            self._respond(
+                {
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {"tools": [{"name": "list_tasks"}]},
+                }
+            )
         elif method == "tools/call":
             tool_name = payload["params"]["name"]
             if tool_name in {"create_task", "todo_create_task"}:
@@ -110,29 +120,61 @@ class TodoMcpClientTests(unittest.TestCase):
 
     def setUp(self):
         FakeMcpHandler.requests.clear()
+        FakeMcpHandler.require_auth = False
+        FakeMcpHandler.auth_status = 401
 
-    def test_initialize_notification_and_tool_call_use_same_session(self):
-        client = CLIENT.StreamableHttpClient(self.url, "fixture-token", 3)
-        result = client.call_tool("todo_list_tasks", {})
-        self.assertEqual(7, result[0]["id"])
+    def test_tokenless_probe_initializes_and_lists_tools_without_mutations(self):
+        client = CLIENT.StreamableHttpClient(self.url, None, 3)
+        tools = client.probe()
+        self.assertEqual([{"name": "list_tasks"}], tools)
         self.assertEqual(
             [
                 "initialize",
                 "notifications/initialized",
-                "tools/call",
+                "tools/list",
             ],
             [item[0]["method"] for item in FakeMcpHandler.requests],
         )
         initialize_headers = FakeMcpHandler.requests[0][1]
-        self.assertEqual("Bearer fixture-token", initialize_headers["Authorization"])
+        self.assertNotIn("Authorization", initialize_headers)
         self.assertNotIn("Mcp-Session-Id", initialize_headers)
         self.assertNotIn("MCP-Protocol-Version", initialize_headers)
         for _, raw_headers in FakeMcpHandler.requests[1:]:
             headers = {name.lower(): value for name, value in raw_headers.items()}
-            self.assertEqual("Bearer fixture-token", headers["authorization"])
+            self.assertNotIn("authorization", headers)
             self.assertEqual("fixture-session", headers["mcp-session-id"])
             self.assertEqual(CLIENT.PROTOCOL_VERSION, headers["mcp-protocol-version"])
+        self.assertEqual("tools/list", FakeMcpHandler.requests[-1][0]["method"])
+
+    def test_authenticated_fiteo_tool_call_keeps_bearer_authentication(self):
+        FakeMcpHandler.require_auth = True
+        client = CLIENT.StreamableHttpClient(self.url, "fixture-token", 3)
+        result = client.call_tool("todo_list_tasks", {})
+        self.assertEqual(7, result[0]["id"])
+        for _, raw_headers in FakeMcpHandler.requests:
+            headers = {name.lower(): value for name, value in raw_headers.items()}
+            self.assertEqual("Bearer fixture-token", headers["authorization"])
         self.assertEqual("todo_list_tasks", FakeMcpHandler.requests[-1][0]["params"]["name"])
+
+    def test_unauthenticated_probe_rejects_401_and_403(self):
+        client = CLIENT.StreamableHttpClient(self.url, None, 3)
+        for status in (401, 403):
+            with self.subTest(status=status):
+                FakeMcpHandler.requests.clear()
+                FakeMcpHandler.require_auth = True
+                FakeMcpHandler.auth_status = status
+                with self.assertRaises(CLIENT.McpAuthenticationError):
+                    client.probe()
+                self.assertEqual("initialize", FakeMcpHandler.requests[0][0]["method"])
+                headers = {
+                    name.lower(): value
+                    for name, value in FakeMcpHandler.requests[0][1].items()
+                }
+                self.assertNotIn("authorization", headers)
+
+    def test_unauthenticated_access_is_limited_to_loopback_urls(self):
+        self.assertTrue(CLIENT.is_loopback_url(self.url))
+        self.assertFalse(CLIENT.is_loopback_url("https://mcp.example.test/mcp"))
 
     def test_tool_allowlist_rejects_arbitrary_operations(self):
         client = CLIENT.StreamableHttpClient(self.url, "fixture-token", 3)
