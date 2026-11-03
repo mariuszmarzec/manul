@@ -44,7 +44,7 @@ assert_runtime_environment_isolated() {
   local variable
   for variable in "${ISOLATED_ENV_VARS[@]}"; do
     if [[ -v "$variable" ]]; then
-      printf 'FAIL: inherited runtime variable remains set: %s\\n' "$variable" >&2
+      printf 'FAIL: inherited runtime variable remains set: %s\n' "$variable" >&2
       return 1
     fi
   done
@@ -89,34 +89,23 @@ assert_json_status() {
 # 0. Inherited runtime and credentials cannot reach adapter tests
 # ---------------------------------------------------------------------------
 test_inherited_runtime_environment_isolation() {
-  local output rc
-  output="$(env \
-    MANUL_DIR="/operator/.manul" \
-    MANUL_CONFIG="/operator/.manul/config.json" \
-    MANUL_WORKSPACE="/operator/.manul/workspace" \
-    MANUL_DB="/operator/.manul/state/manul.db" \
-    MANUL_CANONICAL_DIR="/operator/globalskills" \
-    MANUL_JIRA_PASSWORD="poison-jira-password" \
-    AGENT_RUNTIME="openclaw" ROLE_RUNTIME="codex" \
-    OPENCODE_CONFIG="/operator/.config/opencode/opencode.json" \
-    OPENCODE_CONFIG_CONTENT="operator-config-content" \
-    OPENCODE_CONFIG_DIR="/operator/.config/opencode" \
-    OPENCODE_BIN="/operator/.opencode/bin/opencode" \
-    TODO_LOCAL_MCP_TOKEN="poison-todo-token" \
-    TODO_LOCAL_MCP_URL="http://operator-todo.invalid/mcp" \
-    TODO_LOCAL_MCP_AVAILABLE="1" TODO_LOCAL_MCP_CONNECTED="1" \
-    FITEO_BASE_URL="https://operator-fiteo.invalid" \
-    FITEO_PAT="poison-fiteo-pat" FITEO_MANUL_PAT="poison-manul-pat" \
-    FITEO_MANUL_SHARE_USER_ID="999" \
-    CARACAL_MCP_URL="https://operator-caracal.invalid/mcp" \
-    CARACAL_ACCESS_TOKEN="poison-caracal-token" \
-    GITHUB_TOKEN="poison-github-token" GH_TOKEN="poison-gh-token" \
-    OPENAI_API_KEY="poison-openai-key" ANTHROPIC_API_KEY="poison-anthropic-key" \
-    XDG_CONFIG_HOME="/operator/.config" \
-    bash "$SCRIPT_DIR/test_adapters.sh" --verify-env-isolation 2>&1)"
+  local output rc variable value
+  local -a inherited_env=()
+  # Poison every variable in the isolation allow-list. This makes the test fail
+  # if a future edit adds a sensitive variable to the list but forgets to unset
+  # it before running fixtures.
+  for variable in "${ISOLATED_ENV_VARS[@]}"; do
+    case "$variable" in
+      *_URL|*_BASE_URL) value="http://operator.invalid" ;;
+      *_TOKEN|*_PAT|*_KEY|*_PASSWORD) value="poison-$variable" ;;
+      *) value="/operator/test-$variable" ;;
+    esac
+    inherited_env+=("$variable=$value")
+  done
+  output="$(env "${inherited_env[@]}" bash "$SCRIPT_DIR/test_adapters.sh" --verify-env-isolation 2>&1)"
   rc=$?
   if [ "$rc" -eq 0 ] && printf '%s' "$output" | grep -Fq "Test environment isolation verified."; then
-    ok "adapter tests clear inherited Manul paths, live MCP credentials, provider keys, and OpenCode config"
+    ok "adapter tests clear all inherited Manul paths, MCP credentials, provider keys, and OpenCode config"
   else
     fail "adapter test environment isolation failed (rc=$rc): $output"
   fi
