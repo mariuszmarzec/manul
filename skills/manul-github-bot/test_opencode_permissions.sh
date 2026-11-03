@@ -21,7 +21,10 @@ chmod 640 "$CONFIG"
 cat >"$MOCK_BIN" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-if [ "${1:-}" = "debug" ] && [ "${2:-}" = "config" ]; then cat "$OPENCODE_CONFIG"; exit 0; fi
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "config" ]; then
+  jq -n --arg path "$OPENCODE_CONFIG" '[{type:"document",path:$path}]'
+  exit 0
+fi
 exit 2
 MOCK
 chmod +x "$MOCK_BIN"
