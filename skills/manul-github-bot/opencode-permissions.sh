@@ -71,14 +71,25 @@ MODE="$(stat -c '%a' "$OPENCODE_CONFIG" 2>/dev/null || true)"
 jq empty "$TMP_FILE" >/dev/null 2>&1 || { echo "ERROR: generated V2 permissions are invalid" >&2; exit 1; }
 if ! cmp -s "$OPENCODE_CONFIG" "$TMP_FILE"; then mv -f "$TMP_FILE" "$OPENCODE_CONFIG"; fi
 
-effective_has() {
+configured_has() {
   local action="$1" resource="$2" effect="$3" expanded="$resource"
   case "$expanded" in "~/"*) expanded="$HOME/${expanded#~/}" ;; "\$HOME/"*) expanded="$HOME/${expanded#\$HOME/}" ;; esac
-  "$OPENCODE_BIN_RESOLVED" debug config 2>/dev/null |
-    jq -e --arg a "$action" --arg r "$resource" --arg x "$expanded" --arg e "$effect" '
+  jq -e --arg a "$action" --arg r "$resource" --arg x "$expanded" --arg e "$effect" '
       any(.permissions[]?; .action==$a and (.resource==$r or .resource==$x) and .effect==$e)
-    ' >/dev/null 2>&1
+    ' "$OPENCODE_CONFIG" >/dev/null 2>&1
 }
+
+# OpenCode V2's `debug config` lists the config sources but no longer prints the
+# resolved config object. Verify that it loaded this exact file, then validate
+# the native rules directly in that file rather than querying the old V1 shape.
+if ! "$OPENCODE_BIN_RESOLVED" debug config 2>/dev/null |
+  jq -e --arg config "$OPENCODE_CONFIG" '
+    type == "array" and any(.[]?; .type == "document" and .path == $config)
+  ' >/dev/null 2>&1; then
+  echo "ERROR: OpenCode V2 did not load the expected config source: $OPENCODE_CONFIG" >&2
+  exit 1
+fi
+
 for rule in \
   "external_directory|/tmp/*|allow" \
   "external_directory|/tmp/manul-diagnostics/*|allow" \
@@ -92,9 +103,9 @@ for rule in \
   "external_directory|$DEFAULT_WORKSPACE_RULE|deny" \
   "external_directory|$MANUL_WORKSPACE_RULE|deny"; do
   IFS='|' read -r action resource effect <<<"$rule"
-  effective_has "$action" "$resource" "$effect" || { echo "ERROR: effective V2 rule missing: $action $resource => $effect" >&2; exit 1; }
+  configured_has "$action" "$resource" "$effect" || { echo "ERROR: configured V2 rule missing: $action $resource => $effect" >&2; exit 1; }
 done
-"$OPENCODE_BIN_RESOLVED" debug config 2>/dev/null | jq -e '
+jq -e '
   any(.permissions[]?; .action=="external_directory" and .resource=="*" and (.effect=="ask" or .effect=="allow" or .effect=="deny"))
-' >/dev/null 2>&1 || { echo "ERROR: effective config lacks external-directory default rule" >&2; exit 1; }
+' "$OPENCODE_CONFIG" >/dev/null 2>&1 || { echo "ERROR: configured V2 file lacks an external-directory default rule" >&2; exit 1; }
 echo "OpenCode V2 permissions verified (task workspace remains denied globally)."
