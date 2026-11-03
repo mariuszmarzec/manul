@@ -263,7 +263,7 @@ MOCK
   jq -n --arg prompt "$tmp/prompt" --arg workdir "$tmp" --arg stdout "$tmp/stdout" --arg stderr "$tmp/stderr" \
     '{taskId:"executor-openclaw-role",prompt:$prompt,workspace:$workdir,workspaceRoot:$workdir,workdir:$workdir,agent:"coder",attempt:1,timeout:30,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' >"$tmp/context.json"
 
-  out="$(HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" \
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" AGENT_RUNTIME="" MANUL_AGENT_RUNTIME="" \
     ROLE_RUNTIME=opencode MANUL_ROLE_RUNTIME=opencode OPENCLAW_BIN="$tmp/bin/openclaw" \
     OPENCODE_BIN="$tmp/bin/opencode" MOCK_OPENCLAW_ARGS="$tmp/openclaw.args" \
     MOCK_OPENCLAW_MESSAGE="$tmp/openclaw.message" MOCK_OPENCODE_PROOF="$tmp/opencode.proof" \
