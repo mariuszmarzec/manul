@@ -10,7 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
 CANONICAL_DIR="${MANUL_CANONICAL_DIR:-$SCRIPT_DIR}"
 RUNTIME_DIR="${MANUL_RUNTIME_DIR:-$HOME/.manul}"
-BRANCH="main"
+BRANCH=""
 EXPECTED_ORIGIN="${MANUL_UPDATE_EXPECTED_ORIGIN:-https://github.com/mariuszmarzec/manul.git}"
 
 fail() {
@@ -38,9 +38,6 @@ EXPECTED_CANONICAL_DIR="$REPO_ROOT/skills/manul-github-bot"
 DB_FILE="$RUNTIME_DIR/state/manul.db"
 [ -s "$DB_FILE" ] || fail "Manul database is missing or empty at $DB_FILE; updater never creates a fresh database"
 
-CURRENT_BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
-[ "$CURRENT_BRANCH" = "$BRANCH" ] ||     fail "Manul updates are applied from '$BRANCH' only (current branch: ${CURRENT_BRANCH:-detached HEAD})"
-
 normalize_origin() {
     local value="$1"
     case "$value" in
@@ -59,6 +56,21 @@ ORIGIN_URL="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null)" ||     fai
 if [ "$(normalize_origin "$ORIGIN_URL")" != "$(normalize_origin "$EXPECTED_ORIGIN")" ]; then
     fail "unexpected origin URL for Manul checkout: $ORIGIN_URL"
 fi
+
+# Follow the repository's advertised default branch instead of assuming a
+# particular name (the Manul repository currently uses "master").
+DEFAULT_BRANCH_REF="$(git -C "$REPO_ROOT" ls-remote --symref origin HEAD 2>/dev/null | awk '$1 == "ref:" && $3 == "HEAD" { print $2; exit }')" || \
+    fail "could not resolve the default branch advertised by origin"
+case "$DEFAULT_BRANCH_REF" in
+    refs/heads/*) BRANCH="${DEFAULT_BRANCH_REF#refs/heads/}" ;;
+    *) fail "origin does not advertise a valid default branch (ref: ${DEFAULT_BRANCH_REF:-missing})" ;;
+esac
+git -C "$REPO_ROOT" check-ref-format --branch "$BRANCH" >/dev/null 2>&1 || \
+    fail "origin advertises an invalid default branch: $BRANCH"
+
+CURRENT_BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
+[ "$CURRENT_BRANCH" = "$BRANCH" ] || \
+    fail "Manul updates are applied from the origin default branch '$BRANCH' only (current branch: ${CURRENT_BRANCH:-detached HEAD})"
 
 LOCAL_CHANGES="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)"
 if [ -n "$LOCAL_CHANGES" ]; then
@@ -79,7 +91,7 @@ git -C "$REPO_ROOT" fetch --prune origin "+refs/heads/$BRANCH:$REMOTE_REF" ||   
 REMOTE_HEAD="$(git -C "$REPO_ROOT" rev-parse --verify "$REMOTE_REF" 2>/dev/null)" ||     fail "origin/$BRANCH was not found after fetch"
 
 if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$LOCAL_HEAD" "$REMOTE_HEAD"; then
-    fail "local main is ahead of or has diverged from origin/main; reconcile it manually before updating"
+    fail "local $BRANCH is ahead of or has diverged from origin/$BRANCH; reconcile it manually before updating"
 fi
 
 if ! git -C "$REPO_ROOT" merge --ff-only "$REMOTE_REF"; then
