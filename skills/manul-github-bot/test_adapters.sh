@@ -539,6 +539,8 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     and (.mcp.servers["legacy-disabled"] | has("enabled") | not)
     and .mcp.servers.legacy.timeout.catalog == 12000
     and .mcp.servers.legacy.timeout.execution == 12000
+    and (.mcp | has("legacy") | not)
+    and (.mcp | has("legacy-disabled") | not)
   ' "$OPENCODE_CONFIG" >/dev/null || {
     echo "task-local V2 MCP migration did not preserve legacy disabled/timeout state" >&2
     exit 65
