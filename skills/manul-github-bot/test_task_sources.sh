@@ -151,6 +151,7 @@ legacy_context="$(task_source_ensure_workspace_context "$DB" "legacy-todo-task" 
 assert_eq "legacy queued Todo row is repaired without requeueing" "conv-source-todo_remote_mcp-116715" "$legacy_context"
 legacy_persisted_context="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='legacy-todo-task';")"
 assert_eq "legacy Todo context repair is persisted" "$legacy_context" "$legacy_persisted_context"
+assert_contains "dispatcher repairs old source rows before workspace acquisition" "$(cat "$SCRIPT_DIR/manul-daemon.sh")" 'task_source_ensure_workspace_context'
 verify_task="$(printf '%s\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#13")')"
 queue_normalized_source_task "$verify_task"
 if [ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")" -eq 0 ]; then
