@@ -1188,23 +1188,11 @@ queue_normalized_source_task() {
   [ "$state" = "OPEN" ] || return 0
 
   local task_id="source:${source_type}:${source_id}" repo source_context
-  local source_conversation_id source_context_key
-  case "$source_type" in
-    todo_local_mcp|todo_remote_mcp)
-      # Todo source IDs include a structural fingerprint after "@". Keep the
-      # workspace context stable for the root task across source-version changes.
-      source_context_key="${source_id%%@*}"
-      ;;
-    *)
-      # Jira/GitHub and other task sources already expose stable provider IDs.
-      source_context_key="$source_id"
-      ;;
-  esac
-  if [ -z "$source_context_key" ]; then
+  local source_conversation_id
+  source_conversation_id="$(task_source_workspace_context_id "$source_type" "$source_id")" || {
     log "WARN: task source $source_type:$source_id has no stable workspace context identity; not queued"
     return 0
-  fi
-  source_conversation_id="conv-source-${source_type}-${source_context_key}"
+  }
 
   repo="$(jq -r ".metadata.repository // empty" <<<"$task_json")"
   local issue_number
