@@ -158,6 +158,31 @@ actual_heartbeat="$(sqlite3 "$DB" "SELECT coalesce(heartbeatAt,'') FROM processe
 actual_lease="$(sqlite3 "$DB" "SELECT coalesce(leaseExpiresAt,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 assert_eq "queued source task starts without heartbeat" "" "$actual_heartbeat"
 assert_eq "queued source task starts without lease" "" "$actual_lease"
+actual_conversation_id="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
+assert_eq "GitHub source task receives a stable workspace conversation" "conv-source-github_issues-owner/issues#13" "$actual_conversation_id"
+
+# Todo fingerprints identify a source version, not the durable root task context.
+todo_remote_task="$(jq -cn '{
+  taskSourceType:"todo_remote_mcp",
+  taskSourceId:"116715@9a5c8c0760d6597b",
+  taskSourceUrl:"fiteo-todo://task/116715@9a5c8c0760d6597b",
+  title:"Todo workspace context regression",
+  body:"Todo workspace context regression",
+  prompt:"Run the Todo task",
+  createdAt:"2026-11-03T17:45:26",
+  updatedAt:"2026-11-03T17:45:26",
+  state:"OPEN",
+  metadata:{repository:"mariuszmarzec/todo",issueNumber:0},
+  execution:{kind:"repository"}
+}')"
+queue_normalized_source_task "$todo_remote_task"
+actual_todo_conversation_id="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='source:todo_remote_mcp:116715@9a5c8c0760d6597b';")"
+assert_eq "Todo Remote task gets a stable root-task workspace context" "conv-source-todo_remote_mcp-116715" "$actual_todo_conversation_id"
+
+todo_remote_updated_task="$(jq -c '.taskSourceId = "116715@fedcba9876543210" | .taskSourceUrl = "fiteo-todo://task/116715@fedcba9876543210"' <<<"$todo_remote_task")"
+queue_normalized_source_task "$todo_remote_updated_task"
+updated_todo_conversation_id="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='source:todo_remote_mcp:116715@fedcba9876543210';")"
+assert_eq "Todo workspace context survives a structural fingerprint change" "$actual_todo_conversation_id" "$updated_todo_conversation_id"
 
 # Guard every poller enqueue path, including the synthetic CI-fix path that is
 # not practical to exercise through the GitHub integration fixture above.
