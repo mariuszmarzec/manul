@@ -390,7 +390,7 @@ test_opencode_success() {
 #!/usr/bin/env bash
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  tool_path="$PWD/.opencode/tools/manul_fiteo_create_task.ts"
+  tool_path="$PWD/.opencode/plugins/manul_fiteo_create_task.ts"
   if [ -n "${MOCK_TOOL_STATE_FILE:-}" ]; then
     if [ -L "$tool_path" ] &&
        [ "$(realpath -e -- "$tool_path" 2>/dev/null || true)" = "${MOCK_EXPECTED_MANUL_TOOL_SOURCE:-}" ]; then
@@ -464,12 +464,12 @@ MOCK
     && ok "OpenCode process does not inherit stale PYTHONHOME" \
     || fail "OpenCode inherited stale PYTHONHOME: $(cat "$tmp/env" 2>/dev/null || true)"
   grep -qx 'task-local' "$tmp/tool-state" \
-    && ok "Manul custom tool is present for the task-local OpenCode preflight" \
-    || fail "Manul custom tool was not task-local during OpenCode preflight"
-  [ ! -e "$tmp/.opencode/tools/manul_fiteo_create_task.ts" ] && [ ! -L "$tmp/.opencode/tools/manul_fiteo_create_task.ts" ] \
-    && ok "Manul custom tool symlink is removed after task completion" \
-    || fail "Manul custom tool symlink leaked after task completion"
-  [ ! -d "$tmp/.opencode/tools" ] && [ ! -d "$tmp/.opencode" ] \
+    && ok "Manul V2 plugin is present for the task-local OpenCode preflight" \
+    || fail "Manul V2 plugin was not task-local during OpenCode preflight"
+  [ ! -e "$tmp/.opencode/plugins/manul_fiteo_create_task.ts" ] && [ ! -L "$tmp/.opencode/plugins/manul_fiteo_create_task.ts" ] \
+    && ok "Manul V2 plugin symlink is removed after task completion" \
+    || fail "Manul V2 plugin symlink leaked after task completion"
+  [ ! -d "$tmp/.opencode/plugins" ] && [ ! -d "$tmp/.opencode" ] \
     && ok "Adapter removes only the empty task-local config directories it created" \
     || fail "Adapter leaked empty task-local config directories"
 }
@@ -481,8 +481,8 @@ test_opencode_manul_tool_collision() {
   local tmp out rc
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin" "$tmp/home" "$tmp/.opencode/tools"
-  printf '%s\n' 'operator-owned tool' > "$tmp/.opencode/tools/manul_fiteo_create_task.ts"
+  mkdir -p "$tmp/bin" "$tmp/home" "$tmp/.opencode/plugins"
+  printf '%s\n' 'operator-owned tool' > "$tmp/.opencode/plugins/manul_fiteo_create_task.ts"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "unexpected OpenCode invocation" >> "$MOCK_INVOKED_FILE"
@@ -497,12 +497,12 @@ MOCK
       --prompt "$tmp/prompt" --workspace "$tmp" --attempt 1 --timeout 10 \
       --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   rc=$?
-  if [ "$rc" -ne 0 ] && printf '%s' "$out" | jq -e '.status == "FAILED" and .failure_code == "PRE_EXECUTION_FAILURE" and .diagnostics.stage == "manul_tool_scope"' >/dev/null; then
-    ok "OpenCode adapter fails closed on a task-local Manul tool name collision"
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | jq -e '.status == "FAILED" and .failure_code == "PRE_EXECUTION_FAILURE" and .diagnostics.stage == "manul_plugin_scope"' >/dev/null; then
+    ok "OpenCode adapter fails closed on a task-local Manul plugin name collision"
   else
-    fail "OpenCode adapter did not fail closed on a task-local custom tool collision: $out"
+    fail "OpenCode adapter did not fail closed on a task-local V2 plugin collision: $out"
   fi
-  [ "$(cat "$tmp/.opencode/tools/manul_fiteo_create_task.ts")" = "operator-owned tool" ] \
+  [ "$(cat "$tmp/.opencode/plugins/manul_fiteo_create_task.ts")" = "operator-owned tool" ] \
     && ok "OpenCode adapter preserves the operator-owned task-local tool" \
     || fail "OpenCode adapter changed the operator-owned task-local tool"
   [ ! -s "$tmp/invoked" ] \
@@ -525,13 +525,26 @@ test_opencode_task_scoped_config() {
   mkdir -p "$tmp/bin" "$tmp/home/.config/opencode" "$primary_checkout" "$sibling_workspace"
   global_config="$tmp/home/.config/opencode/opencode.json"
   cat >"$global_config" <<JSON
-{"model":"test/provider","permission":{"external_directory":{"$custom_workspace_base/**":"deny"}}}
+{"model":"test/provider","mcp":{"timeout":{"catalog":5000},"legacy":{"type":"local","command":["node","server.js"],"enabled":true,"timeout":12000},"legacy-disabled":{"type":"local","command":["node","disabled.js"],"enabled":false}},"experimental":{"mcp_timeout":15000},"permissions":[{"action":"external_directory","resource":"$custom_workspace_base/*","effect":"deny"}]}
 JSON
   before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  jq -e '
+    .mcp.timeout.catalog == 5000
+    and .mcp.timeout.execution == 15000
+    and .mcp.servers["legacy-disabled"].disabled == true
+    and (.mcp.servers["legacy-disabled"] | has("enabled") | not)
+    and .mcp.servers.legacy.timeout.catalog == 12000
+    and .mcp.servers.legacy.timeout.execution == 12000
+    and (.mcp | has("legacy") | not)
+    and (.mcp | has("legacy-disabled") | not)
+  ' "$OPENCODE_CONFIG" >/dev/null || {
+    echo "task-local V2 MCP migration did not preserve legacy disabled/timeout state" >&2
+    exit 65
+  }
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
     printf '%s\n' 'caracal-rag connected'
     exit 0
@@ -551,17 +564,14 @@ if [ "${1:-}" = "run" ]; then
   sibling_real="$(realpath -e "$SIBLING_WORKSPACE")"
   workspace_base_real="$(realpath -e "$MANUL_WORKSPACE")"
   expected_workdir_real="$(realpath -e "$EXPECTED_PRIMARY_CHECKOUT")"
-  jq -e --arg active "$active_real" --arg activeGlob "$active_real/**" --arg globalPattern "$workspace_base_real/**" --arg sibling "$sibling_real" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$active_real" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$expected_workdir_real" '
-    .permission.external_directory as $rules
-    | ($rules[$globalPattern] == "deny")
-      and ($rules[$active] == "allow")
-      and ($rules[$activeGlob] == "allow")
-      and (($rules | keys_unsorted | index($globalPattern)) < ($rules | keys_unsorted | index($active)))
-      and (($rules | keys_unsorted | index($active)) < ($rules | keys_unsorted | index($activeGlob)))
-      and (($rules[$sibling] // "deny") == "deny")
-      and (($rules[$sibling + "/**"] // "deny") == "deny")
-      and ($taskRoot == $expectedRoot)
-      and ($workdir == $expectedWorkdir)
+  jq -e --arg active "$active_real" --arg activeGlob "$active_real/*" --arg globalPattern "$workspace_base_real/*" --arg sibling "$sibling_real" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$active_real" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$expected_workdir_real" '
+    def idx($a;$r;$e): ([.permissions|to_entries[]|select(.value.action==$a and .value.resource==$r and .value.effect==$e)|.key]|last // -1);
+    (idx("external_directory";$globalPattern;"deny")) as $deny
+    | (idx("external_directory";$active;"allow")) as $root
+    | (idx("external_directory";$activeGlob;"allow")) as $children
+    | ($deny>=0) and ($root>$deny) and ($children>$root)
+      and ([.permissions[]|select(.action=="external_directory" and .effect=="allow" and (.resource==$sibling or .resource==($sibling+"/*")))]|length==0)
+      and ($taskRoot==$expectedRoot) and ($workdir==$expectedWorkdir)
   ' "$OPENCODE_CONFIG" >/dev/null
   printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
 else
@@ -1239,7 +1249,12 @@ MOCK
   ! grep -Fq 'Do not repeat the denied operation' "$tmp/args" && ok "Recovery instruction is sent over stdin, not argv" || fail "Recovery instruction leaked into argv"
   grep -Fq "$active_workspace" "$tmp/initial-prompt" && ok "Initial prompt includes the actual assigned workspace" || fail "Initial prompt lacks capability workspace"
   grep -Fq "$active_workspace" "$tmp/recovery-prompt" && ok "Recovery prompt retains the capability workspace" || fail "Recovery prompt lacks capability workspace"
-  grep -Fq "$tmp/home/.gradle/caches/modules-2/files-2.1/**" "$tmp/initial-prompt" && ok "Capability snapshot lists effective external-directory allow rules" || fail "Capability snapshot omitted the configured Gradle cache rule"
+  grep -Fq "$tmp/home/.gradle/caches/modules-2/files-2.1/**" "$tmp/initial-prompt" \
+    && ok "Capability snapshot lists the configured Gradle cache rule" \
+    || fail "Capability snapshot omitted the configured Gradle cache rule"
+  grep -Fq 'Effective V2 external_directory permission rules' "$tmp/initial-prompt" \
+    && ok "Capability context documents V2 external-directory rules" \
+    || fail "Capability context lacks V2 permissions"
   grep -Fq 'not a guarantee that every bash command' "$tmp/initial-prompt" && ok "Capability snapshot explains tool-level restrictions" || fail "Capability snapshot omits tool-level caveat"
   ! grep -Fq 'daemon-8.11.1' "$tmp/initial-prompt" && ok "Capability snapshot does not imply access to denied daemon logs" || fail "Capability snapshot implied daemon log access"
   grep -Fq 'TASK_DONE recovered via an in-workspace alternative' "$tmp/stdout" && ok "Recovered completion marker is normalized" || fail "Recovered completion marker missing"
@@ -1368,16 +1383,19 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   [ "${FITEO_BASE_URL:-}" = "https://api.fiteo.example" ] &&
     [ "${FITEO_MANUL_PAT:-}" = "runtime-fiteo-pat" ]
   jq -e '
-    .mcp["other-server"].url == "https://example.invalid/mcp"
-    and .mcp["caracal-rag"].type == "remote"
-    and .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
-    and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
-    and .mcp["caracal-rag"].enabled == true
-    and .mcp["fiteo"].type == "remote"
-    and .mcp["fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
-    and .mcp["fiteo"].oauth == false
-    and .mcp["fiteo"].headers.Authorization == "Bearer {env:FITEO_MANUL_PAT}"
-    and .mcp["fiteo"].enabled == true
+    .mcp.servers["other-server"].url == "https://example.invalid/mcp"
+    and .mcp.servers["caracal-rag"].type == "remote"
+    and .mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    and .mcp.servers["caracal-rag"].disabled == false
+    and (.mcp | has("other-server") | not)
+    and (.mcp | has("caracal-rag") | not)
+    and (.mcp | has("fiteo") | not)
+    and .mcp.servers["fiteo"].type == "remote"
+    and .mcp.servers["fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
+    and .mcp.servers["fiteo"].oauth == false
+    and .mcp.servers["fiteo"].headers.Authorization == "Bearer {env:FITEO_MANUL_PAT}"
+    and .mcp.servers["fiteo"].disabled == false
     and .tools["caracal-rag_*"] == true
     and .tools["fiteo_*"] == true
     and .tools["manul_fiteo_create_task"] == true
@@ -1521,25 +1539,25 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   config="${OPENCODE_CONFIG:?effective task config missing}"
   expected="${TODO_LOCAL_MCP_AVAILABLE:-0}"
   jq -e --arg expected "$expected" '
-    .mcp["other-server"].url == "https://example.invalid/mcp"
-    and .mcp["caracal-rag"].type == "remote"
-    and .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
-    and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
-    and .mcp["caracal-rag"].enabled == true
+    .mcp.servers["other-server"].url == "https://example.invalid/mcp"
+    and .mcp.servers["caracal-rag"].type == "remote"
+    and .mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    and .mcp.servers["caracal-rag"].disabled == false
     and .tools["caracal-rag_*"] == true
     and .agent.coder.tools["caracal-rag_*"] == true
     and .agent.chat.tools["caracal-rag_*"] == null
     and (
       if $expected == "1" then
-        .mcp["todo-local"].type == "remote"
-        and .mcp["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
-        and .mcp["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
-        and .mcp["todo-local"].enabled == true
+        .mcp.servers["todo-local"].type == "remote"
+        and .mcp.servers["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
+        and .mcp.servers["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
+        and .mcp.servers["todo-local"].disabled == false
         and .tools["todo-local_*"] == true
         and .agent.coder.tools["todo-local_*"] == true
         and .agent.chat.tools["todo-local_*"] == null
       else
-        .mcp["todo-local"] == null
+        .mcp.servers["todo-local"] == null
         and .tools["todo-local_*"] == null
         and .agent.coder.tools["todo-local_*"] == null
       end

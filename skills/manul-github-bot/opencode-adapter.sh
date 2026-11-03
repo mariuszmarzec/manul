@@ -175,8 +175,8 @@ OPENCODE_TASK_CONFIG_DIR=""
 OPENCODE_MANUL_TOOL_SOURCE=""
 OPENCODE_MANUL_TOOL_TARGET=""
 OPENCODE_MANUL_TOOL_CREATED=false
-OPENCODE_PROJECT_TOOLS_DIR=""
-OPENCODE_PROJECT_TOOLS_DIR_CREATED=false
+OPENCODE_PROJECT_PLUGINS_DIR=""
+OPENCODE_PROJECT_PLUGINS_DIR_CREATED=false
 OPENCODE_PROJECT_CONFIG_DIR=""
 OPENCODE_PROJECT_CONFIG_DIR_CREATED=false
 
@@ -190,10 +190,10 @@ cleanup_opencode_task_config() {
             rm -f -- "$OPENCODE_MANUL_TOOL_TARGET"
         fi
     fi
-    if [ "$OPENCODE_PROJECT_TOOLS_DIR_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_PROJECT_TOOLS_DIR:-}" ] &&
-       [ -d "$OPENCODE_PROJECT_TOOLS_DIR" ] && [ ! -L "$OPENCODE_PROJECT_TOOLS_DIR" ]; then
-        rmdir -- "$OPENCODE_PROJECT_TOOLS_DIR" 2>/dev/null || true
+    if [ "$OPENCODE_PROJECT_PLUGINS_DIR_CREATED" = "true" ] &&
+       [ -n "${OPENCODE_PROJECT_PLUGINS_DIR:-}" ] &&
+       [ -d "$OPENCODE_PROJECT_PLUGINS_DIR" ] && [ ! -L "$OPENCODE_PROJECT_PLUGINS_DIR" ]; then
+        rmdir -- "$OPENCODE_PROJECT_PLUGINS_DIR" 2>/dev/null || true
     fi
     if [ "$OPENCODE_PROJECT_CONFIG_DIR_CREATED" = "true" ] &&
        [ -n "${OPENCODE_PROJECT_CONFIG_DIR:-}" ] &&
@@ -207,18 +207,18 @@ cleanup_opencode_task_config() {
 }
 
 prepare_opencode_manul_tool() {
-    local project_config tools_dir existing_real
+    local project_config plugins_dir existing_real
     OPENCODE_MANUL_TOOL_SOURCE="$(realpath -e -- "$MANUL_SCRIPT_DIR/manul_fiteo_create_task.ts" 2>/dev/null || true)"
     if [ -z "$OPENCODE_MANUL_TOOL_SOURCE" ] || [ ! -f "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-        log "Manul Fiteo custom tool source is missing from the canonical runtime"
+        log "Manul Fiteo V2 plugin source is missing from the canonical runtime"
         return 1
     fi
 
     project_config="$OPT_WORKSPACE/.opencode"
-    tools_dir="$project_config/tools"
+    plugins_dir="$project_config/plugins"
     OPENCODE_PROJECT_CONFIG_DIR="$project_config"
-    OPENCODE_PROJECT_TOOLS_DIR="$tools_dir"
-    OPENCODE_MANUL_TOOL_TARGET="$tools_dir/manul_fiteo_create_task.ts"
+    OPENCODE_PROJECT_PLUGINS_DIR="$plugins_dir"
+    OPENCODE_MANUL_TOOL_TARGET="$plugins_dir/manul_fiteo_create_task.ts"
 
     # Do not follow project-controlled symlinks or overwrite existing config.
     if [ -L "$project_config" ] || { [ -e "$project_config" ] && [ ! -d "$project_config" ]; }; then
@@ -230,13 +230,13 @@ prepare_opencode_manul_tool() {
         OPENCODE_PROJECT_CONFIG_DIR_CREATED=true
     fi
 
-    if [ -L "$tools_dir" ] || { [ -e "$tools_dir" ] && [ ! -d "$tools_dir" ]; }; then
-        log "refusing to inject Manul tool: workspace .opencode/tools is not a real directory"
+    if [ -L "$plugins_dir" ] || { [ -e "$plugins_dir" ] && [ ! -d "$plugins_dir" ]; }; then
+        log "refusing to inject Manul tool: workspace .opencode/plugins is not a real directory"
         return 1
     fi
-    if [ ! -d "$tools_dir" ]; then
-        if ! mkdir -- "$tools_dir"; then return 1; fi
-        OPENCODE_PROJECT_TOOLS_DIR_CREATED=true
+    if [ ! -d "$plugins_dir" ]; then
+        if ! mkdir -- "$plugins_dir"; then return 1; fi
+        OPENCODE_PROJECT_PLUGINS_DIR_CREATED=true
     fi
 
     if [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
@@ -246,22 +246,22 @@ prepare_opencode_manul_tool() {
             # or an already prepared link owned by this exact runtime. Adopt it
             # so the EXIT trap removes it after the current invocation.
             OPENCODE_MANUL_TOOL_CREATED=true
-            log "adopted existing Manul Fiteo custom-tool link for this task invocation"
+            log "adopted existing Manul Fiteo V2 plugin link for this task invocation"
             return 0
         fi
-        log "refusing to overwrite an existing workspace custom-tool symlink"
+        log "refusing to overwrite an existing workspace V2 plugin symlink"
         return 1
     fi
     if [ -e "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        log "refusing to overwrite an existing workspace custom tool"
+        log "refusing to overwrite an existing workspace V2 plugin"
         return 1
     fi
     if ! ln -s "$OPENCODE_MANUL_TOOL_SOURCE" "$OPENCODE_MANUL_TOOL_TARGET"; then
-        log "failed to create task-local Manul Fiteo custom-tool link"
+        log "failed to create task-local Manul Fiteo V2 plugin link"
         return 1
     fi
     OPENCODE_MANUL_TOOL_CREATED=true
-    log "registered Manul Fiteo custom tool only in the active task workspace"
+    log "registered Manul Fiteo V2 plugin only in the active task workspace"
 }
 
 trap cleanup_opencode_task_config EXIT HUP INT TERM
@@ -316,8 +316,12 @@ if [ -z "$_workspace_real" ] || [ ! -d "$_workspace_real" ]; then
     exit 66
 fi
 
+if [ -z "${_workspace_base_real:-}" ]; then
+    _workspace_base_real="$(realpath -m -- "$MANUL_WORKSPACE")"
+fi
+
 if ! prepare_opencode_manul_tool; then
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Unable to prepare task-scoped Manul Fiteo custom tool without overwriting workspace configuration","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"manul_tool_scope","agent_started":false}}\n' "$OPT_TASK_ID"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Unable to prepare task-scoped Manul Fiteo V2 plugin without overwriting workspace configuration","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"manul_plugin_scope","agent_started":false}}\n' "$OPT_TASK_ID"
     exit 78
 fi
 
@@ -405,9 +409,9 @@ if [ -n "$_workdir_real" ]; then
     export MANUL_TASK_WORKDIR="$_workdir_real"
 fi
 
-# Build an invocation-local OpenCode config for every task. Merge Caracal into
-# it even when the operator's base config has no MCP entry. Use OpenCode's canonical named-server shape (.mcp["caracal-rag"]); do not
-# confuse it with OpenClaw's distinct .mcp.servers schema.
+# Build an invocation-local OpenCode V2 config for every task. Move legacy
+# named MCP entries under mcp.servers, preserve MCP-wide settings and migrate
+# legacy enabled/timeout fields before injecting Manul's required servers.
 # Preserve unrelated settings and keep the operator/global file immutable.
 OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
 _original_opencode_config="$_OPENCODE_BASE_CONFIG"
@@ -418,98 +422,98 @@ else
     _config_input="/dev/null"
 fi
 if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_base_real:-}" '
-    (.[0] // {})
-    | .permission.external_directory = (
-        if ($workspaceBase | length) > 0 then
-          ((.permission.external_directory // {})
-           | if type == "object" then . else {} end
-           | with_entries(
-               ((.key
-                 | if startswith("~/") then (env.HOME + .[1:])
-                   elif startswith("$HOME/") then (env.HOME + .[5:])
-                   else .
-                   end) as $path
-                | select((($path == $workspaceBase) or ($path | startswith($workspaceBase + "/"))) | not))
-             )
-           | . + {
-               ($workspaceBase + "/**"): "deny",
-               ($workspace): "allow",
-               ($workspace + "/**"): "allow"
-             })
-        else
-          ((.permission.external_directory // {}) | if type == "object" then . else {} end)
-        end
-      )
-    | .mcp = (
-        (.mcp // {}) | if type == "object" then . else {} end
-        | . + {
-            "caracal-rag": {
-              type: "remote",
-              url: "{env:CARACAL_MCP_URL}",
-              oauth: false,
-              enabled: true,
-              headers: {Authorization: "Bearer {env:CARACAL_ACCESS_TOKEN}"}
-            },
-            "fiteo": {
-              type: "remote",
-              url: "{env:FITEO_BASE_URL}/mcp",
-              oauth: false,
-              enabled: true,
-              headers: {Authorization: "Bearer {env:FITEO_MANUL_PAT}"}
+    def migrate_mcp_server:
+      . as $server
+      | (if ($server.timeout | type) == "number" then
+           .timeout = {catalog: $server.timeout, execution: $server.timeout}
+         else . end)
+      | if ($server | has("enabled")) then
+          .disabled = ($server.enabled | not) | del(.enabled)
+        else . end
+      | if has("clientId") then .client_id = .clientId | del(.clientId) else . end
+      | if has("clientSecret") then .client_secret = .clientSecret | del(.clientSecret) else . end
+      | if has("callbackPort") then .callback_port = .callbackPort | del(.callbackPort) else . end
+      | if has("redirectUri") then .redirect_uri = .redirectUri | del(.redirectUri) else . end;
+    (.[0] // {}) as $root
+    | ([
+        $root.permission // {} | to_entries[]? as $entry
+        | if ($entry.value | type) == "string" then
+            {
+              action: (if $entry.key == "bash" then "shell" elif $entry.key == "task" then "subagent" elif ($entry.key == "write" or $entry.key == "patch") then "edit" else $entry.key end),
+              resource: "*",
+              effect: $entry.value
             }
-          }
-      )
-    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true, "manul_fiteo_create_task": true, "fiteo_todo_create_task": false})
-    | .agent = (
-        (.agent // {})
-        | if type == "object" then
-            with_entries(
-              if .key == "chat" then .
-              else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*": true, "fiteo_*": true, "manul_fiteo_create_task": true, "fiteo_todo_create_task": false})
-              end
-            )
-          else {}
-          end
-      )
-    | if (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" then
-        .mcp = (
-            (.mcp // {}) | if type == "object" then . else {} end
-            | . + {
-                "todo-local": {
-                    type: "remote",
-                    url: "{env:TODO_LOCAL_MCP_URL}",
-                    oauth: false,
-                    enabled: true,
-                    headers: {Authorization: "Bearer {env:TODO_LOCAL_MCP_TOKEN}"}
-                }
+          elif ($entry.value | type) == "object" then
+            $entry.value | to_entries[]
+            | {
+                action: (if $entry.key == "bash" then "shell" elif $entry.key == "task" then "subagent" elif ($entry.key == "write" or $entry.key == "patch") then "edit" else $entry.key end),
+                resource: .key,
+                effect: .value
               }
-          )
-        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
-        | .agent = (
-            (.agent // {})
-            | if type == "object" then
-                with_entries(
-                  if .key == "chat" then .
-                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*": true})
-                  end
-                )
-              else {}
-              end
-          )
+          else empty end
+      ]) as $legacyPermissions
+    | ($root.mcp // {} | if type == "object" then . else {} end) as $mcp
+    | ($mcp.servers // {} | if type == "object" then . else {} end) as $nativeServers
+    | ($mcp | del(.servers, .timeout)) as $legacyServers
+    | $root
+    | .mcp = (
+        (if ($mcp.timeout | type) == "number" then
+           {timeout:{catalog:$mcp.timeout,execution:$mcp.timeout}}
+         elif ($mcp.timeout | type) == "object" then
+           {timeout:$mcp.timeout}
+         else {} end)
+        + {servers: (
+            ($legacyServers + $nativeServers)
+            | with_entries(.value |= migrate_mcp_server)
+            + {
+                "caracal-rag": {type:"remote",url:"{env:CARACAL_MCP_URL}",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:CARACAL_ACCESS_TOKEN}"}},
+                "fiteo": {type:"remote",url:"{env:FITEO_BASE_URL}/mcp",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:FITEO_MANUL_PAT}"}}
+              }
+          )}
+      )
+    | if (($mcp.timeout // null) | type) == "number" then
+        .mcp.timeout = {catalog:$mcp.timeout,execution:$mcp.timeout}
+      else .
+      end
+    | if (($root.experimental.mcp_timeout // null) | type) == "number" then
+        .mcp.timeout = (
+          (.mcp.timeout // {} | if type == "object" then . else {} end)
+          | . + {
+              catalog: (.catalog // $root.experimental.mcp_timeout),
+              execution: (.execution // $root.experimental.mcp_timeout)
+            }
+        )
+        | .experimental |= del(.mcp_timeout)
+      else .
+      end
+    | .permissions = (
+        ($legacyPermissions + ((.permissions // []) | if type == "array" then . else [] end))
+        | reduce [
+            {action:"external_directory",resource:($workspaceBase + "/*"),effect:"deny"},
+            {action:"external_directory",resource:$workspace,effect:"allow"},
+            {action:"external_directory",resource:($workspace + "/*"),effect:"allow"},
+            {action:"caracal_rag_*",resource:"*",effect:"allow"},
+            {action:"fiteo_*",resource:"*",effect:"allow"},
+            {action:"manul_fiteo_create_task",resource:"*",effect:"allow"},
+            {action:"fiteo_todo_create_task",resource:"*",effect:"deny"}
+          ][] as $rule (. ; map(select(.action != $rule.action or .resource != $rule.resource)) + [$rule])
+      )
+    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*":true,"fiteo_*":true,"manul_fiteo_create_task":true,"fiteo_todo_create_task":false})
+    | .agent = ((.agent // {}) | if type == "object" then with_entries(
+        if .key == "chat" then .
+        else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*":true,"fiteo_*":true,"manul_fiteo_create_task":true,"fiteo_todo_create_task":false})
+        end
+      ) else {} end)
+    | if (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" then
+        .mcp.servers["todo-local"] = {type:"remote",url:"{env:TODO_LOCAL_MCP_URL}",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:TODO_LOCAL_MCP_TOKEN}"}}
+        | .permissions = ((.permissions // []) | map(select(.action != "todo_local_*" or .resource != "*")) + [{action:"todo_local_*",resource:"*",effect:"allow"}])
+        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*":true})
+        | .agent = ((.agent // {}) | if type == "object" then with_entries(if .key == "chat" then . else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*":true}) end) else {} end)
       else
-        .mcp = ((.mcp // {}) | if type == "object" then . else {} end | del(."todo-local"))
+        .mcp.servers |= del(."todo-local")
+        | .permissions = ((.permissions // []) | map(select(.action != "todo_local_*" or .resource != "*")))
         | .tools = ((.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
-        | .agent = (
-            (.agent // {})
-            | if type == "object" then
-                with_entries(
-                  if .key == "chat" then .
-                  else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
-                  end
-                )
-              else {}
-              end
-          )
+        | .agent = ((.agent // {}) | if type == "object" then with_entries(if .key == "chat" then . else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*")) end) else {} end)
       end
 ' "$_config_input" >"$OPENCODE_CONFIG"; then
     cleanup_opencode_task_config
@@ -618,13 +622,12 @@ write_runtime_capability_context() {
     printf '%s\n' '- Only the primary checkout may be edited/delivered by default. Related checkouts explicitly declared read-only remain read-only.'
     printf '%s\n' '- Access is still subject to OpenCode tool-level and path-level decisions. An external-directory allow rule is not a guarantee that every bash command or tool call will be allowed.'
     printf '%s\n' '- Never inspect or modify sibling task workspaces, shared caches, Manul databases/logs/configuration, adapters, or other runtime state. Never try to bypass a denial via another tool, a different path, a symlink, a wrapper, or a reshaped command.'
-    printf '%s\n' '' 'Effective permission.external_directory rules (path patterns are JSON-quoted):'
+    printf '%s\n' '' 'Effective V2 external_directory permission rules (path patterns are JSON-quoted):'
     if [ -n "${OPENCODE_CONFIG:-}" ] && [ -r "$OPENCODE_CONFIG" ]; then
         _runtime_capability_rules="$(jq -r '
-            (.permission.external_directory // {})
-            | if type == "object" then to_entries[] else empty end
-            | select(.value == "allow" or .value == "deny" or .value == "ask")
-            | "  - " + (.key | tojson) + " => " + (.value | tostring)
+            (.permissions // [])[]?
+            | select(.action == "external_directory")
+            | "  - " + (.resource | tojson) + " => " + (.effect | tostring)
         ' "$OPENCODE_CONFIG" 2>/dev/null || true)"
         if [ -n "$_runtime_capability_rules" ]; then
             printf '%s\n' "$_runtime_capability_rules"
