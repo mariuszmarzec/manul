@@ -497,8 +497,8 @@ MOCK
       --prompt "$tmp/prompt" --workspace "$tmp" --attempt 1 --timeout 10 \
       --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
   rc=$?
-  if [ "$rc" -ne 0 ] && printf '%s' "$out" | jq -e '.status == "FAILED" and .failure_code == "PRE_EXECUTION_FAILURE" and .diagnostics.stage == "manul_tool_scope"' >/dev/null; then
-    ok "OpenCode adapter fails closed on a task-local Manul tool name collision"
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | jq -e '.status == "FAILED" and .failure_code == "PRE_EXECUTION_FAILURE" and .diagnostics.stage == "manul_plugin_scope"' >/dev/null; then
+    ok "OpenCode adapter fails closed on a task-local Manul plugin name collision"
   else
     fail "OpenCode adapter did not fail closed on a task-local V2 plugin collision: $out"
   fi

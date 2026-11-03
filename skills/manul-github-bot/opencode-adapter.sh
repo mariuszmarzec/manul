@@ -215,7 +215,7 @@ prepare_opencode_manul_tool() {
     fi
 
     project_config="$OPT_WORKSPACE/.opencode"
-    plugins_dir="$project_config/tools"
+    plugins_dir="$project_config/plugins"
     OPENCODE_PROJECT_CONFIG_DIR="$project_config"
     OPENCODE_PROJECT_PLUGINS_DIR="$plugins_dir"
     OPENCODE_MANUL_TOOL_TARGET="$plugins_dir/manul_fiteo_create_task.ts"
@@ -426,12 +426,12 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
     | ($root.mcp // {} | if type == "object" then . else {} end) as $mcp
     | ($mcp.servers // {} | if type == "object" then . else {} end) as $nativeServers
     | ($mcp | del(.servers)) as $legacyServers
-    | .mcp = (($mcp | del(.servers)) + {servers: (
+    | .mcp = {servers: (
         $legacyServers + $nativeServers + {
           "caracal-rag": {type:"remote",url:"{env:CARACAL_MCP_URL}",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:CARACAL_ACCESS_TOKEN}"}},
           "fiteo": {type:"remote",url:"{env:FITEO_BASE_URL}/mcp",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:FITEO_MANUL_PAT}"}}
         }
-      )})
+      )}
     | .permissions = (
         ((.permissions // []) | if type == "array" then . else [] end)
         | reduce [

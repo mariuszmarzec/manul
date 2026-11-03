@@ -71,7 +71,7 @@ appropriate timeout cause, and retains raw JSONL/stderr diagnostics.
 
 For each OpenCode invocation, the adapter appends a runtime-capability snapshot
 to the initial prompt and every resumed turn. It identifies the assigned
-workspace and lists the effective `V2 `external_directory` permission` path rules
+workspace and lists the effective V2 `external_directory` permission rules
 from the invocation config without exposing the rest of the config. The snapshot
 is advisory context, not a permission grant: tool-level and path-level checks
 remain authoritative.
@@ -551,8 +551,8 @@ refreshed from the launcher's current environment while unrelated operator setti
 are preserved. Arbitrary environment variables are never copied.
 
 For an OpenCode task, `opencode-adapter.sh` adds the authenticated `caracal-rag`
-MCP entry to an invocation-local `opencode.json` using OpenCode's canonical
-`mcp["caracal-rag"]` schema. It does not mutate the operator's global config.
+MCP entry to an invocation-local `opencode.json` under the V2
+`mcp.servers["caracal-rag"]` schema. It does not mutate the operator's global config.
 Before starting the task, it runs `opencode mcp list` and refuses to launch the
 task unless Caracal reports a live connected status. A URL or token alone is not
 treated as proof of access.
@@ -560,9 +560,9 @@ treated as proof of access.
 The Manul-only `manul_fiteo_create_task` V2 plugin is registered only inside the active task workspace under `.opencode/plugins/`; it is never installed globally. The installer removes only a legacy
 Manul-owned global registration (a symlink to the Manul runtime tool or a
 byte-identical copy), preserving unrelated operator tools. It provisions the
-matching `@opencode-ai/plugin` dependency beside the canonical Manul skill.
+matching `@opencode/plugin` dependency beside the canonical Manul skill.
 For each OpenCode task, the adapter creates a temporary project-local symlink at
-`<task-workspace>/.opencode/tools/manul_fiteo_create_task.ts`; it refuses to
+`<task-workspace>/.opencode/plugins/manul_fiteo_create_task.ts`; it refuses to
 overwrite a pre-existing tool or follow a symlinked config directory. The
 adapter removes its own symlink and any empty directories it created on exit,
 including after errors or timeouts. This keeps aicode and unrelated OpenCode
