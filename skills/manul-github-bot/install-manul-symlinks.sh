@@ -202,7 +202,7 @@ for script in "${SCRIPTS[@]}"; do
     CHANGED=$((CHANGED + 1))
 done
 
-# The Manul custom tool imports @opencode/plugin. Keep that dependency beside
+# The Manul V2 plugin imports @opencode/plugin. Keep that dependency beside
 # its canonical source so module resolution still works when OpenCode follows
 # the task-local symlink back to this file. node_modules is ignored by Git.
 OPENCODE_PLUGIN_VERSION="${MANUL_OPENCODE_PLUGIN_VERSION:-2.2.5}"
@@ -214,20 +214,20 @@ if [ -f "$OPENCODE_PLUGIN_PACKAGE" ] && command -v node >/dev/null 2>&1 &&
     OPENCODE_PLUGIN_INSTALLED=true
 fi
 if $OPENCODE_PLUGIN_INSTALLED; then
-    echo "OK OpenCode tool dependency: @opencode/plugin@$OPENCODE_PLUGIN_VERSION"
+    echo "OK OpenCode V2 plugin dependency: @opencode/plugin@$OPENCODE_PLUGIN_VERSION"
 elif $DRY_RUN; then
-    echo "[dry-run] Would install @opencode/plugin@$OPENCODE_PLUGIN_VERSION beside the canonical Manul tool"
+    echo "[dry-run] Would install @opencode/plugin@$OPENCODE_PLUGIN_VERSION beside the canonical Manul plugin"
 elif command -v npm >/dev/null 2>&1; then
-    echo "Installing OpenCode tool dependency: @opencode/plugin@$OPENCODE_PLUGIN_VERSION"
+    echo "Installing OpenCode V2 plugin dependency: @opencode/plugin@$OPENCODE_PLUGIN_VERSION"
     if npm install --prefix "$CANONICAL_DIR" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
         "@opencode/plugin@$OPENCODE_PLUGIN_VERSION"; then
         CHANGED=$((CHANGED + 1))
     else
-        echo "ERROR: failed to install @opencode/plugin@$OPENCODE_PLUGIN_VERSION beside the canonical Manul tool" >&2
+        echo "ERROR: failed to install @opencode/plugin@$OPENCODE_PLUGIN_VERSION beside the canonical Manul plugin" >&2
         DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
     fi
 else
-    echo "ERROR: npm is required to install @opencode/plugin@$OPENCODE_PLUGIN_VERSION for Manul's OpenCode custom tool" >&2
+    echo "ERROR: npm is required to install @opencode/plugin@$OPENCODE_PLUGIN_VERSION for Manul's OpenCode V2 plugin" >&2
     DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
 fi
 

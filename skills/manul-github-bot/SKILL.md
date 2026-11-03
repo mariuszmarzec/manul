@@ -552,7 +552,7 @@ are preserved. Arbitrary environment variables are never copied.
 
 For an OpenCode task, `opencode-adapter.sh` adds the authenticated `caracal-rag`
 MCP entry to an invocation-local `opencode.json` under the V2
-`mcp.servers["caracal-rag"]` schema. It does not mutate the operator's global config.
+`mcp.servers["caracal-rag"]` schema with migrated V2 timeout settings. It does not mutate the operator's global config.
 Before starting the task, it runs `opencode mcp list` and refuses to launch the
 task unless Caracal reports a live connected status. A URL or token alone is not
 treated as proof of access.

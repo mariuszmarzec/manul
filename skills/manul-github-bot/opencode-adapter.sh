@@ -409,9 +409,9 @@ if [ -n "$_workdir_real" ]; then
     export MANUL_TASK_WORKDIR="$_workdir_real"
 fi
 
-# Build an invocation-local OpenCode config for every task. Merge Caracal into
-# it even when the operator's base config has no MCP entry. Use OpenCode's canonical named-server shape (.mcp["caracal-rag"]); do not
-# confuse it with OpenClaw's distinct .mcp.servers schema.
+# Build an invocation-local OpenCode V2 config for every task. Move legacy
+# named MCP entries under mcp.servers, preserve MCP-wide settings and migrate
+# legacy enabled/timeout fields before injecting Manul's required servers.
 # Preserve unrelated settings and keep the operator/global file immutable.
 OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
 _original_opencode_config="$_OPENCODE_BASE_CONFIG"
@@ -422,16 +422,48 @@ else
     _config_input="/dev/null"
 fi
 if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_base_real:-}" '
+    def migrate_mcp_server:
+      . as $server
+      | (if ($server.timeout | type) == "number" then
+           .timeout = {catalog: $server.timeout, execution: $server.timeout}
+         else . end)
+      | if ($server | has("enabled")) then
+          .disabled = ($server.enabled | not) | del(.enabled)
+        else . end
+      | if has("clientId") then .client_id = .clientId | del(.clientId) else . end
+      | if has("clientSecret") then .client_secret = .clientSecret | del(.clientSecret) else . end
+      | if has("callbackPort") then .callback_port = .callbackPort | del(.callbackPort) else . end
+      | if has("redirectUri") then .redirect_uri = .redirectUri | del(.redirectUri) else . end;
     (.[0] // {}) as $root
     | ($root.mcp // {} | if type == "object" then . else {} end) as $mcp
     | ($mcp.servers // {} | if type == "object" then . else {} end) as $nativeServers
-    | ($mcp | del(.servers)) as $legacyServers
-    | .mcp = {servers: (
-        $legacyServers + $nativeServers + {
-          "caracal-rag": {type:"remote",url:"{env:CARACAL_MCP_URL}",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:CARACAL_ACCESS_TOKEN}"}},
-          "fiteo": {type:"remote",url:"{env:FITEO_BASE_URL}/mcp",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:FITEO_MANUL_PAT}"}}
-        }
-      )}
+    | ($mcp | del(.servers, .timeout)) as $legacyServers
+    | .mcp = (
+        ($mcp | del(.servers))
+        + {servers: (
+            ($legacyServers + $nativeServers)
+            | with_entries(.value |= migrate_mcp_server)
+            + {
+                "caracal-rag": {type:"remote",url:"{env:CARACAL_MCP_URL}",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:CARACAL_ACCESS_TOKEN}"}},
+                "fiteo": {type:"remote",url:"{env:FITEO_BASE_URL}/mcp",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:FITEO_MANUL_PAT}"}}
+              }
+          )}
+      )
+    | if (($mcp.timeout // null) | type) == "number" then
+        .mcp.timeout = {catalog:$mcp.timeout,execution:$mcp.timeout}
+      else .
+      end
+    | if (($root.experimental.mcp_timeout // null) | type) == "number" then
+        .mcp.timeout = (
+          (.mcp.timeout // {} | if type == "object" then . else {} end)
+          | . + {
+              catalog: (.catalog // $root.experimental.mcp_timeout),
+              execution: (.execution // $root.experimental.mcp_timeout)
+            }
+        )
+        | .experimental |= del(.mcp_timeout)
+      else .
+      end
     | .permissions = (
         ((.permissions // []) | if type == "array" then . else [] end)
         | reduce [
