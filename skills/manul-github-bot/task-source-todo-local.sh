@@ -30,7 +30,7 @@ todo_source_local_config() {
 
   jq -c --arg url "$url" '
     .url = $url
-    | .tokenEnv = (.tokenEnv // "TODO_LOCAL_MCP_TOKEN")
+    | del(.tokenEnv)
   ' <<<"$source_json"
 }
 task_source_todo_local_poll() {

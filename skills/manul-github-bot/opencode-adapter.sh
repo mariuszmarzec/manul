@@ -18,6 +18,7 @@ MANUL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$MANUL_SCRIPT_DIR/manul-paths.sh"
 source "$MANUL_SCRIPT_DIR/process-runner.sh"
 source "$MANUL_SCRIPT_DIR/todo-local-mcp-url.sh"
+unset TODO_LOCAL_MCP_TOKEN
 
 OPT_TASK_ID=""
 OPT_PROMPT=""
@@ -347,25 +348,6 @@ if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
 fi
 export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
 
-# Read only Todo's token from the runtime env file in a child shell. The daemon
-# can live longer than aicode, so refresh this one value per task without
-# re-sourcing the file into this shell and overwriting Caracal's live settings.
-_TODO_LOCAL_ENV_FILE="$MANUL_DIR/.env"
-if [ -f "$_TODO_LOCAL_ENV_FILE" ]; then
-    if bash -n "$_TODO_LOCAL_ENV_FILE" >/dev/null 2>&1; then
-        _todo_local_runtime_token="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s" "${TODO_LOCAL_MCP_TOKEN:-}"' _ "$_TODO_LOCAL_ENV_FILE" 2>/dev/null)" || _todo_local_runtime_token=""
-        if [ -n "$_todo_local_runtime_token" ]; then
-            TODO_LOCAL_MCP_TOKEN="$_todo_local_runtime_token"
-            export TODO_LOCAL_MCP_TOKEN
-        else
-            unset TODO_LOCAL_MCP_TOKEN 2>/dev/null || true
-        fi
-    else
-        log "Todo local MCP token environment file has invalid shell syntax; Todo MCP will be skipped"
-        unset TODO_LOCAL_MCP_TOKEN 2>/dev/null || true
-    fi
-fi
-
 # The daemon can outlive an aicode launch. Refresh Fiteo credentials from the
 # latest runtime file for every task, while leaving unrelated inherited values
 # untouched. The endpoint and PAT are stored atomically by manul-env.sh.
@@ -389,13 +371,13 @@ fi
 TODO_LOCAL_MCP_AVAILABLE=0
 TODO_LOCAL_MCP_CONNECTED=0
 unset TODO_LOCAL_MCP_URL
-if [ -n "${TODO_LOCAL_MCP_TOKEN:-}" ] && command -v curl >/dev/null 2>&1; then
+if command -v python3 >/dev/null 2>&1; then
     _todo_local_resolved_url="$(todo_local_mcp_resolve_url "")" || _todo_local_resolved_url=""
     if [ -n "$_todo_local_resolved_url" ]; then
         TODO_LOCAL_MCP_URL="$_todo_local_resolved_url"
         TODO_LOCAL_MCP_AVAILABLE=1
         TODO_LOCAL_MCP_CONNECTED=1
-        log "Todo local MCP is reachable at $TODO_LOCAL_MCP_URL; adding it to the task-scoped OpenCode config"
+        log "Todo local MCP initialize/tools/list handshake succeeded at $TODO_LOCAL_MCP_URL; adding it to the task-scoped OpenCode config"
     else
         log "Todo local MCP is unavailable on the current host; continuing without this optional MCP"
     fi
@@ -505,7 +487,7 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
         end
       ) else {} end)
     | if (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" then
-        .mcp.servers["todo-local"] = {type:"remote",url:"{env:TODO_LOCAL_MCP_URL}",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:TODO_LOCAL_MCP_TOKEN}"}}
+        .mcp.servers["todo-local"] = {type:"remote",url:"{env:TODO_LOCAL_MCP_URL}",oauth:false,disabled:false}
         | .permissions = ((.permissions // []) | map(select(.action != "todo_local_*" or .resource != "*")) + [{action:"todo_local_*",resource:"*",effect:"allow"}])
         | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*":true})
         | .agent = ((.agent // {}) | if type == "object" then with_entries(if .key == "chat" then . else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*":true}) end) else {} end)
@@ -574,7 +556,7 @@ except OSError as exc:
     print(f"<unable to read captured output: {exc.__class__.__name__}>")
     raise SystemExit(0)
 
-for token_name in ("CARACAL_ACCESS_TOKEN", "TODO_LOCAL_MCP_TOKEN"):
+for token_name in ("CARACAL_ACCESS_TOKEN",):
     token = os.environ.get(token_name, "")
     if token:
         content = content.replace(token, "[REDACTED]")

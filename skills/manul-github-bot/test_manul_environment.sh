@@ -256,29 +256,42 @@ else
 fi
 assert_file_mode_600 "$FITEO_ENV_FILE"
 
-# Todo's token comes from aicode's inherited exported environment (e.g. .zshrc)
-# and must refresh in the runtime file even when a prior token already exists.
-TODO_RUNTIME="$TMP/todo-token-runtime"
+# Legacy Todo credentials are discarded without being loaded; unrelated
+# operator settings remain intact.
+TODO_RUNTIME="$TMP/todo-legacy-credential-runtime"
 mkdir -p "$TODO_RUNTIME"
 cat > "$TODO_RUNTIME/.env" <<'EOF'
 OPENCODE_CONFIG=/operator/chosen/opencode.json
-TODO_LOCAL_MCP_TOKEN=old-todo-token
+TODO_LOCAL_MCP_TOKEN=legacy-fixture-value
 EOF
 chmod 600 "$TODO_RUNTIME/.env"
-TODO_LOCAL_MCP_TOKEN="new-todo-token"
-export TODO_LOCAL_MCP_TOKEN
 TODO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$TODO_RUNTIME")"
 if (
-  unset TODO_LOCAL_MCP_TOKEN OPENCODE_CONFIG
-  source "$TODO_ENV_FILE"
-  [ "$TODO_LOCAL_MCP_TOKEN" = "new-todo-token" ] &&
-  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
+  ! grep -q 'TODO_LOCAL_MCP_TOKEN' "$TODO_ENV_FILE" &&
+  grep -q '^OPENCODE_CONFIG=/operator/chosen/opencode.json$' "$TODO_ENV_FILE"
 ); then
-  ok "Bootstrap refreshes Todo local MCP token while preserving unrelated operator settings"
+  ok "Bootstrap discards legacy Todo credentials while preserving unrelated operator settings"
 else
-  fail "Bootstrap did not refresh the Todo local MCP token correctly"
+  fail "Bootstrap retained a legacy Todo credential or changed unrelated settings"
 fi
 assert_file_mode_600 "$TODO_ENV_FILE"
+
+TODO_LOAD_RUNTIME="$TMP/todo-legacy-load-runtime"
+mkdir -p "$TODO_LOAD_RUNTIME"
+cat > "$TODO_LOAD_RUNTIME/.env" <<'EOF'
+TODO_LOCAL_MCP_TOKEN=legacy-fixture-value
+EOF
+chmod 600 "$TODO_LOAD_RUNTIME/.env"
+if (
+  unset TODO_LOCAL_MCP_TOKEN
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$TODO_LOAD_RUNTIME"
+  [ -z "${TODO_LOCAL_MCP_TOKEN:-}" ]
+); then
+  ok "Environment loader never imports a legacy Todo credential"
+else
+  fail "Environment loader imported a legacy Todo credential"
+fi
 
 INVALID="$TMP/invalid"
 mkdir -p "$INVALID"

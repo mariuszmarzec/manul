@@ -8,6 +8,7 @@ BIN="$TEST_DIR/bin"
 mkdir -p "$BIN"
 trap 'rm -rf "$TEST_DIR"' EXIT
 PYTHON_BIN="$(command -v python3)"
+unset TODO_LOCAL_MCP_TOKEN
 
 PASS=0
 FAIL=0
@@ -21,6 +22,30 @@ assert_rc() { [[ "$2" == "$3" ]] && ok "$1" || fail "$1 (expected rc=$2, got rc=
 cat > "$BIN/python3" <<'PYTHON'
 #!/usr/bin/env bash
 set -uo pipefail
+if [[ " $* " == *" --probe "* ]]; then
+  url=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --url) url="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$url" in
+    http://127.0.0.1:8765/mcp) status="$(printenv TODO_LOCAL_MCP_DIRECT_STATUS 2>/dev/null || printf '200')" ;;
+    http://127.0.0.1:8766/mcp) status="$(printenv TODO_LOCAL_MCP_BRIDGE_STATUS 2>/dev/null || printf '000')" ;;
+    *) status="000" ;;
+  esac
+  case "$status" in
+    200) exit 0 ;;
+    401|403) exit 3 ;;
+    *) exit 1 ;;
+  esac
+fi
+if [[ "$*" =~ http://127\.0\.0\.1:876[56]/mcp ]] &&
+   [[ " $* " == *" --token-env "* ]]; then
+  echo "local Todo MCP unexpectedly received token configuration" >&2
+  exit 2
+fi
 if [[ " $* " != *" --tool "* ]]; then
   exec "$REAL_PYTHON_BIN" "$@"
 fi
@@ -118,32 +143,10 @@ esac
 PYTHON
 chmod +x "$BIN/python3"
 export REAL_PYTHON_BIN="$PYTHON_BIN"
-cat > "$BIN/curl" <<'CURL'
-#!/usr/bin/env bash
-set -uo pipefail
-url=""
-for arg in "$@"; do url="$arg"; done
-case "$url" in
-  http://127.0.0.1:8765/mcp)
-    status="$(printenv TODO_LOCAL_MCP_DIRECT_STATUS 2>/dev/null || printf '401')"
-    ;;
-  http://127.0.0.1:8766/mcp)
-    status="$(printenv TODO_LOCAL_MCP_BRIDGE_STATUS 2>/dev/null || printf '000')"
-    ;;
-  *)
-    status="000"
-    ;;
-esac
-printf '%s' "$status"
-[ "$status" = "401" ] && exit 0
-exit 7
-CURL
-chmod +x "$BIN/curl"
 export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=native
-export TODO_LOCAL_MCP_DIRECT_STATUS=401
+export TODO_LOCAL_MCP_DIRECT_STATUS=200
 export TODO_LOCAL_MCP_BRIDGE_STATUS=000
 export PATH="$BIN:$PATH"
-export TODO_LOCAL_MCP_TOKEN="local-test-token"
 export FITEO_MANUL_PAT="remote-test-token"
 export FITEO_BASE_URL="https://fiteo.example.test"
 export MANUL_USER_ID=77
@@ -200,6 +203,29 @@ export TODO_TASK_REPOSITORY_CATALOG="$TEST_DIR/project-repositories.json"
 source "$SCRIPT_DIR/task-source-todo-local.sh"
 source "$SCRIPT_DIR/task-source-todo-remote.sh"
 source "$SCRIPT_DIR/manul-env.sh"
+
+for auth_status in 401 403; do
+  export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=native
+  export TODO_LOCAL_MCP_DIRECT_STATUS="$auth_status"
+  export TODO_LOCAL_MCP_BRIDGE_STATUS=200
+  if todo_local_mcp_resolve_url "" >/dev/null 2>&1; then
+    fail "native Todo endpoint HTTP $auth_status is not an unauthenticated MCP connection"
+  else
+    ok "native Todo endpoint HTTP $auth_status is rejected"
+  fi
+
+  export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=wsl
+  export TODO_LOCAL_MCP_DIRECT_STATUS=000
+  export TODO_LOCAL_MCP_BRIDGE_STATUS="$auth_status"
+  if todo_local_mcp_resolve_url "" >/dev/null 2>&1; then
+    fail "WSL relay HTTP $auth_status is not an unauthenticated MCP connection"
+  else
+    ok "WSL relay HTTP $auth_status is rejected"
+  fi
+done
+export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=native
+export TODO_LOCAL_MCP_DIRECT_STATUS=200
+export TODO_LOCAL_MCP_BRIDGE_STATUS=000
 
 cat > "$TEST_DIR/local.json" <<'JSON'
 [
@@ -381,7 +407,7 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
 ]
 JSON
 
-LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"TODO_LOCAL_MCP_TOKEN"}'
+LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"ignored-legacy-setting"}'
 REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp"}'
 remote_resolved_config="$(todo_source_remote_config "$REMOTE_SOURCE")"
 assert_eq "remote URL expands the Fiteo base URL environment placeholder" "https://fiteo.example.test/mcp" "$(jq -r '.url' <<<"$remote_resolved_config")"
@@ -505,7 +531,7 @@ cat > "$TEST_DIR/local-question.json" <<'JSON'
   {"id":490,"description":"/manul what day is today?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
 JSON
-LOCAL_QUESTION_SOURCE='{"type":"todo_local_mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+LOCAL_QUESTION_SOURCE='{"type":"todo_local_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
 
 export TODO_MCP_FIXTURE="$TEST_DIR/local-question.json"
 local_question_task="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
@@ -515,15 +541,15 @@ assert_eq "plain local /manul question does not require repository metadata" "nu
 export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8765/mcp'
 
-# WSL prefers direct loopback but falls back to its authenticated bridge when
+# WSL prefers direct loopback but falls back to its reverse bridge when
 # Todo Desktop runs on the Windows host and direct loopback is unavailable.
 export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=wsl
 export TODO_LOCAL_MCP_DIRECT_STATUS=000
-export TODO_LOCAL_MCP_BRIDGE_STATUS=401
+export TODO_LOCAL_MCP_BRIDGE_STATUS=200
 wsl_local_config="$(todo_source_local_config "$LOCAL_SOURCE")"
 assert_contains "WSL falls back to the existing Todo bridge when direct loopback is unavailable" "$wsl_local_config" 'http://127.0.0.1:8766/mcp'
 export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=native
-export TODO_LOCAL_MCP_DIRECT_STATUS=401
+export TODO_LOCAL_MCP_DIRECT_STATUS=200
 export TODO_LOCAL_MCP_BRIDGE_STATUS=000
 assert_contains "local Todo accepts localhost on another port" "$(todo_source_local_config '{"type":"todo_local_mcp","url":"http://localhost:9876/mcp"}')" 'http://localhost:9876/mcp'
 assert_contains "local Todo accepts IPv6 loopback" "$(todo_source_local_config '{"type":"todo_local_mcp","url":"http://[::1]:8766/mcp"}')" 'http://[::1]:8766/mcp'
@@ -672,7 +698,7 @@ cat > "$TEST_DIR/local-report.json" <<'JSON'
   {"id":501,"description":"/manul report Summarize local report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
 JSON
-LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","tokenEnv":"TODO_LOCAL_MCP_TOKEN","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
 export TODO_MCP_FIXTURE="$TEST_DIR/local-report.json"
 local_report_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
 local_report_prompt="$(jq -r '.prompt' <<<"$local_report_task")"

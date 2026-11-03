@@ -1598,20 +1598,26 @@ test_opencode_todo_local_mcp() {
   }
 }
 JSON
-  cat >"$home/.manul/.env" <<'ENV'
-TODO_LOCAL_MCP_TOKEN=runtime-todo-token
-ENV
-  chmod 600 "$home/.manul/.env"
-  cat >"$tmp/bin/curl" <<'MOCK'
+  local real_python3
+  real_python3="$(command -v python3)"
+  cat >"$tmp/bin/python3" <<'MOCK'
 #!/usr/bin/env bash
-status="${MOCK_TODO_PROBE_STATUS:-401}"
-printf '%s' "$status"
-[ "$status" = "401" ] && exit 0
-exit 7
+if [[ "${1:-}" == *"/todo-mcp-client.py" && " $* " == *" --probe "* ]]; then
+  case "${MOCK_TODO_PROBE_STATUS:-200}" in
+    200) exit 0 ;;
+    401|403) exit 3 ;;
+    *) exit 1 ;;
+  esac
+fi
+exec "$MOCK_REAL_PYTHON3" "$@"
 MOCK
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ -n "${TODO_LOCAL_MCP_TOKEN:-}" ]; then
+  echo "legacy Todo credential leaked into OpenCode" >&2
+  exit 1
+fi
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   config="${OPENCODE_CONFIG:?effective task config missing}"
   expected="${TODO_LOCAL_MCP_AVAILABLE:-0}"
@@ -1628,7 +1634,8 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
       if $expected == "1" then
         .mcp.servers["todo-local"].type == "remote"
         and .mcp.servers["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
-        and .mcp.servers["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
+        and (.mcp.servers["todo-local"] | has("headers") | not)
+        and ((. | tostring) | contains("TODO_LOCAL_MCP_TOKEN") | not)
         and .mcp.servers["todo-local"].disabled == false
         and .tools["todo-local_*"] == true
         and .agent.coder.tools["todo-local_*"] == true
@@ -1648,7 +1655,6 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
       exit 0
     fi
     printf '%s\n' 'todo-local failed'
-    printf 'Authorization: Bearer %s\n' "${TODO_LOCAL_MCP_TOKEN:-}" >&2
     exit 1
   fi
   exit 0
@@ -1659,15 +1665,14 @@ printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_todo","par
 printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_todo","part":{"type":"text","text":"TASK_DONE todo local verified"}}'
 printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_todo","part":{"type":"step-finish"}}'
 MOCK
-  chmod +x "$tmp/bin/curl" "$tmp/bin/opencode"
+  chmod +x "$tmp/bin/python3" "$tmp/bin/opencode"
   printf '%s\n' "Use Todo local MCP if available" >"$tmp/prompt"
 
   local out rc
-  # A long-lived daemon must read the latest token saved by aicode, not an
-  # inherited stale value from when the daemon originally started.
-  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+  # Todo MCP is optional, unauthenticated, and must not inherit a legacy token.
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" MOCK_REAL_PYTHON3="$real_python3" OPENCODE_BIN="$tmp/bin/opencode" \
     CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
-    TODO_LOCAL_MCP_TOKEN="stale-inherited-token" MOCK_TODO_PROBE_STATUS=401 \
+    MOCK_TODO_PROBE_STATUS=200 \
     MOCK_TODO_MCP_STATE=connected MOCK_CONFIG_CHECK_FILE="$tmp/connected-config-checked" \
     MOCK_TASK_STARTED_FILE="$tmp/connected-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
@@ -1677,13 +1682,13 @@ MOCK
   rc=$?
   assert_json_status "$out" "COMPLETED" "OpenCode runs task with Todo local MCP connected"
   [ "$rc" -eq 0 ] && ok "Connected Todo local MCP permits task execution" || fail "Todo connected rc=$rc"
-  [ -f "$tmp/connected-config-checked" ] && ok "Task-scoped config injects Todo local with the runtime token placeholder" || fail "Todo local config injection failed"
+  [ -f "$tmp/connected-config-checked" ] && ok "Task-scoped config injects tokenless Todo local MCP" || fail "Todo local config injection failed"
   [ -f "$tmp/connected-task-started" ] && ok "Task starts after Todo local preflight passes" || fail "Task did not start after Todo local preflight passed"
 
   rm -f "$tmp/connected-config-checked" "$tmp/connected-task-started"
-  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" MOCK_REAL_PYTHON3="$real_python3" OPENCODE_BIN="$tmp/bin/opencode" \
     CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
-    MOCK_TODO_PROBE_STATUS=401 MOCK_TODO_MCP_STATE=disconnected \
+    MOCK_TODO_PROBE_STATUS=200 MOCK_TODO_MCP_STATE=disconnected \
     MOCK_CONFIG_CHECK_FILE="$tmp/disconnected-config-checked" MOCK_TASK_STARTED_FILE="$tmp/disconnected-task-started" \
     MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
@@ -1697,17 +1702,9 @@ MOCK
     && ok "Todo local connection failure has a distinct preflight stage" \
     || fail "Todo local preflight stage missing"
   [ ! -f "$tmp/disconnected-task-started" ] && ok "Task does not start without connected Todo local MCP" || fail "Task started despite disconnected Todo local MCP"
-  grep -Fq 'Todo local MCP preflight stderr: Authorization: Bearer [REDACTED]' "$tmp/disconnected.stderr" \
-    && ok "Todo local token is redacted from preflight diagnostics" \
-    || fail "Todo local token was not redacted"
-  if grep -Fq 'runtime-todo-token' "$tmp/disconnected.stderr"; then
-    fail "Todo local preflight diagnostics leaked the bearer token"
-  else
-    ok "Todo local preflight diagnostics do not expose the bearer token"
-  fi
 
   rm -f "$tmp/disconnected-config-checked" "$tmp/disconnected-task-started"
-  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" MOCK_REAL_PYTHON3="$real_python3" OPENCODE_BIN="$tmp/bin/opencode" \
     CARACAL_MCP_URL="http://127.0.0.1:3400/mcp" CARACAL_ACCESS_TOKEN="caracal-test-token" \
     MOCK_TODO_PROBE_STATUS=000 MOCK_CONFIG_CHECK_FILE="$tmp/unavailable-config-checked" \
     MOCK_TASK_STARTED_FILE="$tmp/unavailable-task-started" MANUL_DIR="$home/.manul" AGENT_RUNTIME=opencode \

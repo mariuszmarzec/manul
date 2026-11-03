@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -28,6 +29,22 @@ PROTOCOL_VERSION = "2025-06-18"
 
 class McpClientError(RuntimeError):
     pass
+
+
+class McpAuthenticationError(McpClientError):
+    pass
+
+
+def is_loopback_url(url: str) -> bool:
+    try:
+        host = urlsplit(url).hostname
+        if host is None:
+            return False
+        if host.casefold() == "localhost":
+            return True
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def parse_payload(body: bytes, content_type: str) -> dict[str, Any] | None:
@@ -59,7 +76,7 @@ def parse_payload(body: bytes, content_type: str) -> dict[str, Any] | None:
 
 
 class StreamableHttpClient:
-    def __init__(self, url: str, token: str, timeout: float) -> None:
+    def __init__(self, url: str, token: str | None, timeout: float) -> None:
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise McpClientError("MCP URL must be an absolute HTTP(S) URL")
@@ -75,10 +92,11 @@ class StreamableHttpClient:
 
     def post(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         headers = {
-            "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
         if self.initialized:
@@ -95,8 +113,8 @@ class StreamableHttpClient:
                 return parse_payload(response.read(), response.headers.get("Content-Type", ""))
         except urllib.error.HTTPError as error:
             # Do not include request headers, URL credentials, or response bodies in diagnostics.
-            if error.code == 401:
-                raise McpClientError("MCP authentication failed (HTTP 401)") from None
+            if error.code in {401, 403}:
+                raise McpAuthenticationError(f"MCP endpoint requires authentication (HTTP {error.code})") from None
             if error.code in {404, 405}:
                 raise McpClientError(f"MCP endpoint rejected the request (HTTP {error.code})") from None
             raise McpClientError(f"MCP request failed (HTTP {error.code})") from None
@@ -132,10 +150,8 @@ class StreamableHttpClient:
             }
         )
 
-    def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
-        if name not in ALLOWED_TOOLS:
-            raise McpClientError("Tool is not in the Manul Todo MCP allow-list")
-        initialized = self.request(
+    def initialize(self) -> dict[str, Any]:
+        result = self.request(
             "initialize",
             {
                 "protocolVersion": PROTOCOL_VERSION,
@@ -146,12 +162,31 @@ class StreamableHttpClient:
                 },
             },
         )
-        negotiated_version = initialized.get("protocolVersion")
+        negotiated_version = result.get("protocolVersion")
         if not isinstance(negotiated_version, str) or not negotiated_version:
             raise McpClientError("MCP initialize response did not negotiate a protocol version")
+        if not isinstance(result.get("capabilities"), dict) or not isinstance(result.get("serverInfo"), dict):
+            raise McpClientError("MCP initialize response is incomplete")
         self.protocol_version = negotiated_version
         self.initialized = True
         self.notify_initialized()
+        return result
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        result = self.request("tools/list")
+        tools = result.get("tools")
+        if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
+            raise McpClientError("MCP tools/list response is invalid")
+        return tools
+
+    def probe(self) -> list[dict[str, Any]]:
+        self.initialize()
+        return self.list_tools()
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        if name not in ALLOWED_TOOLS:
+            raise McpClientError("Tool is not in the Manul Todo MCP allow-list")
+        self.initialize()
         result = self.request(
             "tools/call",
             {
@@ -191,21 +226,46 @@ class StreamableHttpClient:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--token-env", required=True)
-    parser.add_argument("--tool", required=True, choices=sorted(ALLOWED_TOOLS))
+    parser.add_argument("--token-env")
+    parser.add_argument("--probe", action="store_true")
+    parser.add_argument("--tool", choices=sorted(ALLOWED_TOOLS))
     parser.add_argument("--arguments", default="{}")
     parser.add_argument("--timeout", type=float, default=15.0)
     args = parser.parse_args()
 
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.token_env):
-        parser.error("--token-env must be an environment variable name")
     if not 1 <= args.timeout <= 120:
         parser.error("--timeout must be between 1 and 120 seconds")
 
-    token = os.environ.get(args.token_env, "")
-    if not token:
-        print(f"ERROR: required MCP token environment variable is missing: {args.token_env}", file=sys.stderr)
+    if args.probe and args.token_env:
+        parser.error("MCP probes do not use authentication")
+    if not args.probe and not args.tool:
+        parser.error("--tool is required unless --probe is used")
+    if args.token_env == "TODO_LOCAL_MCP_TOKEN":
+        parser.error("Todo Desktop MCP does not use an authentication token")
+    token = None
+    if args.token_env:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.token_env):
+            parser.error("--token-env must be an environment variable name")
+        token = os.environ.get(args.token_env, "")
+        if not token:
+            print(f"ERROR: required MCP token environment variable is missing: {args.token_env}", file=sys.stderr)
+            return 2
+    elif not is_loopback_url(args.url):
+        print("ERROR: unauthenticated MCP access is restricted to loopback URLs", file=sys.stderr)
         return 2
+
+    client = StreamableHttpClient(args.url, token, args.timeout)
+    if args.probe:
+        try:
+            client.probe()
+        except McpAuthenticationError as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 3
+        except McpClientError as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+        return 0
+
     try:
         arguments = json.loads(args.arguments)
     except json.JSONDecodeError:
@@ -216,7 +276,10 @@ def main() -> int:
         return 2
 
     try:
-        result = StreamableHttpClient(args.url, token, args.timeout).call_tool(args.tool, arguments)
+        result = client.call_tool(args.tool, arguments)
+    except McpAuthenticationError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 3
     except McpClientError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

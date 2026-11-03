@@ -5,6 +5,8 @@
 # endpoint. WSL first tries direct loopback (for mirrored/forwarded networking)
 # and uses the WSL relay only when the direct endpoint is not reachable.
 
+TODO_LOCAL_MCP_URL_HELPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
 todo_local_mcp_is_wsl() {
   case "$(printenv TODO_LOCAL_MCP_PLATFORM_OVERRIDE 2>/dev/null || true)" in
     wsl) return 0 ;;
@@ -65,17 +67,24 @@ PY_TODO_LOCAL_URL
 
 todo_local_mcp_probe_status() {
   local url="$1"
-  if ! command -v curl >/dev/null 2>&1; then
+  if ! command -v python3 >/dev/null 2>&1 ||
+     [ ! -r "$TODO_LOCAL_MCP_URL_HELPER_DIR/todo-mcp-client.py" ]; then
     printf '000'
     return 0
   fi
-  local status
-  status="$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 4 "$url" 2>/dev/null || true)"
-  printf '%s' "${status:-000}"
+  local rc=0
+  python3 "$TODO_LOCAL_MCP_URL_HELPER_DIR/todo-mcp-client.py" \
+    --url "$url" --probe --timeout 4 >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    0) printf '200' ;;
+    3) printf 'AUTH' ;;
+    *) printf '000' ;;
+  esac
 }
 
-# Print a usable endpoint only after the unauthenticated probe receives HTTP
-# 401. The configured URL is retained for custom loopback ports; the standard
+# Print a usable endpoint only after an unauthenticated MCP initialize and
+# read-only tools/list handshake succeeds. The configured URL is retained for
+# custom loopback ports; the standard
 # native endpoint is always preferred over the legacy WSL relay.
 todo_local_mcp_resolve_url() {
   local preferred="$1"
@@ -92,7 +101,7 @@ todo_local_mcp_resolve_url() {
       "$direct_url"|"$bridge_url") ;;
       *)
         status="$(todo_local_mcp_probe_status "$preferred")"
-        if [ "$status" = "401" ]; then
+        if [ "$status" = "200" ]; then
           printf '%s' "$preferred"
           return 0
         fi
@@ -101,14 +110,14 @@ todo_local_mcp_resolve_url() {
   fi
 
   status="$(todo_local_mcp_probe_status "$direct_url")"
-  if [ "$status" = "401" ]; then
+  if [ "$status" = "200" ]; then
     printf '%s' "$direct_url"
     return 0
   fi
 
   if todo_local_mcp_is_wsl; then
     status="$(todo_local_mcp_probe_status "$bridge_url")"
-    if [ "$status" = "401" ]; then
+    if [ "$status" = "200" ]; then
       printf '%s' "$bridge_url"
       return 0
     fi
@@ -116,7 +125,7 @@ todo_local_mcp_resolve_url() {
     # Backward compatibility for a native host with an explicitly configured
     # legacy relay. Never probe 8766 on native hosts unless it was requested.
     status="$(todo_local_mcp_probe_status "$bridge_url")"
-    if [ "$status" = "401" ]; then
+    if [ "$status" = "200" ]; then
       printf '%s' "$bridge_url"
       return 0
     fi

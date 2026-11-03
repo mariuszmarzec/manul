@@ -113,6 +113,8 @@ task_source_configured_sources() {
            | .allowedUsers = (.allowedUsers // $allowedUsers)
         elif (.type == "todo_local_mcp" or .type == "todo_remote_mcp")
         then . as $source
+           | (if .type == "todo_local_mcp" then del(.tokenEnv) else . end) as $normalizedSource
+           | $normalizedSource
            | .repositoryAllowlist = (
                if ($source | has("repositoryAllowlist")) then
                  if ($source.repositoryAllowlist | type) != "array" then []

@@ -170,32 +170,36 @@ todo_task_resolved_skill_context() {
 }
 
 todo_mcp_source_call() {
-  local source_json="$1" tool="$2" arguments="$3"
+  local source_json="$1" source_type="$2" tool="$3" arguments="$4"
   local url token_env
   url="$(todo_mcp_source_url "$source_json")"
-  token_env="$(todo_mcp_source_token_env "$source_json")"
   [ -n "$url" ] || {
     echo "todo-mcp: source URL is missing" >&2
     return 2
   }
-  [ -n "$token_env" ] || {
-    echo "todo-mcp: tokenEnv is missing" >&2
+  local -a token_args=()
+  if [ "$source_type" = "todo_remote_mcp" ]; then
+    token_env="$(todo_mcp_source_token_env "$source_json")"
+    [ -n "$token_env" ] || {
+      echo "todo-mcp: remote source tokenEnv is missing" >&2
+      return 2
+    }
+    token_args=(--token-env "$token_env")
+  elif [ "$source_type" != "todo_local_mcp" ]; then
+    echo "todo-mcp: unsupported source type: $source_type" >&2
     return 2
-  }
+  fi
   python3 "$TODO_TASK_SOURCE_DIR/todo-mcp-client.py" \
-    --url "$url" \
-    --token-env "$token_env" \
-    --tool "$tool" \
-    --arguments "$arguments"
+    --url "$url" "${token_args[@]}" --tool "$tool" --arguments "$arguments"
 }
 
 todo_mcp_source_list_tasks() {
   local source_json="$1" source_type="$2"
   case "$source_type" in
     todo_local_mcp)
-      todo_mcp_source_call "$source_json" list_tasks '{}' ;;
+      todo_mcp_source_call "$source_json" todo_local_mcp list_tasks '{}' ;;
     todo_remote_mcp)
-      todo_mcp_source_call "$source_json" todo_list_tasks '{}' ;;
+      todo_mcp_source_call "$source_json" todo_remote_mcp todo_list_tasks '{}' ;;
     *)
       echo "todo-mcp: unsupported source type: $source_type" >&2
       return 2 ;;
@@ -537,7 +541,7 @@ todo_task_mark_done() {
   if [ "$source_type" = "todo_local_mcp" ]; then
     arguments="$(jq -c 'reverse' <<<"$ids_json")"
     arguments="$(jq -cn --argjson taskIds "$arguments" '{taskIds:$taskIds}')"
-    todo_mcp_source_call "$source_json" "mark_tasks_done" "$arguments" >/dev/null
+    todo_mcp_source_call "$source_json" "$source_type" "mark_tasks_done" "$arguments" >/dev/null
   else
     # Fiteo's bulk mark tool checks a direct share on every ID. Updating each
     # task individually preserves its existing ancestor-share permission rules.
@@ -548,7 +552,7 @@ todo_task_mark_done() {
       local step_id
       step_id="$(jq -r '.id' <<<"$task_item")"
       arguments="$(jq -cn --argjson id "$step_id" '{id:$id,task:{isToDo:false}}')"
-      todo_mcp_source_call "$source_json" "todo_update_task" "$arguments" >/dev/null || return $?
+      todo_mcp_source_call "$source_json" "$source_type" "todo_update_task" "$arguments" >/dev/null || return $?
     done < <(jq -c 'def ids: [{id}] + ([.subTasks[]? | ids] | add // []); ids | reverse[]' <<<"$task_json")
   fi
 }
@@ -605,10 +609,10 @@ todo_task_report_deliver() {
     case "$source_type" in
       todo_local_mcp)
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
-        todo_mcp_source_call "$source_json" create_task "$arguments" >/dev/null || return $? ;;
+        todo_mcp_source_call "$source_json" "$source_type" create_task "$arguments" >/dev/null || return $? ;;
       todo_remote_mcp)
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}}')"
-        todo_mcp_source_call "$source_json" todo_create_task "$arguments" >/dev/null || return $? ;;
+        todo_mcp_source_call "$source_json" "$source_type" todo_create_task "$arguments" >/dev/null || return $? ;;
     esac
     tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
     root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
@@ -636,10 +640,10 @@ todo_task_report_deliver() {
     case "$source_type" in
       todo_local_mcp)
         arguments="$(jq -cn --argjson taskId "$result_id" '{taskIds:[$taskId]}')"
-        todo_mcp_source_call "$source_json" mark_tasks_done "$arguments" >/dev/null || return $? ;;
+        todo_mcp_source_call "$source_json" "$source_type" mark_tasks_done "$arguments" >/dev/null || return $? ;;
       todo_remote_mcp)
         arguments="$(jq -cn --argjson id "$result_id" '{id:$id,task:{isToDo:false}}')"
-        todo_mcp_source_call "$source_json" todo_update_task "$arguments" >/dev/null || return $? ;;
+        todo_mcp_source_call "$source_json" "$source_type" todo_update_task "$arguments" >/dev/null || return $? ;;
     esac
   fi
 
