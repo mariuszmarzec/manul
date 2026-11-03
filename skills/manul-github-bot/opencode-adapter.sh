@@ -435,6 +435,23 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
       | if has("callbackPort") then .callback_port = .callbackPort | del(.callbackPort) else . end
       | if has("redirectUri") then .redirect_uri = .redirectUri | del(.redirectUri) else . end;
     (.[0] // {}) as $root
+    | ([
+        $root.permission // {} | to_entries[]? as $entry
+        | if ($entry.value | type) == "string" then
+            {
+              action: (if $entry.key == "bash" then "shell" elif $entry.key == "task" then "subagent" elif ($entry.key == "write" or $entry.key == "patch") then "edit" else $entry.key end),
+              resource: "*",
+              effect: $entry.value
+            }
+          elif ($entry.value | type) == "object" then
+            $entry.value | to_entries[]
+            | {
+                action: (if $entry.key == "bash" then "shell" elif $entry.key == "task" then "subagent" elif ($entry.key == "write" or $entry.key == "patch") then "edit" else $entry.key end),
+                resource: .key,
+                effect: .value
+              }
+          else empty end
+      ]) as $legacyPermissions
     | ($root.mcp // {} | if type == "object" then . else {} end) as $mcp
     | ($mcp.servers // {} | if type == "object" then . else {} end) as $nativeServers
     | ($mcp | del(.servers, .timeout)) as $legacyServers
@@ -470,7 +487,7 @@ if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_
       else .
       end
     | .permissions = (
-        ((.permissions // []) | if type == "array" then . else [] end)
+        ($legacyPermissions + ((.permissions // []) | if type == "array" then . else [] end))
         | reduce [
             {action:"external_directory",resource:($workspaceBase + "/*"),effect:"deny"},
             {action:"external_directory",resource:$workspace,effect:"allow"},

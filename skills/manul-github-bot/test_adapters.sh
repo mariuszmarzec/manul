@@ -1249,7 +1249,8 @@ MOCK
   ! grep -Fq 'Do not repeat the denied operation' "$tmp/args" && ok "Recovery instruction is sent over stdin, not argv" || fail "Recovery instruction leaked into argv"
   grep -Fq "$active_workspace" "$tmp/initial-prompt" && ok "Initial prompt includes the actual assigned workspace" || fail "Initial prompt lacks capability workspace"
   grep -Fq "$active_workspace" "$tmp/recovery-prompt" && ok "Recovery prompt retains the capability workspace" || fail "Recovery prompt lacks capability workspace"
-  grep -Fq "$tmp/home/.gradle/caches/modules-2/files-2.1/**" "$tmp/initial-prompt" && ok "Capability snapshot lists effective external-directory allow rules" || fail "Capability snapshot omitted the configured Gradle cache rule"
+  grep -Fq "$tmp/home/.gradle/caches/modules-2/files-2.1/**" "$tmp/initial-prompt"
+  grep -Fq '"action":"external_directory"' "$tmp/initial-prompt" && ok "Capability context uses V2 external-directory rules" || fail "Capability context lacks V2 permissions" && ok "Capability snapshot lists effective external-directory allow rules" || fail "Capability snapshot omitted the configured Gradle cache rule"
   grep -Fq 'not a guarantee that every bash command' "$tmp/initial-prompt" && ok "Capability snapshot explains tool-level restrictions" || fail "Capability snapshot omits tool-level caveat"
   ! grep -Fq 'daemon-8.11.1' "$tmp/initial-prompt" && ok "Capability snapshot does not imply access to denied daemon logs" || fail "Capability snapshot implied daemon log access"
   grep -Fq 'TASK_DONE recovered via an in-workspace alternative' "$tmp/stdout" && ok "Recovered completion marker is normalized" || fail "Recovered completion marker missing"
@@ -1378,16 +1379,19 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   [ "${FITEO_BASE_URL:-}" = "https://api.fiteo.example" ] &&
     [ "${FITEO_MANUL_PAT:-}" = "runtime-fiteo-pat" ]
   jq -e '
-    .mcp["other-server"].url == "https://example.invalid/mcp"
-    and .mcp["caracal-rag"].type == "remote"
-    and .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
-    and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
-    and .mcp["caracal-rag"].enabled == true
-    and .mcp["fiteo"].type == "remote"
-    and .mcp["fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
-    and .mcp["fiteo"].oauth == false
-    and .mcp["fiteo"].headers.Authorization == "Bearer {env:FITEO_MANUL_PAT}"
-    and .mcp["fiteo"].enabled == true
+    .mcp.servers["other-server"].url == "https://example.invalid/mcp"
+    and .mcp.servers["caracal-rag"].type == "remote"
+    and .mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    and .mcp.servers["caracal-rag"].disabled == false
+    and (.mcp | has("other-server") | not)
+    and (.mcp | has("caracal-rag") | not)
+    and (.mcp | has("fiteo") | not)
+    and .mcp.servers["fiteo"].type == "remote"
+    and .mcp.servers["fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
+    and .mcp.servers["fiteo"].oauth == false
+    and .mcp.servers["fiteo"].headers.Authorization == "Bearer {env:FITEO_MANUL_PAT}"
+    and .mcp.servers["fiteo"].disabled == false
     and .tools["caracal-rag_*"] == true
     and .tools["fiteo_*"] == true
     and .tools["manul_fiteo_create_task"] == true
@@ -1531,25 +1535,25 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   config="${OPENCODE_CONFIG:?effective task config missing}"
   expected="${TODO_LOCAL_MCP_AVAILABLE:-0}"
   jq -e --arg expected "$expected" '
-    .mcp["other-server"].url == "https://example.invalid/mcp"
-    and .mcp["caracal-rag"].type == "remote"
-    and .mcp["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
-    and .mcp["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
-    and .mcp["caracal-rag"].enabled == true
+    .mcp.servers["other-server"].url == "https://example.invalid/mcp"
+    and .mcp.servers["caracal-rag"].type == "remote"
+    and .mcp.servers["caracal-rag"].url == "{env:CARACAL_MCP_URL}"
+    and .mcp.servers["caracal-rag"].headers.Authorization == "Bearer {env:CARACAL_ACCESS_TOKEN}"
+    and .mcp.servers["caracal-rag"].disabled == false
     and .tools["caracal-rag_*"] == true
     and .agent.coder.tools["caracal-rag_*"] == true
     and .agent.chat.tools["caracal-rag_*"] == null
     and (
       if $expected == "1" then
-        .mcp["todo-local"].type == "remote"
-        and .mcp["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
-        and .mcp["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
-        and .mcp["todo-local"].enabled == true
+        .mcp.servers["todo-local"].type == "remote"
+        and .mcp.servers["todo-local"].url == "{env:TODO_LOCAL_MCP_URL}"
+        and .mcp.servers["todo-local"].headers.Authorization == "Bearer {env:TODO_LOCAL_MCP_TOKEN}"
+        and .mcp.servers["todo-local"].disabled == false
         and .tools["todo-local_*"] == true
         and .agent.coder.tools["todo-local_*"] == true
         and .agent.chat.tools["todo-local_*"] == null
       else
-        .mcp["todo-local"] == null
+        .mcp.servers["todo-local"] == null
         and .tools["todo-local_*"] == null
         and .agent.coder.tools["todo-local_*"] == null
       end
