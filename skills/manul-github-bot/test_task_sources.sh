@@ -22,6 +22,10 @@ for todo_type in todo_local_mcp todo_remote_mcp; do
   fi
 done
 
+assert_eq "Todo Remote workspace context strips source-version fingerprint" "conv-source-todo_remote_mcp-116715" "$(task_source_workspace_context_id "todo_remote_mcp" "116715@9a5c8c0760d6597b")"
+assert_eq "Todo Local workspace context strips source-version fingerprint" "conv-source-todo_local_mcp-42" "$(task_source_workspace_context_id "todo_local_mcp" "42@0123456789abcdef")"
+assert_eq "GitHub source workspace context uses stable provider identity" "conv-source-github_issues-owner/issues#13" "$(task_source_workspace_context_id "github_issues" "owner/issues#13")"
+
 cat >"$WORK/config.json" <<'JSON'
 {"repositories":["legacy/repo"],"taskSources":[{"type":"github_issues","enabled":true,"repositories":["owner/issues"]},{"type":"jira_tasks","enabled":false,"baseUrl":"http://jira.local","repository":"owner/jira-repo"}]}
 JSON
@@ -142,6 +146,12 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
   taskSourceId TEXT, taskSourceUrl TEXT, taskSourceTitle TEXT, taskSourceUpdatedAt TEXT,
   context TEXT, action TEXT DEFAULT 'IMPLEMENT'
 );"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,conversationId,taskSourceType,taskSourceId) VALUES('legacy-todo-task',NULL,'todo_remote_mcp','116715@9a5c8c0760d6597b');"
+legacy_context="$(task_source_ensure_workspace_context "$DB" "legacy-todo-task" "todo_remote_mcp" "116715@9a5c8c0760d6597b")"
+assert_eq "legacy queued Todo row is repaired without requeueing" "conv-source-todo_remote_mcp-116715" "$legacy_context"
+legacy_persisted_context="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='legacy-todo-task';")"
+assert_eq "legacy Todo context repair is persisted" "$legacy_context" "$legacy_persisted_context"
+assert_contains "dispatcher repairs old source rows before workspace acquisition" "$(cat "$SCRIPT_DIR/manul-daemon.sh")" 'task_source_ensure_workspace_context'
 verify_task="$(printf '%s\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#13")')"
 queue_normalized_source_task "$verify_task"
 if [ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")" -eq 0 ]; then
@@ -158,6 +168,31 @@ actual_heartbeat="$(sqlite3 "$DB" "SELECT coalesce(heartbeatAt,'') FROM processe
 actual_lease="$(sqlite3 "$DB" "SELECT coalesce(leaseExpiresAt,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 assert_eq "queued source task starts without heartbeat" "" "$actual_heartbeat"
 assert_eq "queued source task starts without lease" "" "$actual_lease"
+actual_conversation_id="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
+assert_eq "GitHub source task receives a stable workspace conversation" "conv-source-github_issues-owner/issues#13" "$actual_conversation_id"
+
+# Todo fingerprints identify a source version, not the durable root task context.
+todo_remote_task="$(jq -cn '{
+  taskSourceType:"todo_remote_mcp",
+  taskSourceId:"116715@9a5c8c0760d6597b",
+  taskSourceUrl:"fiteo-todo://task/116715@9a5c8c0760d6597b",
+  title:"Todo workspace context regression",
+  body:"Todo workspace context regression",
+  prompt:"Run the Todo task",
+  createdAt:"2026-11-03T17:45:26",
+  updatedAt:"2026-11-03T17:45:26",
+  state:"OPEN",
+  metadata:{repository:"mariuszmarzec/todo",issueNumber:0},
+  execution:{kind:"repository"}
+}')"
+queue_normalized_source_task "$todo_remote_task"
+actual_todo_conversation_id="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='source:todo_remote_mcp:116715@9a5c8c0760d6597b';")"
+assert_eq "Todo Remote task gets a stable root-task workspace context" "conv-source-todo_remote_mcp-116715" "$actual_todo_conversation_id"
+
+todo_remote_updated_task="$(jq -c '.taskSourceId = "116715@fedcba9876543210" | .taskSourceUrl = "fiteo-todo://task/116715@fedcba9876543210"' <<<"$todo_remote_task")"
+queue_normalized_source_task "$todo_remote_updated_task"
+updated_todo_conversation_id="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='source:todo_remote_mcp:116715@fedcba9876543210';")"
+assert_eq "Todo workspace context survives a structural fingerprint change" "$actual_todo_conversation_id" "$updated_todo_conversation_id"
 
 # Guard every poller enqueue path, including the synthetic CI-fix path that is
 # not practical to exercise through the GitHub integration fixture above.

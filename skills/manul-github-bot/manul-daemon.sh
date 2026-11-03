@@ -3998,6 +3998,12 @@ dispatch_once() {
     local TASK_SOURCE_TYPE TASK_SOURCE_ID
     TASK_SOURCE_TYPE="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceType,'') FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
     TASK_SOURCE_ID="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceId,'') FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null)"
+    if [ -z "$CONVERSATION_ID" ] && [ -n "$TASK_SOURCE_TYPE" ] && [ -n "$TASK_SOURCE_ID" ]; then
+      CONVERSATION_ID="$(task_source_ensure_workspace_context "$DB" "$COMMENT_ID" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" 2>/dev/null || true)"
+      if [ -n "$CONVERSATION_ID" ]; then
+        log "dispatch: repaired missing workspace context for legacy source task $COMMENT_ID ($TASK_SOURCE_TYPE:$TASK_SOURCE_ID -> $CONVERSATION_ID)"
+      fi
+    fi
     if [ "$TASK_EXECUTION_KIND" = "report_only" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
       log "dispatch: refusing report-only execution for non-Todo source $TASK_SOURCE_TYPE"
       mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"

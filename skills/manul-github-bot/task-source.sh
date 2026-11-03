@@ -40,6 +40,60 @@ task_source_poll() {
 
 task_source_normalize_id() { printf "%s:%s" "$1" "$2"; }
 
+# Stable logical workspace identity for a provider-owned root task. Todo source
+# IDs include a structural fingerprint, which must not split one root task into
+# a different workspace context when its task tree changes.
+task_source_workspace_context_id() {
+  local source_type="$1" source_id="$2" stable_source_id="$2"
+  task_source_type_is_supported "$source_type" || return 1
+  [ -n "$source_id" ] || return 1
+
+  case "$source_type" in
+    todo_local_mcp|todo_remote_mcp)
+      stable_source_id="${source_id%%@*}"
+      [[ "$stable_source_id" =~ ^[0-9]+$ ]] || return 1
+      ;;
+  esac
+
+  printf 'conv-source-%s-%s' "$source_type" "$stable_source_id"
+}
+
+task_source_sql_escape() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
+# Return the existing context, or atomically backfill it for a legacy queued
+# source task created before conversation IDs were persisted by the poller.
+task_source_ensure_workspace_context() {
+  local db="$1" task_id="$2" source_type="$3" source_id="$4"
+  [ -n "$db" ] && [ -n "$task_id" ] || return 1
+
+  local safe_task_id current_context context_id changed
+  safe_task_id="$(task_source_sql_escape "$task_id")"
+  current_context="$(sqlite3 "$db" "SELECT COALESCE(conversationId,'') FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)" || return 1
+  if [ -n "$current_context" ]; then
+    printf '%s' "$current_context"
+    return 0
+  fi
+
+  context_id="$(task_source_workspace_context_id "$source_type" "$source_id")" || return 1
+  changed="$(sqlite3 "$db" "
+    UPDATE processed_comments
+    SET conversationId='$(task_source_sql_escape "$context_id")'
+    WHERE commentId='$safe_task_id'
+      AND (conversationId IS NULL OR conversationId='');
+    SELECT changes();
+  " 2>/dev/null | tail -n 1)" || return 1
+
+  # changes=0 is valid only when another writer has already repaired the row.
+  case "$changed" in 0|1) ;; *) return 1 ;; esac
+
+  # Re-read the persisted value instead of assuming our candidate won.
+  current_context="$(sqlite3 "$db" "SELECT COALESCE(conversationId,'') FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)" || return 1
+  [ -n "$current_context" ] || return 1
+  printf '%s' "$current_context"
+}
+
 task_source_configured_sources() {
   local config="$1"
 
