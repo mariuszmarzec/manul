@@ -54,7 +54,7 @@ manul stop
 manul --update
 ```
 
-For an existing installation, `manul --update` fetches `origin/main` using
+For an existing installation, `manul --update` fetches `origin/master` using
 fast-forward-only semantics and then runs the canonical installer to redeploy
 runtime symlinks. It refuses a dirty/diverged checkout and never initializes a
 missing database. It preserves runtime data and deliberately does not restart
