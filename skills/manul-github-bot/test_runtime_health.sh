@@ -168,8 +168,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$prefix" ] || exit 2
-mkdir -p "$prefix/node_modules/@opencode-ai/plugin"
-printf '%s\n' '{"name":"@opencode-ai/plugin","version":"1.19.5"}' > "$prefix/node_modules/@opencode-ai/plugin/package.json"
+mkdir -p "$prefix/node_modules/@opencode/plugin"
+printf '%s\n' '{"name":"@opencode/plugin","version":"2.2.5"}' > "$prefix/node_modules/@opencode/plugin/package.json"
 MOCK_NPM
 chmod +x "$PERM_ROOT/bin/npm"
 
@@ -210,11 +210,11 @@ else
   fail "Installer modified an unrelated operator-owned OpenCode tool"
 fi
 
-if [ -f "$PERM_CANON/node_modules/@opencode-ai/plugin/package.json" ] &&
-   grep -Fq '"version":"1.19.5"' "$PERM_CANON/node_modules/@opencode-ai/plugin/package.json"; then
-  ok "Installer provisions @opencode-ai/plugin beside the canonical Manul tool"
+if [ -f "$PERM_CANON/node_modules/@opencode/plugin/package.json" ] &&
+   grep -Fq '"version":"2.2.5"' "$PERM_CANON/node_modules/@opencode/plugin/package.json"; then
+  ok "Installer provisions @opencode/plugin beside the canonical Manul tool"
 else
-  fail "Installer did not provision the OpenCode custom-tool dependency"
+  fail "Installer did not provision the OpenCode V2 plugin dependency"
 fi
 
 if [ -L "$PERM_RUN/agent-task-runner.sh" ] && [ -x "$PERM_RUN/agent-task-runner.sh" ]; then
@@ -1250,205 +1250,15 @@ fi
 # ── Test: repair must fail closed when DB is missing ─────────────────────────
 echo
 
-# ── Test: OpenCode provider permission setup ─────────────────────────────────
+# ── Test: OpenCode V2 permission setup ──────────────────────────────────────
 echo
-echo "Test: OpenCode provider permission setup"
-OC_ROOT="$TMPROOT/opencode-permissions"
-OC_HOME="$OC_ROOT/home"
-OC_CONFIG="$OC_HOME/.config/opencode/opencode.json"
-OC_BIN="$OC_ROOT/bin/opencode"
-mkdir -p "$(dirname "$OC_CONFIG")" "$(dirname "$OC_BIN")"
-
-cat >"$OC_CONFIG" <<'JSON'
-{
-  "theme": "test",
-  "permission": {
-    "external_directory": {
-      "~/litellm/**": "allow",
-      "~/.npm/**": "allow"
-    },
-    "bash": "ask",
-    "read": "allow",
-    "edit": "ask",
-    "glob": "allow",
-    "grep": "allow"
-  }
-}
-JSON
-
-cat >"$OC_BIN" <<'MOCK'
-#!/usr/bin/env bash
-if [ "${1:-}" = "debug" ] && [ "${2:-}" = "config" ]; then
-  config="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
-  if [ ! -f "$config" ]; then
-    echo "mock opencode: config not found: $config" >&2
-    exit 1
-  fi
-  cat "$config"
-  exit $?
-fi
-exit 2
-MOCK
-chmod +x "$OC_BIN"
-
-set +e
-OC_OUTPUT="$(HOME="$OC_HOME" OPENCODE_CONFIG="$OC_CONFIG" OPENCODE_BIN="$OC_BIN" \
-  "$SCRIPT_DIR/opencode-permissions.sh" 2>&1)"
-OC_RC=$?
-set -e
-
-if [ "$OC_RC" -eq 0 ] && jq -e '.permission.external_directory["/tmp/**"] == "allow"' "$OC_CONFIG" >/dev/null 2>&1; then
-  ok "OpenCode setup adds /tmp/** allow rule"
+echo "Test: OpenCode V2 permission setup"
+if bash "$SCRIPT_DIR/test_opencode_permissions.sh"; then
+  ok "V2 permissions helper passes its native-schema regression suite"
 else
-  fail "OpenCode setup did not add /tmp/** allow rule (rc=$OC_RC)"
-  echo "$OC_OUTPUT"
+  fail "V2 permissions helper regression suite failed"
 fi
 
-if [ "$OC_RC" -eq 0 ] && jq -e '
-  .permission.external_directory["/tmp/manul-diagnostics/**"] == "allow" and
-  .permission.read["/tmp/manul-diagnostics/**"] == "allow" and
-  .permission.edit["/tmp/manul-diagnostics/**"] == "allow"
-' "$OC_CONFIG" >/dev/null 2>&1; then
-  ok "OpenCode allows read/write in the dedicated diagnostics output directory"
-else
-  fail "OpenCode diagnostics output-directory permissions are incomplete"
-fi
-
-if [ "$OC_RC" -eq 0 ] && jq -e '
-  .permission.external_directory["~/.manul/logs/**"] == "allow" and
-  .permission.read["~/.manul/logs/**"] == "allow" and
-  .permission.glob["~/.manul/logs/**"] == "allow" and
-  .permission.grep["~/.manul/logs/**"] == "allow" and
-  .permission.edit["~/.manul/logs/**"] == "deny"
-' "$OC_CONFIG" >/dev/null 2>&1; then
-  ok "OpenCode grants log read/search and explicitly denies file editing"
-else
-  fail "OpenCode log permissions are not read-only as intended"
-fi
-
-if [ "$OC_RC" -eq 0 ] && jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow"' "$OC_CONFIG" >/dev/null 2>&1; then
-  ok "OpenCode setup adds Gradle dependency-cache allow rule"
-else
-  fail "OpenCode setup did not add Gradle dependency-cache allow rule (rc=$OC_RC)"
-  echo "$OC_OUTPUT"
-fi
-
-if jq -e '.theme == "test" and .permission.external_directory["~/litellm/**"] == "allow" and .permission.external_directory["~/.npm/**"] == "allow" and .permission.bash == "ask" and .permission.read["*"] == "allow" and .permission.edit["*"] == "ask" and .permission.glob["*"] == "allow" and .permission.grep["*"] == "allow" and .permission.edit["~/.manul/logs/**"] == "deny"' "$OC_CONFIG" >/dev/null 2>&1; then
-  ok "OpenCode setup preserves unrelated provider configuration"
-else
-  fail "OpenCode setup changed unrelated provider configuration"
-fi
-
-# The Gradle rule must be scoped to the module cache only, never the whole
-# Gradle home, which may hold credentials in gradle.properties.
-if jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and (.permission.external_directory["~/.gradle/**"] // "absent" | ( . != "allow" ))' "$OC_CONFIG" >/dev/null 2>&1; then
-  ok "OpenCode setup scopes the Gradle rule to the module cache only"
-else
-  fail "OpenCode setup granted a broader Gradle rule than the module cache"
-fi
-
-# Explicit OPENCODE_CONFIG override is respected over default ~/.config/opencode/opencode.json.
-CUSTOM_OC_CONFIG="$OC_ROOT/custom-override/opencode.json"
-mkdir -p "$(dirname "$CUSTOM_OC_CONFIG")"
-cat >"$CUSTOM_OC_CONFIG" <<'JSON'
-{
-  "permission": {
-    "external_directory": {
-      "~/custom/**": "allow"
-    }
-  }
-}
-JSON
-set +e
-CUSTOM_OUTPUT="$(HOME="$OC_HOME" OPENCODE_CONFIG="$CUSTOM_OC_CONFIG" OPENCODE_BIN="$OC_BIN" \
-  "$SCRIPT_DIR/opencode-permissions.sh" 2>&1)"
-CUSTOM_RC=$?
-set -e
-if [ "$CUSTOM_RC" -eq 0 ] && \
-   jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and .permission.external_directory["~/.manul/logs/**"] == "allow" and .permission.external_directory["~/custom/**"] == "allow"' "$CUSTOM_OC_CONFIG" >/dev/null 2>&1; then
-  ok "OpenCode setup respects explicitly configured OPENCODE_CONFIG path"
-else
-  fail "OpenCode setup did not modify explicitly configured OPENCODE_CONFIG (rc=$CUSTOM_RC)"
-  echo "$CUSTOM_OUTPUT"
-fi
-
-# Default fallback: without explicit OPENCODE_CONFIG, $HOME/.config/opencode/opencode.json is modified.
-DEFAULT_FALLBACK_HOME="$OC_ROOT/default-fallback-home"
-DEFAULT_FALLBACK_CONFIG="$DEFAULT_FALLBACK_HOME/.config/opencode/opencode.json"
-mkdir -p "$(dirname "$DEFAULT_FALLBACK_CONFIG")"
-cat >"$DEFAULT_FALLBACK_CONFIG" <<'JSON'
-{
-  "permission": {
-    "external_directory": {
-      "~/fallback/**": "allow"
-    }
-  }
-}
-JSON
-set +e
-FALLBACK_OUTPUT="$(unset OPENCODE_CONFIG; HOME="$DEFAULT_FALLBACK_HOME" OPENCODE_BIN="$OC_BIN" \
-  "$SCRIPT_DIR/opencode-permissions.sh" 2>&1)"
-FALLBACK_RC=$?
-set -e
-if [ "$FALLBACK_RC" -eq 0 ] && \
-   jq -e '.permission.external_directory["~/.gradle/caches/modules-2/files-2.1/**"] == "allow" and .permission.external_directory["~/.manul/logs/**"] == "allow" and .permission.external_directory["~/fallback/**"] == "allow"' "$DEFAULT_FALLBACK_CONFIG" >/dev/null 2>&1; then
-  ok "OpenCode setup defaults to \$HOME/.config/opencode/opencode.json when OPENCODE_CONFIG is unset"
-else
-  fail "OpenCode setup did not use default config path when OPENCODE_CONFIG unset (rc=$FALLBACK_RC)"
-  echo "$FALLBACK_OUTPUT"
-fi
-
-OC_HASH_BEFORE="$(sha256sum "$OC_CONFIG" | awk '{print $1}')"
-set +e
-HOME="$OC_HOME" OPENCODE_CONFIG="$OC_CONFIG" OPENCODE_BIN="$OC_BIN" \
-  "$SCRIPT_DIR/opencode-permissions.sh" >/dev/null 2>&1
-OC_RC_2=$?
-set -e
-OC_HASH_AFTER="$(sha256sum "$OC_CONFIG" | awk '{print $1}')"
-if [ "$OC_RC_2" -eq 0 ] && [ "$OC_HASH_BEFORE" = "$OC_HASH_AFTER" ]; then
-  ok "OpenCode setup is idempotent"
-else
-  fail "OpenCode setup is not idempotent (rc=$OC_RC_2)"
-fi
-
-OC_MISSING_ROOT="$OC_ROOT/missing"
-OC_MISSING_CONFIG="$OC_MISSING_ROOT/.config/opencode/opencode.json"
-set +e
-HOME="$OC_MISSING_ROOT" OPENCODE_CONFIG="$OC_MISSING_CONFIG" OPENCODE_BIN="$OC_BIN" \
-  "$SCRIPT_DIR/opencode-permissions.sh" >/dev/null 2>&1
-OC_MISSING_RC=$?
-set -e
-if [ "$OC_MISSING_RC" -eq 0 ] && [ ! -f "$OC_MISSING_CONFIG" ]; then
-  ok "OpenCode setup safely handles missing provider configuration"
-else
-  fail "OpenCode setup should safely skip a missing provider configuration"
-fi
-
-OC_INVALID="$OC_ROOT/invalid.json"
-printf '{ invalid json\n' >"$OC_INVALID"
-set +e
-HOME="$OC_HOME" OPENCODE_CONFIG="$OC_INVALID" OPENCODE_BIN="$OC_BIN" \
-  "$SCRIPT_DIR/opencode-permissions.sh" >/dev/null 2>&1
-OC_INVALID_RC=$?
-set -e
-if [ "$OC_INVALID_RC" -ne 0 ] && grep -qxF '{ invalid json' "$OC_INVALID"; then
-  ok "OpenCode setup fails closed on invalid configuration"
-else
-  fail "OpenCode setup did not fail closed on invalid configuration"
-fi
-
-NO_OPENCODE_ROOT="$OC_ROOT/no-opencode"
-mkdir -p "$NO_OPENCODE_ROOT"
-set +e
-HOME="$NO_OPENCODE_ROOT" OPENCODE_CONFIG="$NO_OPENCODE_ROOT/opencode.json" OPENCODE_BIN="$NO_OPENCODE_ROOT/missing-opencode" \
-  "$SCRIPT_DIR/opencode-permissions.sh" >/dev/null 2>&1
-NO_OC_RC=$?
-set -e
-if [ "$NO_OC_RC" -eq 0 ]; then
-  ok "OpenCode setup safely no-ops when provider is absent"
-else
-  fail "OpenCode setup fails when OpenCode provider is absent"
-fi
 echo "Test: Repair refuses implicit fresh DB creation"
 FAIL_CLOSED_ROOT="$(mktemp -d /tmp/manul-fail-closed-XXXXXX)"
 FAIL_CLOSED_RUNTIME="$FAIL_CLOSED_ROOT/runtime"

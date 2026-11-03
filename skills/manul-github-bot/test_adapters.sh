@@ -390,7 +390,7 @@ test_opencode_success() {
 #!/usr/bin/env bash
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  tool_path="$PWD/.opencode/tools/manul_fiteo_create_task.ts"
+  tool_path="$PWD/.opencode/plugins/manul_fiteo_create_task.ts"
   if [ -n "${MOCK_TOOL_STATE_FILE:-}" ]; then
     if [ -L "$tool_path" ] &&
        [ "$(realpath -e -- "$tool_path" 2>/dev/null || true)" = "${MOCK_EXPECTED_MANUL_TOOL_SOURCE:-}" ]; then
@@ -464,12 +464,12 @@ MOCK
     && ok "OpenCode process does not inherit stale PYTHONHOME" \
     || fail "OpenCode inherited stale PYTHONHOME: $(cat "$tmp/env" 2>/dev/null || true)"
   grep -qx 'task-local' "$tmp/tool-state" \
-    && ok "Manul custom tool is present for the task-local OpenCode preflight" \
-    || fail "Manul custom tool was not task-local during OpenCode preflight"
-  [ ! -e "$tmp/.opencode/tools/manul_fiteo_create_task.ts" ] && [ ! -L "$tmp/.opencode/tools/manul_fiteo_create_task.ts" ] \
-    && ok "Manul custom tool symlink is removed after task completion" \
-    || fail "Manul custom tool symlink leaked after task completion"
-  [ ! -d "$tmp/.opencode/tools" ] && [ ! -d "$tmp/.opencode" ] \
+    && ok "Manul V2 plugin is present for the task-local OpenCode preflight" \
+    || fail "Manul V2 plugin was not task-local during OpenCode preflight"
+  [ ! -e "$tmp/.opencode/plugins/manul_fiteo_create_task.ts" ] && [ ! -L "$tmp/.opencode/plugins/manul_fiteo_create_task.ts" ] \
+    && ok "Manul V2 plugin symlink is removed after task completion" \
+    || fail "Manul V2 plugin symlink leaked after task completion"
+  [ ! -d "$tmp/.opencode/plugins" ] && [ ! -d "$tmp/.opencode" ] \
     && ok "Adapter removes only the empty task-local config directories it created" \
     || fail "Adapter leaked empty task-local config directories"
 }
@@ -481,8 +481,8 @@ test_opencode_manul_tool_collision() {
   local tmp out rc
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin" "$tmp/home" "$tmp/.opencode/tools"
-  printf '%s\n' 'operator-owned tool' > "$tmp/.opencode/tools/manul_fiteo_create_task.ts"
+  mkdir -p "$tmp/bin" "$tmp/home" "$tmp/.opencode/plugins"
+  printf '%s\n' 'operator-owned tool' > "$tmp/.opencode/plugins/manul_fiteo_create_task.ts"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "unexpected OpenCode invocation" >> "$MOCK_INVOKED_FILE"
@@ -500,9 +500,9 @@ MOCK
   if [ "$rc" -ne 0 ] && printf '%s' "$out" | jq -e '.status == "FAILED" and .failure_code == "PRE_EXECUTION_FAILURE" and .diagnostics.stage == "manul_tool_scope"' >/dev/null; then
     ok "OpenCode adapter fails closed on a task-local Manul tool name collision"
   else
-    fail "OpenCode adapter did not fail closed on a task-local custom tool collision: $out"
+    fail "OpenCode adapter did not fail closed on a task-local V2 plugin collision: $out"
   fi
-  [ "$(cat "$tmp/.opencode/tools/manul_fiteo_create_task.ts")" = "operator-owned tool" ] \
+  [ "$(cat "$tmp/.opencode/plugins/manul_fiteo_create_task.ts")" = "operator-owned tool" ] \
     && ok "OpenCode adapter preserves the operator-owned task-local tool" \
     || fail "OpenCode adapter changed the operator-owned task-local tool"
   [ ! -s "$tmp/invoked" ] \
@@ -525,7 +525,7 @@ test_opencode_task_scoped_config() {
   mkdir -p "$tmp/bin" "$tmp/home/.config/opencode" "$primary_checkout" "$sibling_workspace"
   global_config="$tmp/home/.config/opencode/opencode.json"
   cat >"$global_config" <<JSON
-{"model":"test/provider","permission":{"external_directory":{"$custom_workspace_base/**":"deny"}}}
+{"model":"test/provider","permissions":[{"action":"external_directory","resource":"$custom_workspace_base/*","effect":"deny"}]}
 JSON
   before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
   cat >"$tmp/bin/opencode" <<'MOCK'
@@ -551,17 +551,14 @@ if [ "${1:-}" = "run" ]; then
   sibling_real="$(realpath -e "$SIBLING_WORKSPACE")"
   workspace_base_real="$(realpath -e "$MANUL_WORKSPACE")"
   expected_workdir_real="$(realpath -e "$EXPECTED_PRIMARY_CHECKOUT")"
-  jq -e --arg active "$active_real" --arg activeGlob "$active_real/**" --arg globalPattern "$workspace_base_real/**" --arg sibling "$sibling_real" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$active_real" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$expected_workdir_real" '
-    .permission.external_directory as $rules
-    | ($rules[$globalPattern] == "deny")
-      and ($rules[$active] == "allow")
-      and ($rules[$activeGlob] == "allow")
-      and (($rules | keys_unsorted | index($globalPattern)) < ($rules | keys_unsorted | index($active)))
-      and (($rules | keys_unsorted | index($active)) < ($rules | keys_unsorted | index($activeGlob)))
-      and (($rules[$sibling] // "deny") == "deny")
-      and (($rules[$sibling + "/**"] // "deny") == "deny")
-      and ($taskRoot == $expectedRoot)
-      and ($workdir == $expectedWorkdir)
+  jq -e --arg active "$active_real" --arg activeGlob "$active_real/*" --arg globalPattern "$workspace_base_real/*" --arg sibling "$sibling_real" --arg taskRoot "$MANUL_TASK_WORKSPACE_ROOT" --arg expectedRoot "$active_real" --arg workdir "$MANUL_TASK_WORKDIR" --arg expectedWorkdir "$expected_workdir_real" '
+    def idx($a;$r;$e): ([.permissions|to_entries[]|select(.value.action==$a and .value.resource==$r and .value.effect==$e)|.key]|last // -1);
+    (idx("external_directory";$globalPattern;"deny")) as $deny
+    | (idx("external_directory";$active;"allow")) as $root
+    | (idx("external_directory";$activeGlob;"allow")) as $children
+    | ($deny>=0) and ($root>$deny) and ($children>$root)
+      and ([.permissions[]|select(.action=="external_directory" and .effect=="allow" and (.resource==$sibling or .resource==($sibling+"/*")))]|length==0)
+      and ($taskRoot==$expectedRoot) and ($workdir==$expectedWorkdir)
   ' "$OPENCODE_CONFIG" >/dev/null
   printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
 else

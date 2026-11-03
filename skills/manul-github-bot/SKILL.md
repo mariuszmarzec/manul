@@ -71,7 +71,7 @@ appropriate timeout cause, and retains raw JSONL/stderr diagnostics.
 
 For each OpenCode invocation, the adapter appends a runtime-capability snapshot
 to the initial prompt and every resumed turn. It identifies the assigned
-workspace and lists the effective `permission.external_directory` path rules
+workspace and lists the effective `V2 `external_directory` permission` path rules
 from the invocation config without exposing the rest of the config. The snapshot
 is advisory context, not a permission grant: tool-level and path-level checks
 remain authoritative.
@@ -249,7 +249,7 @@ and not queued. Manul must never fall back to a hardcoded Todo repository.
 
 The local adapter connects directly to Todo Desktop at `http://127.0.0.1:8765/mcp` on native Linux/macOS hosts. Inside WSL it first tries the same loopback endpoint and falls back to the existing WSL bridge at `http://127.0.0.1:8766/mcp` when direct loopback is unavailable. Both paths use `TODO_LOCAL_MCP_TOKEN`. The remote adapter accepts an HTTP or HTTPS MCP URL and uses Manul's dedicated PAT supplied through `FITEO_MANUL_PAT`. HTTPS is strongly recommended outside a trusted private network: an HTTP connection does not encrypt the Bearer token in transit. Its URL can be configured as `"{env:FITEO_BASE_URL}/mcp"`, and `manulUserIdEnv` can point to `MANUL_USER_ID` (a positive numeric ID). Never use the operator's `FITEO_PAT` for Manul's task-scoped Fiteo connection.
 
-When creating tasks through Fiteo, always use the `manul_fiteo_create_task` custom tool rather than calling `fiteo_todo_create_task` directly. A root task gets an explicit `EDITOR_AND_VIEWER` share and that share is verified on read-back; root creation requires `FITEO_MANUL_SHARE_USER_ID`, the numeric Fiteo ID of the intended recipient. A subtask is different: the tool first verifies that its parent is visible, creates the child with `parentTaskId` and no duplicate direct share, then verifies that the child is returned under that parent. Fiteo access is inherited from the shared parent, so a direct share on the child is not required. A subtask must not be created when its parent is not visible or when read-back does not confirm the parent-child relationship. Neither token nor recipient ID belongs in `config.json`.
+When creating tasks through Fiteo, always use the `manul_fiteo_create_task` V2 plugin tool rather than calling `fiteo_todo_create_task` directly. A root task gets an explicit `EDITOR_AND_VIEWER` share and that share is verified on read-back; root creation requires `FITEO_MANUL_SHARE_USER_ID`, the numeric Fiteo ID of the intended recipient. A subtask is different: the tool first verifies that its parent is visible, creates the child with `parentTaskId` and no duplicate direct share, then verifies that the child is returned under that parent. Fiteo access is inherited from the shared parent, so a direct share on the child is not required. A subtask must not be created when its parent is not visible or when read-back does not confirm the parent-child relationship. Neither token nor recipient ID belongs in `config.json`.
 
 A Todo root is one Manul task. Its nested subtasks are included as ordered implementation steps in pre-order, preserving the order returned by Todo; they are not queued as independent tasks. Manul revalidates the source tree before execution and marks the root and descendants done only after repository delivery has been verified. For Fiteo, descendants are updated before the root so a partial failure can be retried while the root remains active.
 
@@ -557,8 +557,7 @@ Before starting the task, it runs `opencode mcp list` and refuses to launch the
 task unless Caracal reports a live connected status. A URL or token alone is not
 treated as proof of access.
 
-The Manul-only `manul_fiteo_create_task` custom tool is not installed in
-OpenCode's global `tools/` directory. The installer removes only a legacy
+The Manul-only `manul_fiteo_create_task` V2 plugin is registered only inside the active task workspace under `.opencode/plugins/`; it is never installed globally. The installer removes only a legacy
 Manul-owned global registration (a symlink to the Manul runtime tool or a
 byte-identical copy), preserving unrelated operator tools. It provisions the
 matching `@opencode-ai/plugin` dependency beside the canonical Manul skill.
