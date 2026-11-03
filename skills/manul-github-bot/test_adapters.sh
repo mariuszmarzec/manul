@@ -10,13 +10,53 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 TEST_HOME="$(mktemp -d)"
 trap 'rm -rf -- "$TEST_HOME"' EXIT
 export HOME="$TEST_HOME"
-unset MANUL_DIR MANUL_CONFIG MANUL_WORKSPACE MANUL_TASK_WORKSPACE_ROOT \
-  MANUL_TASK_WORKDIR MANUL_HOST_SKILLS_DIR MANUL_RUNTIME_DIR MANUL_STATE_DIR \
-  MANUL_DB MANUL_LOG_DIR MANUL_LOCKS_DIR MANUL_TASKS_DIR MANUL_TASK_LOG_DIR \
-  MANUL_MODE MANUL_SQLITE_BUSY_TIMEOUT_MS MANUL_OPENCODE_AGENT_TIMEOUT \
-  MANUL_OPENCODE_NO_PROGRESS_TIMEOUT MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT \
-  MANUL_OPENCODE_STEP_NO_PROGRESS_TIMEOUT OPENCODE_CONFIG AGENT_RUNTIME \
-  MANUL_AGENT_RUNTIME
+# Never let a developer's live runtime, MCP credentials, provider keys, or
+# OpenCode config override leak into this suite. Every integration exercised
+# here uses explicit fixtures and fake CLI binaries.
+ISOLATED_ENV_VARS=(
+  MANUL_DIR MANUL_CONFIG MANUL_WORKSPACE MANUL_TASK_WORKSPACE_ROOT
+  MANUL_TASK_WORKDIR MANUL_HOST_SKILLS_DIR MANUL_RUNTIME_DIR MANUL_STATE_DIR
+  MANUL_DB MANUL_LOG_DIR MANUL_LOCKS_DIR MANUL_TASKS_DIR MANUL_TASK_LOG_DIR
+  MANUL_MODE MANUL_SQLITE_BUSY_TIMEOUT_MS MANUL_OPENCODE_AGENT_TIMEOUT
+  MANUL_OPENCODE_NO_PROGRESS_TIMEOUT MANUL_OPENCODE_TOOL_NO_PROGRESS_TIMEOUT
+  MANUL_OPENCODE_STEP_NO_PROGRESS_TIMEOUT MANUL_AGENT_RUNTIME
+  MANUL_CANONICAL_DIR MANUL_CANONICAL_ROOT MANUL_CANONICAL_BRANCH
+  MANUL_JIRA_USER MANUL_JIRA_PASSWORD
+  AGENT_RUNTIME ROLE_RUNTIME MANUL_ROLE_RUNTIME
+  OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT OPENCODE_CONFIG_DIR OPENCODE_BIN
+  OPENCLAW_BIN CODEX_BIN CLAUDE_BIN CLAUDE_CODE_BIN
+  TODO_LOCAL_MCP_TOKEN TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
+  FITEO_BASE_URL FITEO_PAT FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID
+  CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+  GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
+  OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY LITELLM_API_KEY GOOGLE_API_KEY
+  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
+)
+
+clear_inherited_runtime_environment() {
+  local variable
+  for variable in "${ISOLATED_ENV_VARS[@]}"; do
+    unset "$variable"
+  done
+}
+
+assert_runtime_environment_isolated() {
+  local variable
+  for variable in "${ISOLATED_ENV_VARS[@]}"; do
+    if [[ -v "$variable" ]]; then
+      printf 'FAIL: inherited runtime variable remains set: %s\\n' "$variable" >&2
+      return 1
+    fi
+  done
+}
+
+clear_inherited_runtime_environment
+if [[ "${1:-}" == "--verify-env-isolation" ]]; then
+  assert_runtime_environment_isolated || exit 1
+  echo "Test environment isolation verified."
+  exit 0
+fi
+
 # These local test endpoints are handled by the fake OpenCode binaries below.
 export CARACAL_MCP_URL="http://127.0.0.1:3400/mcp"
 export CARACAL_ACCESS_TOKEN="test-caracal-token"
@@ -42,6 +82,43 @@ assert_json_status() {
     ok "$label"
   else
     fail "$label (status=$actual output=$json)"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 0. Inherited runtime and credentials cannot reach adapter tests
+# ---------------------------------------------------------------------------
+test_inherited_runtime_environment_isolation() {
+  local output rc
+  output="$(env \
+    MANUL_DIR="/operator/.manul" \
+    MANUL_CONFIG="/operator/.manul/config.json" \
+    MANUL_WORKSPACE="/operator/.manul/workspace" \
+    MANUL_DB="/operator/.manul/state/manul.db" \
+    MANUL_CANONICAL_DIR="/operator/globalskills" \
+    MANUL_JIRA_PASSWORD="poison-jira-password" \
+    AGENT_RUNTIME="openclaw" ROLE_RUNTIME="codex" \
+    OPENCODE_CONFIG="/operator/.config/opencode/opencode.json" \
+    OPENCODE_CONFIG_CONTENT="operator-config-content" \
+    OPENCODE_CONFIG_DIR="/operator/.config/opencode" \
+    OPENCODE_BIN="/operator/.opencode/bin/opencode" \
+    TODO_LOCAL_MCP_TOKEN="poison-todo-token" \
+    TODO_LOCAL_MCP_URL="http://operator-todo.invalid/mcp" \
+    TODO_LOCAL_MCP_AVAILABLE="1" TODO_LOCAL_MCP_CONNECTED="1" \
+    FITEO_BASE_URL="https://operator-fiteo.invalid" \
+    FITEO_PAT="poison-fiteo-pat" FITEO_MANUL_PAT="poison-manul-pat" \
+    FITEO_MANUL_SHARE_USER_ID="999" \
+    CARACAL_MCP_URL="https://operator-caracal.invalid/mcp" \
+    CARACAL_ACCESS_TOKEN="poison-caracal-token" \
+    GITHUB_TOKEN="poison-github-token" GH_TOKEN="poison-gh-token" \
+    OPENAI_API_KEY="poison-openai-key" ANTHROPIC_API_KEY="poison-anthropic-key" \
+    XDG_CONFIG_HOME="/operator/.config" \
+    bash "$SCRIPT_DIR/test_adapters.sh" --verify-env-isolation 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ] && printf '%s' "$output" | grep -Fq "Test environment isolation verified."; then
+    ok "adapter tests clear inherited Manul paths, live MCP credentials, provider keys, and OpenCode config"
+  else
+    fail "adapter test environment isolation failed (rc=$rc): $output"
   fi
 }
 
@@ -1833,6 +1910,7 @@ test_opencode_adapter_syntax() {
 echo "=== Adapter Unit Tests ==="
 echo "Canonical source: $SCRIPT_DIR"
 
+test_inherited_runtime_environment_isolation
 test_opencode_adapter_syntax
 test_process_runner_mock
 test_process_runner_cwd_env
