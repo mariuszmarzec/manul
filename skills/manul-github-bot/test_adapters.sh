@@ -525,13 +525,24 @@ test_opencode_task_scoped_config() {
   mkdir -p "$tmp/bin" "$tmp/home/.config/opencode" "$primary_checkout" "$sibling_workspace"
   global_config="$tmp/home/.config/opencode/opencode.json"
   cat >"$global_config" <<JSON
-{"model":"test/provider","permissions":[{"action":"external_directory","resource":"$custom_workspace_base/*","effect":"deny"}]}
+{"model":"test/provider","mcp":{"timeout":{"catalog":5000},"legacy":{"type":"local","command":["node","server.js"],"enabled":true,"timeout":12000},"legacy-disabled":{"type":"local","command":["node","disabled.js"],"enabled":false}},"experimental":{"mcp_timeout":15000},"permissions":[{"action":"external_directory","resource":"$custom_workspace_base/*","effect":"deny"}]}
 JSON
   before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 # Universal Caracal MCP fixture for OpenCode adapter tests.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  jq -e '
+    .mcp.timeout.catalog == 5000
+    and .mcp.timeout.execution == 15000
+    and .mcp.servers["legacy-disabled"].disabled == true
+    and (.mcp.servers["legacy-disabled"] | has("enabled") | not)
+    and .mcp.servers.legacy.timeout.catalog == 12000
+    and .mcp.servers.legacy.timeout.execution == 12000
+  ' "$OPENCODE_CONFIG" >/dev/null || {
+    echo "task-local V2 MCP migration did not preserve legacy disabled/timeout state" >&2
+    exit 65
+  }
   if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
     printf '%s\n' 'caracal-rag connected'
     exit 0
