@@ -85,7 +85,9 @@ task_source_ensure_workspace_context() {
     SELECT changes();
   " 2>/dev/null | tail -n 1)" || return 1
 
-  # Another writer may have repaired the row between the read and update.
+  # changes=0 is valid only when another writer has already repaired the row.
+  case "$changed" in 0|1) ;; *) return 1 ;; esac
+
   # Re-read the persisted value instead of assuming our candidate won.
   current_context="$(sqlite3 "$db" "SELECT COALESCE(conversationId,'') FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)" || return 1
   [ -n "$current_context" ] || return 1
