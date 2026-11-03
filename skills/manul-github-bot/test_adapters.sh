@@ -1249,8 +1249,12 @@ MOCK
   ! grep -Fq 'Do not repeat the denied operation' "$tmp/args" && ok "Recovery instruction is sent over stdin, not argv" || fail "Recovery instruction leaked into argv"
   grep -Fq "$active_workspace" "$tmp/initial-prompt" && ok "Initial prompt includes the actual assigned workspace" || fail "Initial prompt lacks capability workspace"
   grep -Fq "$active_workspace" "$tmp/recovery-prompt" && ok "Recovery prompt retains the capability workspace" || fail "Recovery prompt lacks capability workspace"
-  grep -Fq "$tmp/home/.gradle/caches/modules-2/files-2.1/**" "$tmp/initial-prompt"
-  grep -Fq '"action":"external_directory"' "$tmp/initial-prompt" && ok "Capability context uses V2 external-directory rules" || fail "Capability context lacks V2 permissions" && ok "Capability snapshot lists effective external-directory allow rules" || fail "Capability snapshot omitted the configured Gradle cache rule"
+  grep -Fq "$tmp/home/.gradle/caches/modules-2/files-2.1/**" "$tmp/initial-prompt" \
+    && ok "Capability snapshot lists the configured Gradle cache rule" \
+    || fail "Capability snapshot omitted the configured Gradle cache rule"
+  grep -Fq 'Effective V2 external_directory permission rules' "$tmp/initial-prompt" \
+    && ok "Capability context documents V2 external-directory rules" \
+    || fail "Capability context lacks V2 permissions"
   grep -Fq 'not a guarantee that every bash command' "$tmp/initial-prompt" && ok "Capability snapshot explains tool-level restrictions" || fail "Capability snapshot omits tool-level caveat"
   ! grep -Fq 'daemon-8.11.1' "$tmp/initial-prompt" && ok "Capability snapshot does not imply access to denied daemon logs" || fail "Capability snapshot implied daemon log access"
   grep -Fq 'TASK_DONE recovered via an in-workspace alternative' "$tmp/stdout" && ok "Recovered completion marker is normalized" || fail "Recovered completion marker missing"
