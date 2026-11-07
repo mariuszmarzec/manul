@@ -38,7 +38,7 @@ todo_task_repository_catalog_path() {
 
 # Resolve a task target only from the curated project catalog. Explicit GitHub
 # URLs win; otherwise the longest unambiguous whole-phrase alias wins. A
-# source-level repositoryAllowlist can narrow the catalog, but never widen it.
+# The operator's global .repositories list is the allowlist; the catalog only maps names and skills.
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
