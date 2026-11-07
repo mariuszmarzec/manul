@@ -362,10 +362,12 @@ MOCK
 # 3c. AgentExecutor performs OpenCode preflight without starting the model
 # ---------------------------------------------------------------------------
 test_agent_executor_opencode_preflight_only() {
-  local tmp out
+  local tmp out workspace workdir
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  mkdir -p "$tmp/bin" "$tmp/home" "$tmp/runtime"
+  workspace="$tmp/runtime/workspace/ws-preflight"
+  workdir="$workspace/repos/test-owner/test-repo"
+  mkdir -p "$tmp/bin" "$tmp/home" "$workdir"
 
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
@@ -379,8 +381,8 @@ exit 99
 MOCK
   chmod +x "$tmp/bin/opencode"
   printf '%s\n' 'Preflight task prompt' >"$tmp/prompt"
-  jq -n --arg prompt "$tmp/prompt" --arg workspace "$tmp" --arg stdout "$tmp/stdout" --arg stderr "$tmp/stderr" \
-    '{taskId:"preflight-only",prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:$workspace,attempt:1,timeout:30,session_id:"",stdout_file:$stdout,stderr_file:$stderr,preflight_only:true}' >"$tmp/context.json"
+  jq -n --arg prompt "$tmp/prompt" --arg workspace "$workspace" --arg workdir "$workdir" --arg stdout "$tmp/stdout" --arg stderr "$tmp/stderr" \
+    '{taskId:"preflight-only",prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:$workdir,attempt:1,timeout:30,session_id:"",stdout_file:$stdout,stderr_file:$stderr,preflight_only:true}' >"$tmp/context.json"
 
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
@@ -394,7 +396,7 @@ MOCK
   [ ! -s "$tmp/model-launch" ] \
     && ok "OpenCode model is not launched during preflight-only execution" \
     || fail "OpenCode model was launched during preflight-only execution"
-  [ ! -e "$tmp/.opencode/plugins/manul_fiteo_create_task.ts" ] \
+  [ ! -e "$workspace/.opencode/plugins/manul_fiteo_create_task.ts" ] \
     && ok "Preflight-only execution cleans up its task-scoped plugin link" \
     || fail "Preflight-only execution leaked its task-scoped plugin link"
 }
