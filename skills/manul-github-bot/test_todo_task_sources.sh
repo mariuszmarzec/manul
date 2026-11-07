@@ -407,8 +407,8 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
 ]
 JSON
 
-LOCAL_SOURCE='{"type":"todo_local_mcp","repositoryAllowlist":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"ignored-legacy-setting"}'
-REMOTE_SOURCE='{"type":"todo_remote_mcp","repositoryAllowlist":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp"}'
+LOCAL_SOURCE='{"type":"todo_local_mcp","repositories":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"ignored-legacy-setting"}'
+REMOTE_SOURCE='{"type":"todo_remote_mcp","repositories":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp"}'
 remote_resolved_config="$(todo_source_remote_config "$REMOTE_SOURCE")"
 assert_eq "remote URL expands the Fiteo base URL environment placeholder" "https://fiteo.example.test/mcp" "$(jq -r '.url' <<<"$remote_resolved_config")"
 export FITEO_BASE_URL="http://fiteo.example.test"
@@ -485,7 +485,7 @@ linked_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":92,"des
 assert_eq "explicit GitHub URL has precedence and resolves its repository" "owner/link-target" "$(jq -r '.repository' <<<"$linked_resolution")"
 assert_eq "explicit URL is identified as the routing source" "explicit_github_url" "$(jq -r '.method' <<<"$linked_resolution")"
 
-specific_source='{"repositoryAllowlist":["owner/fiteo","owner/fiteo-app"]}'
+specific_source='{"repositories":["owner/fiteo","owner/fiteo-app"]}'
 specific_resolution="$(todo_task_resolve_repository "$specific_source" '{"id":93,"description":"/manul Update the Fiteo App"}')"
 assert_eq "longest matching alias distinguishes Fiteo App from Fiteo backend" "owner/fiteo-app" "$(jq -r '.repository' <<<"$specific_resolution")"
 
@@ -495,15 +495,15 @@ assert_rc "duplicate alias is rejected instead of guessing" "1" "$resolution_rc"
 assert_contains "ambiguous routing explains the candidate projects" "$(cat "$TEST_DIR/ambiguous.log")" "routing is ambiguous"
 
 resolution_rc=0
-todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":95,"description":"/manul Update remote project"}' 2>"$TEST_DIR/allowlist.log" >/dev/null || resolution_rc=$?
-assert_rc "source allowlist rejects an otherwise known project" "1" "$resolution_rc"
-assert_contains "allowlist rejection identifies the denied repository" "$(cat "$TEST_DIR/allowlist.log")" "owner/remote"
+todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":95,"description":"/manul Update remote project"}' 2>"$TEST_DIR/global-repositories.log" >/dev/null || resolution_rc=$?
+assert_rc "global repository list rejects an otherwise known project" "1" "$resolution_rc"
+assert_contains "global repository rejection identifies the denied repository" "$(cat "$TEST_DIR/global-repositories.log")" "owner/remote"
 
-empty_source='{"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+empty_source='{"repositories":[]}'
 resolution_rc=0
-todo_task_resolve_repository "$empty_source" '{"id":98,"description":"/manul Update local project"}' 2>"$TEST_DIR/empty-allowlist.log" >/dev/null || resolution_rc=$?
+todo_task_resolve_repository "$empty_source" '{"id":98,"description":"/manul Update local project"}' 2>"$TEST_DIR/empty-global-repositories.log" >/dev/null || resolution_rc=$?
 assert_rc "explicit empty repository allowlist denies all catalog targets" "1" "$resolution_rc"
-assert_contains "empty allowlist rejection is explicit" "$(cat "$TEST_DIR/empty-allowlist.log")" "excluded by this Todo source allowlist"
+assert_contains "empty global repository rejection is explicit" "$(cat "$TEST_DIR/empty-global-repositories.log")" "excluded by the global .repositories list"
 
 resolution_rc=0
 todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":96,"description":"/manul Fetch weather for Krakow"}' 2>"$TEST_DIR/unmatched.log" >/dev/null || resolution_rc=$?
@@ -531,7 +531,7 @@ cat > "$TEST_DIR/local-question.json" <<'JSON'
   {"id":490,"description":"/manul what day is today?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
 JSON
-LOCAL_QUESTION_SOURCE='{"type":"todo_local_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+LOCAL_QUESTION_SOURCE='{"type":"todo_local_mcp","allowReportOnly":false,"repositories":[]}'
 
 export TODO_MCP_FIXTURE="$TEST_DIR/local-question.json"
 local_question_task="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
@@ -615,7 +615,7 @@ cat > "$TEST_DIR/remote-question.json" <<'JSON'
   {"id":591,"ownerId":4,"description":"/manul daj znać czy żyjesz","addedTime":"2026-10-01T10:01:00","modifiedTime":"2026-10-01T10:01:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
-REMOTE_QUESTION_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
+REMOTE_QUESTION_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositories":[],"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
 
 # Exercise the production default: the catalog is read from the canonical
 # agent skills tree, not bundled alongside the standalone Manul checkout.
@@ -698,7 +698,7 @@ cat > "$TEST_DIR/local-report.json" <<'JSON'
   {"id":501,"description":"/manul report Summarize local report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
 JSON
-LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true}'
+LOCAL_REPORT_SOURCE='{"type":"todo_local_mcp","url":"http://127.0.0.1:8766/mcp","allowReportOnly":false,"repositories":[]}'
 export TODO_MCP_FIXTURE="$TEST_DIR/local-report.json"
 local_report_task="$(task_source_todo_local_poll "$LOCAL_REPORT_SOURCE")"
 local_report_prompt="$(jq -r '.prompt' <<<"$local_report_task")"
@@ -787,7 +787,7 @@ cat > "$TEST_DIR/remote-report.json" <<'JSON'
   {"id":601,"ownerId":4,"description":"/manul report Summarize remote report delivery","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
-REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositoryAllowlist":[],"repositoryAllowlistEnforced":true,"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
+REMOTE_REPORT_SOURCE='{"type":"todo_remote_mcp","allowReportOnly":false,"repositories":[],"manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp","tokenEnv":"FITEO_MANUL_PAT","shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}'
 # The lower-level delivery helper expects the source config to be normalized,
 # just as task_source_report_deliver does in the production dispatch path.
 REMOTE_REPORT_SOURCE="$(todo_source_remote_config "$REMOTE_REPORT_SOURCE")"
