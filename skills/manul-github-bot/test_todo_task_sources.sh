@@ -502,7 +502,7 @@ assert_contains "global repository rejection identifies the denied repository" "
 empty_source='{"repositories":[]}'
 resolution_rc=0
 todo_task_resolve_repository "$empty_source" '{"id":98,"description":"/manul Update local project"}' 2>"$TEST_DIR/empty-global-repositories.log" >/dev/null || resolution_rc=$?
-assert_rc "explicit empty repository allowlist denies all catalog targets" "1" "$resolution_rc"
+assert_rc "an empty global repositories list denies all catalog targets" "1" "$resolution_rc"
 assert_contains "empty global repository rejection is explicit" "$(cat "$TEST_DIR/empty-global-repositories.log")" "excluded by the global .repositories list"
 
 resolution_rc=0
