@@ -27,40 +27,43 @@ assert_eq "Todo Local workspace context strips source-version fingerprint" "conv
 assert_eq "GitHub source workspace context uses stable provider identity" "conv-source-github_issues-owner/issues#13" "$(task_source_workspace_context_id "github_issues" "owner/issues#13")"
 
 cat >"$WORK/config.json" <<'JSON'
-{"repositories":["legacy/repo"],"taskSources":[{"type":"github_issues","enabled":true,"repositories":["owner/issues"]},{"type":"jira_tasks","enabled":false,"baseUrl":"http://jira.local","repository":"owner/jira-repo"}]}
+{"repositories":["legacy/repo","owner/global-only"],"taskSources":[{"type":"github_issues","enabled":true,"repositories":["owner/stale-nested"]},{"type":"jira_tasks","enabled":false,"baseUrl":"http://jira.local","repository":"owner/jira-repo"}]}
 JSON
 sources="$(task_source_configured_sources "$WORK/config.json")"
 assert_contains "enabled GitHub source appears" "$sources" '"type":"github_issues"'
+assert_contains "GitHub provider receives top-level repositories" "$sources" '"repositories":["legacy/repo","owner/global-only"]'
+assert_not_contains "nested GitHub list cannot override global repositories" "$sources" "owner/stale-nested"
 assert_not_contains "disabled Jira source is omitted" "$sources" '"type":"jira_tasks"'
 
 cat >"$WORK/todo-sources.json" <<'JSON'
 {
-  "repositoryAllowlist": ["owner/catalog-a", "owner/catalog-b"],
+  "repositories": ["owner/catalog-a", "owner/catalog-b"],
   "taskSources": [
-    {"type":"todo_local_mcp","enabled":true,"tokenEnv":"TODO_LOCAL_MCP_TOKEN"},
-    {"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID","url":"https://fiteo.example.test/mcp"},
-    {"type":"github_issues","enabled":true,"repositories":["owner/issues"]}
+    {"type":"todo_local_mcp","enabled":true,"tokenEnv":"TODO_LOCAL_MCP_TOKEN","repositories":["owner/local-stale"]},
+    {"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID","url":"https://fiteo.example.test/mcp","repositories":[]},
+    {"type":"github_issues","enabled":true,"repositories":["owner/issues-stale"]}
   ]
 }
 JSON
 todo_sources="$(task_source_configured_sources "$WORK/todo-sources.json")"
-assert_contains "global repository allowlist is inherited by local Todo source" "$todo_sources" '"type":"todo_local_mcp","enabled":true,"repositoryAllowlist":["owner/catalog-a","owner/catalog-b"]'
+assert_contains "global repositories override local Todo source list" "$todo_sources" '"type":"todo_local_mcp","enabled":true,"repositories":["owner/catalog-a","owner/catalog-b"]'
 assert_not_contains "legacy local Todo token configuration is discarded" "$todo_sources" '"tokenEnv":"TODO_LOCAL_MCP_TOKEN"'
-assert_contains "global repository allowlist is inherited by remote Todo source" "$todo_sources" '"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID","url":"https://fiteo.example.test/mcp","repositoryAllowlist":["owner/catalog-a","owner/catalog-b"]'
-assert_not_contains "global Todo repository allowlist does not alter GitHub repository filters" "$todo_sources" '"type":"github_issues","repositories":["owner/issues"],"repositoryAllowlist"'
+assert_contains "global repositories override remote Todo source list" "$todo_sources" '"type":"todo_remote_mcp","enabled":true,"tokenEnv":"FITEO_MANUL_PAT","manulUserId":77,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID","url":"https://fiteo.example.test/mcp","repositories":["owner/catalog-a","owner/catalog-b"]'
+assert_contains "GitHub Issues uses the same global repository list" "$todo_sources" '"type":"github_issues","enabled":true,"repositories":["owner/catalog-a","owner/catalog-b"]'
+assert_not_contains "stale GitHub source repository list is ignored" "$todo_sources" "owner/issues-stale"
 
 cat >"$WORK/todo-allowlist-intersection.json" <<'JSON'
 {
-  "repositoryAllowlist": ["owner/catalog-a"],
+  "repositories": ["owner/catalog-a"],
   "taskSources": [
-    {"type":"todo_local_mcp","enabled":true,"repositoryAllowlist":["owner/catalog-a","owner/catalog-b"]},
-    {"type":"todo_remote_mcp","enabled":true,"repositoryAllowlist":[]}
+    {"type":"todo_local_mcp","enabled":true,"repositories":["owner/catalog-a","owner/catalog-b"]},
+    {"type":"todo_remote_mcp","enabled":true,"repositories":[]}
   ]
 }
 JSON
 intersected_todo_sources="$(task_source_configured_sources "$WORK/todo-allowlist-intersection.json")"
-assert_contains "per-source Todo allowlist is intersected with the global allowlist" "$intersected_todo_sources" '"repositoryAllowlist":["owner/catalog-a"]'
-assert_contains "explicit empty source allowlist remains deny-all after intersection" "$intersected_todo_sources" '"repositoryAllowlist":[],"repositoryAllowlistEnforced":true'
+assert_contains "global repositories override local source list" "$intersected_todo_sources" '"type":"todo_local_mcp","enabled":true,"repositories":["owner/catalog-a"]'
+assert_contains "global repositories override empty remote source list" "$intersected_todo_sources" '"type":"todo_remote_mcp","enabled":true,"repositories":["owner/catalog-a"]'
 
 
 
@@ -72,13 +75,13 @@ assert_contains "legacy config maps to GitHub Issues" "$legacy" '"type":"github_
 assert_contains "legacy repository preserved" "$legacy" "owner/legacy"
 
 cat >"$WORK/multi.json" <<'JSON'
-{"taskSources":[{"type":"github_issues","enabled":true,"repositories":["owner/b"]},{"type":"github_issues","enabled":true,"repositories":["owner/a","owner/b"]},{"type":"jira_tasks","enabled":true,"baseUrl":"http://todo.local"}]}
+{"repositories":["owner/global"],"taskSources":[{"type":"github_issues","enabled":true,"repositories":["owner/b"]},{"type":"github_issues","enabled":true,"repositories":["owner/a","owner/b"]},{"type":"jira_tasks","enabled":true,"baseUrl":"http://todo.local"}]}
 JSON
 multi="$(task_source_configured_sources "$WORK/multi.json")"
 count="$(printf "%s\n" "$multi" | wc -l | tr -d " ")"
 assert_eq "multiple source entries are preserved" "3" "$count"
-assert_contains "first GitHub repository preserved" "$multi" "owner/b"
-assert_contains "second GitHub repository preserved" "$multi" "owner/a"
+assert_contains "GitHub provider instances use global repositories" "$multi" '"repositories":["owner/global"]'
+assert_not_contains "provider-local repositories cannot add targets" "$multi" "owner/a"
 assert_contains "Jira source is preserved when enabled" "$multi" '"type":"jira_tasks"'
 
 cat >"$WORK/jira.json" <<'JSON'
