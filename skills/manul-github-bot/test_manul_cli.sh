@@ -125,18 +125,26 @@ test_task_recovery_retry() {
   NEXT_ATTEMPT=$(sqlite3 "$DB" "SELECT nextAttemptAt FROM processed_comments WHERE commentId='failed-retry';")
   assert_eq "Retry failed task requeues it" "queued" "$STATUS"
   assert_eq "Retry failed task resets attempts" "0" "$ATTEMPTS"
+  PRE_EXEC_FAILURES="$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='failed-retry';")"
+  AGENT_STARTED_AT="$(sqlite3 "$DB" "SELECT COALESCE(agentStartedAt,'') FROM processed_comments WHERE commentId='failed-retry';")"
+  assert_eq "Retry failed task resets pre-execution failures" "0" "$PRE_EXEC_FAILURES"
+  assert_eq "Retry failed task clears agent-start marker" "" "$AGENT_STARTED_AT"
   if [ -n "$NEXT_ATTEMPT" ]; then
     pass "Retry failed task schedules immediate attempt"
   else
     fail "Retry failed task schedules immediate attempt" "timestamp" "$NEXT_ATTEMPT"
   fi
 
-  sqlite3 "$DB" "INSERT INTO processed_comments (commentId, repository, issueNumber, status, attempts, createdAt) VALUES ('failed-retry-2','owner/repo',2,'failed',5,datetime('now'));"
+  sqlite3 "$DB" "INSERT INTO processed_comments (commentId, repository, issueNumber, status, attempts, createdAt, preExecutionFailures, agentStartedAt) VALUES ('failed-retry-2','owner/repo',2,'failed',5,datetime('now'),7,'2026-11-07T20:00:00Z');"
   printf 'yes\n' | MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/task-recovery.sh" --reset-all=failed > /dev/null 2>&1
   STATUS2=$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='failed-retry-2';")
   ATTEMPTS2=$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='failed-retry-2';")
   assert_eq "reset-all=failed requeues failed task" "queued" "$STATUS2"
   assert_eq "reset-all=failed resets attempts" "0" "$ATTEMPTS2"
+  PRE_EXEC_FAILURES2="$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='failed-retry-2';")"
+  AGENT_STARTED_AT2="$(sqlite3 "$DB" "SELECT COALESCE(agentStartedAt,'') FROM processed_comments WHERE commentId='failed-retry-2';")"
+  assert_eq "reset-all=failed resets pre-execution failures" "0" "$PRE_EXEC_FAILURES2"
+  assert_eq "reset-all=failed clears agent-start marker" "" "$AGENT_STARTED_AT2"
 }
 
 test_submit() {
