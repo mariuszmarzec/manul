@@ -430,6 +430,10 @@ through `AgentExecutor` to a backend adapter.
 
 Adapters are independent backends behind a single ProcessRunner.run() process boundary. The single automation.agentRuntime setting (default OpenClaw) selects the backend for every task. Role selection is adapter input, not backend selection. Supported values are openclaw, opencode, codex, and claude-code. Adapters must not spawn subprocesses directly and must not depend on each other.
 
+For OpenCode 2.x, the adapter must set the exact task workspace as the child
+process working directory through `ProcessRunner.run --cwd`; it must not pass
+`--dir` to `opencode run`, which does not accept that option.
+
 The adapter owns runtime session invocation/resume mechanics. Manul owns the
 persisted `processed_comments.session_id` pointer: retain it only when the
 current running claim returns `NEEDS_CONTINUATION` with a non-empty session ID,
