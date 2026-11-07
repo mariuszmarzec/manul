@@ -145,6 +145,12 @@ test_task_recovery_retry() {
   AGENT_STARTED_AT2="$(sqlite3 "$DB" "SELECT COALESCE(agentStartedAt,'') FROM processed_comments WHERE commentId='failed-retry-2';")"
   assert_eq "reset-all=failed resets pre-execution failures" "0" "$PRE_EXEC_FAILURES2"
   assert_eq "reset-all=failed clears agent-start marker" "" "$AGENT_STARTED_AT2"
+
+  # The recovery CLI deliberately migrated this legacy test DB. Recreate the
+  # original legacy schema so the following status tests independently verify
+  # legacy-column fallback behavior rather than inheriting this migration.
+  sqlite3 "$DB" "DROP TABLE processed_comments;"
+  init_db
 }
 
 test_submit() {
