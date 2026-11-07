@@ -1059,6 +1059,13 @@ elif grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
     else
         _status="FAILED"
         _summary="OpenCode emitted TASK_DONE but exited with code $pr_rc"
+        # TASK_DONE is not enough to override a failing runtime process. Keep
+        # the failure fail-closed, but do not discard structured diagnostics
+        # that explain why OpenCode exited non-zero after emitting the marker.
+        [ -n "$error_type" ] && _summary+="; error_type=$error_type"
+        [ -n "$error_source" ] && _summary+="; error_source=$error_source"
+        [ -n "$last_event_type" ] && _summary+="; last_event=$last_event_type"
+        _summary+="; duration_s=$duration"
     fi
 elif [ "$permission_blocked" -eq 1 ]; then
     _status="FAILED"
