@@ -395,7 +395,8 @@ The runtime reads Manul configuration from `MANUL_DIR/config.json`, where `MANUL
 
 The example configuration currently defines:
 - polling interval;
-- allowed users/repositories;
+- allowed users;
+- one top-level `.repositories` array shared by GitHub Issues polling and Todo repository routing;
 - agent names;
 - `automation.agentRuntime` (default `openclaw`) as the sole backend selector for all tasks;
 - PR automation;
@@ -565,10 +566,14 @@ matched alias and mapped skill names are stored in normalized metadata as
 `repositoryResolution`. Full contents of the mapped skills are included in
 the task prompt; workers must not inspect global skill paths.
 
-The catalog is the maximum set of repositories Todo routing can choose.
-Operator-level `repositoryAllowlist` and a per-source override can only narrow
-that set. A missing match, multiple equally-specific project matches, an
-uncatalogued explicit URL, or an allowlist rejection is fail-closed: log the
+The top-level `.repositories` array in `~/.manul/config.json` is the single
+operator-controlled repository list for all task sources. GitHub Issues polling
+uses it directly; Todo Local and Todo Remote require the resolved project to be
+present in it. Per-source repository lists and `repositoryAllowlist` fields are
+not configuration inputs and cannot widen or narrow this list. The curated
+catalog supplies aliases and mapped project skills, but does not grant access.
+A missing match, multiple equally-specific project matches, an uncatalogued
+explicit URL, or a repository outside the global list is fail-closed: log the
 source task ID and skip it without creating a queue entry or falling back to a
 static repository. The route already stored with a queued task is reused across
 retries; changing the catalog does not silently retarget existing queue rows.
@@ -622,9 +627,10 @@ The task-source identity is the root work item. A pull request, review
 comment, or CI check is never a task-source root. Those artifacts may be linked
 as context to a task owned by another source.
 
-The default source is `github_issues`. Existing configurations without
-`.taskSources` fall back to the legacy `.repositories` array as one GitHub
-Issues source.
+The default source is `github_issues`. The top-level `.repositories` array is
+always authoritative, whether or not explicit `.taskSources` are configured.
+Enabled provider entries define provider settings only; nested repository lists
+are ignored at runtime and removed by the installer migration.
 
 Multiple enabled sources are independent: a failure in one provider must not
 prevent other providers from being polled.
