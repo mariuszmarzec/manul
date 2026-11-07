@@ -437,6 +437,50 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 3e. OpenCode TASK_DONE followed by a non-zero process exit remains failed
+#     and preserves the available diagnostic context in the summary.
+# ---------------------------------------------------------------------------
+test_opencode_task_done_nonzero_exit_diagnostic() {
+  local tmp out rc summary
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'caracal-rag connected'
+  exit 0
+fi
+printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_done_error","part":{"type":"step-start"}}'
+printf '%s\\n' '{"type":"text","timestamp":1100,"sessionID":"ses_done_error","part":{"type":"text","text":"TASK_DONE delivered PR"}}'
+printf '%s\\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_done_error","part":{"type":"step-finish"}}'
+printf '%s\\n' 'ERROR: transport closed after completion' >&2
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\\n' 'Do the task' >"$tmp/prompt"
+
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id opencode-done-nonzero --prompt "$tmp/prompt" \
+      --workspace "$tmp" --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  rc=$?
+  summary="$(printf '%s' "$out" | jq -r '.summary // empty')"
+  assert_json_status "$out" "FAILED" "TASK_DONE followed by a non-zero OpenCode exit remains failed"
+  [ "$rc" -eq 1 ] && ok "TASK_DONE/non-zero exit preserves the runtime failure exit code" || fail "TASK_DONE/non-zero exit returned rc=$rc"
+  printf '%s' "$summary" | grep -Fq 'error_source=stderr' \
+    && ok "TASK_DONE/non-zero summary retains stderr diagnostic source" \
+    || fail "TASK_DONE/non-zero summary omitted stderr diagnostic source: $summary"
+  printf '%s' "$summary" | grep -Fq 'last_event=step_finish' \
+    && ok "TASK_DONE/non-zero summary retains the last OpenCode JSONL event" \
+    || fail "TASK_DONE/non-zero summary omitted the last JSONL event: $summary"
+  printf '%s' "$summary" | grep -Fq 'duration_s=' \
+    && ok "TASK_DONE/non-zero summary retains runtime duration" \
+    || fail "TASK_DONE/non-zero summary omitted runtime duration: $summary"
+}
+
+# ---------------------------------------------------------------------------
 # 3b. OpenClaw clean exit without Manul completion marker
 # ---------------------------------------------------------------------------
 test_openclaw_no_marker() {
@@ -1987,6 +2031,7 @@ test_openclaw_explicit_role
 test_agent_executor_openclaw_role_dispatch
 test_agent_executor_opencode_preflight_only
 test_opencode_raw_stderr_diagnostic
+test_opencode_task_done_nonzero_exit_diagnostic
 test_openclaw_no_marker
 test_openclaw_failure
 test_openclaw_missing
