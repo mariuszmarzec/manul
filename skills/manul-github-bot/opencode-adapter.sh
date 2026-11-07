@@ -2,9 +2,11 @@
 # opencode-adapter.sh — OpenCode runtime adapter for AgentExecutor.
 #
 # Independent backend: it does not import, invoke, or configure OpenClaw.
-# Uses the documented non-interactive CLI:
-#   opencode run [message...] --format json --dir <workspace>
-# and resumes a saved session with:
+# Uses the documented OpenCode 2.x non-interactive CLI:
+#   opencode run [message...] --format json
+# ProcessRunner changes to the exact task workspace before launching OpenCode;
+# OpenCode 2.x does not accept --dir on the run subcommand.
+# Saved sessions are resumed with:
 #   opencode run --session <session-id> ...
 #
 # JSON mode exposes sessionID on events. We persist that ID only when the
@@ -749,7 +751,6 @@ while true; do
             "${SESSION_ARGS[@]}" \
             "${AGENT_ARGS[@]}" \
             --format json \
-            --dir "$OPT_WORKSPACE" \
             < "$CURRENT_RUN_PROMPT_FILE")"
     pr_rc=$?
     runner_timeout_reason="$(printf '%s\n' "$local_runner_result" | head -n 1 | cut -d'|' -f5)"

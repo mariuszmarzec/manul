@@ -562,6 +562,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   exit 1
 fi
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
+printf '%s\n' "$PWD" > "$MOCK_CWD_FILE"
 if [ -n "${MOCK_STDIN_FILE:-}" ]; then cat > "$MOCK_STDIN_FILE"; else cat >/dev/null; fi
 printf 'PYTHONPATH=%s\n' "${PYTHONPATH-<unset>}" > "$MOCK_ENV_FILE"
 printf 'PYTHONHOME=%s\n' "${PYTHONHOME-<unset>}" >> "$MOCK_ENV_FILE"
@@ -578,7 +579,7 @@ MOCK
   local out
   mkdir -p "$tmp/home"
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCLAW_BIN=/does/not/exist \
-    MOCK_ARGS_FILE="$tmp/args" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_CWD_FILE="$tmp/cwd" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" \
     MOCK_TOOL_STATE_FILE="$tmp/tool-state" MOCK_EXPECTED_MANUL_TOOL_SOURCE="$SCRIPT_DIR/manul_fiteo_create_task.ts" \
     PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
@@ -597,7 +598,8 @@ MOCK
     && ok "OpenCodeAdapter keeps prompt contents out of argv" \
     || fail "OpenCodeAdapter still passes prompt contents as an argument"
   grep -q -- '--format json' "$tmp/args" && ok "OpenCodeAdapter requests JSON event format" || fail "OpenCodeAdapter did not request --format json"
-  grep -q -- '--dir '"$tmp" "$tmp/args" && ok "OpenCodeAdapter passes workspace with --dir" || fail "OpenCodeAdapter did not pass --dir workspace"
+  grep -Fxq "$tmp" "$tmp/cwd" && ok "OpenCodeAdapter launches OpenCode from the assigned workspace" || fail "OpenCodeAdapter did not set OpenCode working directory to the assigned workspace"
+  ! grep -Eq '(^|[[:space:]])--dir([[:space:]]|$)' "$tmp/args" && ok "OpenCodeAdapter does not pass the unsupported --dir flag to OpenCode 2.x" || fail "OpenCodeAdapter still passes unsupported --dir to opencode run"
   grep -q -- '--agent build' "$tmp/args" && ok "OpenCodeAdapter passes agent selection" || fail "OpenCodeAdapter ignored --agent"
   grep -q -- '--auto' "$tmp/args" && ok "OpenCodeAdapter forwards native --auto" || fail "OpenCodeAdapter ignored --auto"
   grep -q '^TASK_DONE opencode completed$' "$tmp/stdout" \
