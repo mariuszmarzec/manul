@@ -170,6 +170,41 @@ log() {
     echo "[$(date -Is)] opencode-adapter: $*" >>"$OPT_STDERR_FILE"
 }
 
+append_redacted_stderr() {
+    local source_file="$1"
+    [ -s "$source_file" ] || return 0
+    python3 - "$source_file" "$RAW_STDERR_FILE" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+source_path = Path(sys.argv[1])
+target_path = Path(sys.argv[2])
+try:
+    content = source_path.read_text(errors="replace")
+except OSError as exc:
+    print(f"<unable to read stderr artifact: {exc.__class__.__name__}>")
+    raise SystemExit(0)
+
+# Redact values injected through secret-bearing environment variables before
+# retaining a durable copy of runtime stderr.
+for name, value in os.environ.items():
+    if value and re.search(r"(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PAT|CREDENTIAL|AUTH)", name, re.I):
+        content = content.replace(value, "[REDACTED]")
+content = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", content)
+content = re.sub(r"(?i)([?&](?:access_token|token|api[_-]?key|secret|password)=)[^&\s]+", r"\1[REDACTED]", content)
+content = re.sub(r'(?i)(\b(?:access_token|token|api[_-]?key|secret|password)\b\s*[:=]\s*)["\']?[^"\s,;}&]+', r"\1[REDACTED]", content)
+content = re.sub(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@", r"\1[REDACTED]@", content)
+try:
+    with target_path.open("a") as output:
+        output.write(content)
+except OSError as exc:
+    print(f"<unable to retain redacted stderr: {exc.__class__.__name__}>")
+PY
+}
+
+
 # Keep provider/global config immutable. OpenCode's global tool directory is
 # shared by aicode and interactive sessions, so Manul's Fiteo helper must be
 # visible only from this task workspace. The runtime installer removes any
@@ -649,6 +684,7 @@ fi
 
 : >"$RAW_STDOUT_FILE"
 : >"$RAW_STDERR_FILE"
+chmod 600 "$RAW_STDERR_FILE" 2>/dev/null || true
 session_id="$OPT_SESSION_ID"
 pr_rc=1
 final_step_limit_detected="false"
@@ -738,7 +774,7 @@ while true; do
     if [ -s "$CURRENT_RUN_STDERR_FILE" ]; then
         current_stderr_error_message="$(grep -Ei '.*(permission requested|auto-rejecting|error|failed|denied|refused|timeout).*' "$CURRENT_RUN_STDERR_FILE" 2>/dev/null | grep -Eiv '^[[:space:]]*ERROR[[:space:]]*$' | tail -n 1 | sed 's/[[:space:]]\+$//' || true)"
         cat "$CURRENT_RUN_STDERR_FILE" >>"$OPT_STDERR_FILE"
-        cat "$CURRENT_RUN_STDERR_FILE" >>"$RAW_STDERR_FILE"
+        append_redacted_stderr "$CURRENT_RUN_STDERR_FILE" || log "WARN: could not retain redacted OpenCode stderr artifact"
     fi
 
     current_session_id=""
