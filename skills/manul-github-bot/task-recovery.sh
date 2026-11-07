@@ -104,13 +104,34 @@ mark_task_failed() {
 
 retry_failed_task() {
   local comment_id="$1"
-  log "Retrying failed task $comment_id from scratch"
-  terminate_task_executor "$comment_id"
-  sqlite3 "$DB" "
+  local safe_comment_id changed
+  safe_comment_id="$(printf '%s' "$comment_id" | sed "s/'/''/g")"
+
+  # A failed row is terminal and must not own a live executor. Do not touch a
+  # PID file here: a concurrent dispatcher may already have claimed a newer
+  # task after a state transition. The guarded UPDATE is the only mutation.
+  changed="$(sqlite3 "$DB" "
     UPDATE processed_comments
-    SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now')
-    WHERE commentId='$comment_id' AND status='failed';
-  " 2>/dev/null
+    SET status='queued',
+        attempts=0,
+        preExecutionFailures=0,
+        agentStartedAt=NULL,
+        processedAt=NULL,
+        heartbeatAt=NULL,
+        workerPid=NULL,
+        leaseExpiresAt=NULL,
+        claimToken=NULL,
+        nextAttemptAt=datetime('now')
+    WHERE commentId='$safe_comment_id' AND status='failed';
+    SELECT changes();
+  " 2>>"$LOG" | tail -n 1)" || changed="0"
+
+  if [ "${changed:-0}" -ne 1 ]; then
+    log "ERROR: failed task $comment_id was not retried because it no longer exists or is not failed"
+    return 1
+  fi
+
+  log "Failed task $comment_id requeued from scratch (agent attempts and infrastructure failures reset)"
 }
 
 # Retry a task that was marked terminal 'stale'. A stale row blocks re-polling
