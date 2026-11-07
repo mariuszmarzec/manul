@@ -4837,12 +4837,13 @@ PROMPT_APPEND
      cd "$prev_dir" 2>/dev/null || log "WARN: failed to restore working directory"
 
 # Persist session id for continuation attempts
-      local exec_status exec_summary exec_session_id exec_failure_code exec_failure_stage
+      local exec_status exec_summary exec_session_id exec_failure_code exec_failure_stage exec_raw_stderr
       exec_status="$(printf '%s' "$executor_output" | jq -r '.status // "FAILED"' 2>/dev/null)"
       exec_summary="$(printf '%s' "$executor_output" | jq -r '.summary // ""' 2>/dev/null)"
       exec_session_id="$(printf '%s' "$executor_output" | jq -r '.session_id // ""' 2>/dev/null)"
       exec_failure_code="$(printf '%s' "$executor_output" | jq -r '.failure_code // ""' 2>/dev/null)"
       exec_failure_stage="$(printf '%s' "$executor_output" | jq -r '.diagnostics.stage // ""' 2>/dev/null)"
+      exec_raw_stderr="$(printf '%s' "$executor_output" | jq -r '.diagnostics.raw_stderr // ""' 2>/dev/null)"
      # Retain a runtime session only when the adapter explicitly requests
      # continuation. Completion, ordinary failures, and malformed continuation
      # results clear stale session state while preserving the workspace mapping.
@@ -4858,6 +4859,9 @@ PROMPT_APPEND
      if [ -n "$exec_summary" ]; then
        log "dispatch: agent executor summary for task $COMMENT_ID: $exec_summary"
      fi
+      if [ -n "$exec_raw_stderr" ]; then
+        log "dispatch: retained runtime stderr artifact for task $COMMENT_ID: $exec_raw_stderr"
+      fi
      if [ "$rc" -ne 0 ]; then
        log "dispatch: agent executor exited rc=$rc for task $COMMENT_ID (status=$exec_status)"
        if [ -s "$STDERR_FILE" ]; then
