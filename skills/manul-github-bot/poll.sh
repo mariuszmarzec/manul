@@ -677,8 +677,8 @@ fi
 # The top-level .repositories array is the sole repository inventory for both
 # GitHub event/context polling and the enabled GitHub Issues task-source provider.
 
-# Generic task-source configuration. `taskSources` is authoritative when present;
-# legacy `.repositories` continues to mean GitHub Issues.
+# Enabled task-source providers are independent, but all repository discovery
+# and Todo routing use the same top-level `.repositories` list.
 TASK_SOURCE_CONFIGS=()
 while IFS= read -r _source_json; do
   [ -n "$_source_json" ] || continue
