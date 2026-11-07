@@ -739,7 +739,6 @@ while true; do
         current_stderr_error_message="$(grep -Ei '.*(permission requested|auto-rejecting|error|failed|denied|refused|timeout).*' "$CURRENT_RUN_STDERR_FILE" 2>/dev/null | grep -Eiv '^[[:space:]]*ERROR[[:space:]]*$' | tail -n 1 | sed 's/[[:space:]]\+$//' || true)"
         cat "$CURRENT_RUN_STDERR_FILE" >>"$OPT_STDERR_FILE"
         cat "$CURRENT_RUN_STDERR_FILE" >>"$RAW_STDERR_FILE"
-        cat "$CURRENT_RUN_STDERR_FILE" >>"$OPT_STDERR_FILE"
     fi
 
     current_session_id=""
