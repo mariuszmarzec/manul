@@ -4065,47 +4065,6 @@ dispatch_once() {
     # Refresh heartbeat immediately so watchdog doesn't see stale timestamp
     refresh_heartbeat "$COMMENT_ID"
 
-    # Mark the transition to actual agent execution BEFORE posting the
-    # in-progress comment that embeds the TASK_STARTED event marker. This
-    # ordering prevents stale recovery from reusing an attempt number after
-    # the comment is already visible to the user.
-    local agent_start_changed
-    agent_start_changed="$(sqlite3 "$DB" "UPDATE processed_comments SET agentStartedAt=datetime('now') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG" | tail -n 1)" || agent_start_changed="0"
-    if [ "$agent_start_changed" != "1" ]; then
-      log "ERROR: could not record the agent-start marker for task $COMMENT_ID (changes=${agent_start_changed:-unknown})"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=agent_start_marker_failed"
-      handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker before posting the lifecycle comment." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
-      return 0
-    fi
-
-    # 4. Post "in progress" comment BEFORE invoking the LLM
-    # Gather task metadata for an informative status comment
-    local TRIGGERER="$AUTHOR"
-    local SOURCE_LINK="$COMMENT_URL"
-    local TASK_SUMMARY
-    TASK_SUMMARY="$(printf '%s' "$TASK_PROMPT" | head -1 | cut -c1-80)"
-
-    local start_conv_id
-    start_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
-    local start_event_data
-    start_event_data="$(jq -nc --arg taskId "$COMMENT_ID" --arg conversationId "$start_conv_id" --arg attempt "$current_attempt" '{taskId:$taskId,conversationId:$conversationId,status:"started",attempt:($attempt|tonumber)}')"
-    local start_event_marker
-    start_event_marker="<!-- manul:event $(printf '%s' "$start_event_data" | jq -c --arg type "TASK_STARTED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
-
-    local IN_PROGRESS_BODY="$start_event_marker
-
-🔄 Manul is working on this task...
-
-**Summary:** $TASK_SUMMARY
-**Triggered by:** $TRIGGERER
-**Source:** $SOURCE_LINK"
-
-    if ! publish_task_started_for_claim "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "$IN_PROGRESS_BODY" "${PR_NUM_FROM_URL:-}" "$current_attempt"; then
-      # The wrapper has either requeued the claim as a pre-agent failure or
-      # left it for watchdog recovery. Never continue to prompt/runtime launch.
-      return 0
-    fi
-
     # 5. Create per-task prompt containing the actual task payload
     local TASK_PROMPT_DIR="$MANUL_TASKS_DIR"
     mkdir -p "$TASK_PROMPT_DIR"
@@ -4736,9 +4695,7 @@ PROMPT_APPEND
      STDERR_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$COMMENT_ID" "stderr")"
      EXEC_CTX_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$COMMENT_ID" "ctx.json")"
 
-     log "dispatch: invoking agent via AgentExecutor for task $COMMENT_ID"
-     lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
-     set_activity "$COMMENT_ID" "working"
+     log "dispatch: preparing runtime preflight via AgentExecutor for task $COMMENT_ID"
 
      # Build the execution context JSON file consumed by AgentExecutor.
      local AGENT_SELECTION="automatic"
@@ -4780,6 +4737,84 @@ PROMPT_APPEND
        --arg stderrFile "$STDERR_FILE" \
        '{taskId: $taskId, prompt: $prompt, workspace: $workspace, workspaceRoot: $workspaceRoot, workdir: $workdir, agent: $agent, agentSelection: $agentSelection, autoAccept: $autoAccept, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
        > "$EXEC_CTX_FILE"
+
+     # Validate the selected runtime before advertising TASK_STARTED. The
+     # preflight uses AgentExecutor and the exact task context/workspace; for
+     # OpenCode it builds the task-scoped config and verifies required MCPs,
+     # but exits before invoking the model.
+     local PREFLIGHT_CTX_FILE PREFLIGHT_RESULT_FILE PREFLIGHT_PID_FILE
+     local preflight_output preflight_status preflight_summary preflight_stage preflight_rc
+     PREFLIGHT_CTX_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$COMMENT_ID" "preflight-ctx.json")"
+     PREFLIGHT_RESULT_FILE="$(manul_task_file_path "$MANUL_TASKS_DIR" "$COMMENT_ID" "preflight-result")"
+     PREFLIGHT_PID_FILE="$(manul_task_file_path "$MANUL_DIR" "$COMMENT_ID" "preflight.pid")"
+     rm -f "$PREFLIGHT_RESULT_FILE" "$PREFLIGHT_PID_FILE"
+     if ! jq '. + {preflight_only:true}' "$EXEC_CTX_FILE" > "$PREFLIGHT_CTX_FILE"; then
+       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not create the runtime preflight context." "${PR_NUM_FROM_URL:-}" "$current_attempt" "runtime_preflight_context"
+       rm -f "$PREFLIGHT_CTX_FILE"
+       return 0
+     fi
+
+     setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$PREFLIGHT_CTX_FILE" "$PREFLIGHT_PID_FILE" 210>&- >"$PREFLIGHT_RESULT_FILE" 2>>"$STDERR_FILE" &
+     local preflight_launcher_pid=$!
+     preflight_rc=0
+     wait "$preflight_launcher_pid" || preflight_rc=$?
+     preflight_output="$(cat "$PREFLIGHT_RESULT_FILE" 2>/dev/null || true)"
+     preflight_status="$(printf '%s' "$preflight_output" | jq -r '.status // ""' 2>/dev/null)"
+     preflight_summary="$(printf '%s' "$preflight_output" | jq -r '.summary // ""' 2>/dev/null)"
+     preflight_stage="$(printf '%s' "$preflight_output" | jq -r '.diagnostics.stage // ""' 2>/dev/null)"
+     rm -f "$PREFLIGHT_CTX_FILE" "$PREFLIGHT_RESULT_FILE" "$PREFLIGHT_PID_FILE"
+
+     if [ "$preflight_rc" -ne 0 ] || [ "$preflight_status" != "READY" ]; then
+       [ -n "$preflight_summary" ] || preflight_summary="Runtime preflight did not produce a READY result (exit=$preflight_rc, status=${preflight_status:-missing})."
+       [ -n "$preflight_stage" ] || preflight_stage="runtime_preflight"
+       log "dispatch: runtime preflight failed for task $COMMENT_ID (stage=$preflight_stage, rc=$preflight_rc): $preflight_summary"
+       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$preflight_summary" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$preflight_stage"
+       return 0
+     fi
+
+     log "dispatch: runtime preflight passed for task $COMMENT_ID"
+     lc_log "RUNTIME_PREFLIGHT_PASSED" "task=$COMMENT_ID runtime=$AGENT_RUNTIME"
+
+     # Mark the transition to actual agent execution immediately before
+     # publishing TASK_STARTED. Preflight failures therefore remain
+     # infrastructure failures and never create a false started event.
+     local agent_start_changed
+     agent_start_changed="$(sqlite3 "$DB" "UPDATE processed_comments SET agentStartedAt=datetime('now') WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG" | tail -n 1)" || agent_start_changed="0"
+     if [ "$agent_start_changed" != "1" ]; then
+       log "ERROR: could not record the agent-start marker for task $COMMENT_ID after successful runtime preflight (changes=${agent_start_changed:-unknown})"
+       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=agent_start_marker_failed"
+       handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker after runtime preflight." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
+       return 0
+     fi
+
+     local TRIGGERER="$AUTHOR"
+     local SOURCE_LINK="$COMMENT_URL"
+     local TASK_SUMMARY
+     TASK_SUMMARY="$(printf '%s' "$TASK_PROMPT" | head -1 | cut -c1-80)"
+     local start_conv_id
+     start_conv_id="$(sqlite3 "$DB" "SELECT conversationId FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo "")"
+     local start_event_data
+     start_event_data="$(jq -nc --arg taskId "$COMMENT_ID" --arg conversationId "$start_conv_id" --arg attempt "$current_attempt" '{taskId:$taskId,conversationId:$conversationId,status:"started",attempt:($attempt|tonumber)}')"
+     local start_event_marker
+     start_event_marker="<!-- manul:event $(printf '%s' "$start_event_data" | jq -c --arg type "TASK_STARTED" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{type:$type,timestamp:$timestamp,data:.}') -->"
+
+     local IN_PROGRESS_BODY="$start_event_marker
+
+🔄 Manul is working on this task...
+
+**Summary:** $TASK_SUMMARY
+**Triggered by:** $TRIGGERER
+**Source:** $SOURCE_LINK"
+
+     if ! publish_task_started_for_claim "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "$IN_PROGRESS_BODY" "${PR_NUM_FROM_URL:-}" "$current_attempt"; then
+       # The wrapper has either requeued the claim as a pre-agent failure or
+       # left it for watchdog recovery. Never continue to prompt/runtime launch.
+       return 0
+     fi
+
+     log "dispatch: invoking agent via AgentExecutor for task $COMMENT_ID"
+     lc_log "WORKER_START" "task=$COMMENT_ID repo=$REPO timeout=${AGENT_TIMEOUT}s"
+     set_activity "$COMMENT_ID" "working"
 
      local executor_output
      local executor_result_file executor_pid_file
