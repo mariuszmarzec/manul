@@ -160,7 +160,7 @@ test_process_runner_cwd_env() {
       source "$1/process-runner.sh"
       ProcessRunner_TmpStdout="$2/out.txt"
       ProcessRunner_TmpStderr="$2/err.txt"
-      ProcessRunner.run --cwd "$2/work" --env TEST_MANUL_VALUE=present -- sh -c '"'"'printf "%s\\n" "$PWD"; printf "%s\\n" "$TEST_MANUL_VALUE"'"'"'
+      ProcessRunner.run --cwd "$2/work" --env TEST_MANUL_VALUE=present -- sh -c '"'"'printf "%s\n" "$PWD"; printf "%s\n" "$TEST_MANUL_VALUE"'"'"'
     ' _ "$SCRIPT_DIR" "$tmp"
   )"
   local header
@@ -448,17 +448,17 @@ test_opencode_task_done_nonzero_exit_diagnostic() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  printf '%s\\n' 'caracal-rag connected'
+  printf '%s\n' 'caracal-rag connected'
   exit 0
 fi
-printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_done_error","part":{"type":"step-start"}}'
-printf '%s\\n' '{"type":"text","timestamp":1100,"sessionID":"ses_done_error","part":{"type":"text","text":"TASK_DONE delivered PR"}}'
-printf '%s\\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_done_error","part":{"type":"step-finish"}}'
-printf '%s\\n' 'ERROR: transport closed after completion' >&2
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_done_error","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_done_error","part":{"type":"text","text":"TASK_DONE delivered PR"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_done_error","part":{"type":"step-finish"}}'
+printf '%s\n' 'ERROR: transport closed after completion' >&2
 exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
-  printf '%s\\n' 'Do the task' >"$tmp/prompt"
+  printf '%s\n' 'Do the task' >"$tmp/prompt"
 
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
