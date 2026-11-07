@@ -237,6 +237,39 @@ test_workspace_state_initialized_before_agent_marker() {
 }
 test_workspace_state_initialized_before_agent_marker
 
+test_runtime_preflight_precedes_started_lifecycle() {
+  local daemon="$SCRIPT_DIR/manul-daemon.sh"
+  local executor="$SCRIPT_DIR/agent-executor.sh"
+  local adapter="$SCRIPT_DIR/opencode-adapter.sh"
+  local preflight_line result_line marker_line publish_line start_line
+
+  if ! grep -Fq -- '--preflight-only' "$executor" ||
+     ! grep -Fq 'if [ "$OPT_PREFLIGHT_ONLY" = "true" ]; then' "$adapter" ||
+     ! grep -Fq 'status:"READY"' "$adapter"; then
+    fail "OpenCode does not expose a preflight-only READY operation through AgentExecutor"
+    return
+  fi
+
+  preflight_line="$(grep -nF ". + {preflight_only:true}" "$daemon" | head -n 1 | cut -d: -f1)"
+  result_line="$(grep -nF 'preflight_status="$(printf' "$daemon" | head -n 1 | cut -d: -f1)"
+  marker_line="$(grep -nF 'local agent_start_changed' "$daemon" | head -n 1 | cut -d: -f1)"
+  publish_line="$(grep -nF 'publish_task_started_for_claim "$COMMENT_ID"' "$daemon" | tail -n 1 | cut -d: -f1)"
+  start_line="$(grep -nF 'agent-task-runner.sh" "$EXEC_CTX_FILE"' "$daemon" | head -n 1 | cut -d: -f1)"
+
+  if [[ "$preflight_line" =~ ^[0-9]+$ ]] && [[ "$result_line" =~ ^[0-9]+$ ]] &&
+     [[ "$marker_line" =~ ^[0-9]+$ ]] && [[ "$publish_line" =~ ^[0-9]+$ ]] &&
+     [[ "$start_line" =~ ^[0-9]+$ ]] &&
+     [ "$preflight_line" -lt "$result_line" ] &&
+     [ "$result_line" -lt "$marker_line" ] &&
+     [ "$marker_line" -lt "$publish_line" ] &&
+     [ "$publish_line" -lt "$start_line" ]; then
+    pass "runtime preflight completes before agent-start state, TASK_STARTED, and model launch"
+  else
+    fail "TASK_STARTED or agentStartedAt can precede the runtime preflight"
+  fi
+}
+test_runtime_preflight_precedes_started_lifecycle
+
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed"
