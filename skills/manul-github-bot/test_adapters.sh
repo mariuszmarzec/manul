@@ -374,7 +374,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   printf '%s\n' 'caracal-rag connected'
   exit 0
 fi
-printf '%s\\n' "$*" >>"$MOCK_MODEL_LAUNCH_FILE"
+printf '%s\n' "$*" >>"$MOCK_MODEL_LAUNCH_FILE"
 exit 99
 MOCK
   chmod +x "$tmp/bin/opencode"
@@ -413,7 +413,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   printf '%s\n' 'caracal-rag connected'
   exit 0
 fi
-printf '%s\\n' 'ERROR' >&2
+printf '%s\n' 'ERROR' >&2
 exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
