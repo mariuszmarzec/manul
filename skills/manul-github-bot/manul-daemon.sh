@@ -237,14 +237,67 @@ get_daemon_pid() {
 
 # Repository management functions for manul-daemon.sh
 
+# Produce a short, secret-safe diagnostic for Git failures. Git commands in
+# ensure_repo must not discard stderr: the caller needs to distinguish fetch,
+# reset, and clone failures without leaking credentials or full remote URLs.
+repo_git_diagnostic() {
+  local raw="${1:-}"
+  local safe
+  safe="$(printf '%s\n' "$raw" |
+    sed -E \
+      -e 's#https?://[^[:space:]\047"]+#<URL_REDACTED>#g' \
+      -e 's/(Bearer[[:space:]]+)[^[:space:]\047"]+/\1[REDACTED]/Ig' \
+      -e 's/((token|secret|password|api[_-]?key)[=: ]+)[^[:space:]\047"]+/\1[REDACTED]/Ig' |
+    awk 'NF { if (count++) printf "; "; printf "%s", $0 }' |
+    cut -c1-500)"
+  printf '%s' "${safe:-no diagnostic output}"
+}
+
+# Resolve the shared checkout's tracking branch. Prefer its current branch
+# when that branch still exists on origin; for detached/obsolete local HEADs,
+# follow origin/HEAD instead of assuming every repository uses master.
+repo_cache_remote_branch() {
+  local repo_dir="$1"
+  local current_branch origin_head remote_branch
+
+  current_branch="$(git -C "$repo_dir" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$repo_dir" branch --show-current 2>/dev/null || true)"
+  if [ -n "$current_branch" ] &&
+     git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/$current_branch"; then
+    printf '%s' "$current_branch"
+    return 0
+  fi
+
+  origin_head="$(git -C "$repo_dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  remote_branch="${origin_head#origin/}"
+  if [ -n "$remote_branch" ] &&
+     git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/$remote_branch"; then
+    printf '%s' "$remote_branch"
+    return 0
+  fi
+
+  # A remote HEAD symref can be absent in older or manually-created caches.
+  # Refresh only that local symref; do not guess a branch name.
+  git -C "$repo_dir" remote set-head origin --auto >/dev/null 2>&1 || true
+  origin_head="$(git -C "$repo_dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  remote_branch="${origin_head#origin/}"
+  if [ -n "$remote_branch" ] &&
+     git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/$remote_branch"; then
+    printf '%s' "$remote_branch"
+    return 0
+  fi
+
+  return 1
+}
+
 # Ensure target repository exists in Manul workspace. The shared repo cache is
 # protected for the whole task: the lock is acquired before any fetch/reset
 # and is released by the task finalization/error paths.
 ensure_repo() {
   local repo="$1"
   local repo_slug
-  repo_slug="$(printf '%s' "$repo" | sed 's/\//-/g')"
+  repo_slug="$(printf '%s' "$repo" | sed 's#/#-#g')"
   local repo_dir="$MANUL_WORKSPACE/$repo_slug"
+  local git_error="" branch="" remote_head="" head="" remote_head_ref=""
 
   # Acquire before touching the shared checkout. This closes the race where
   # two workers fetched/reset the same repo cache concurrently.
@@ -253,38 +306,51 @@ ensure_repo() {
     return 2
   fi
 
-  # Check if repo already exists and is up-to-date
+  # Check if repo already exists and is up-to-date.
   if [ -d "$repo_dir" ] && [ -d "$repo_dir/.git" ]; then
-    # Verify this is the correct repository
+    # Do not print the actual remote: a malformed origin may contain credentials.
     local actual_repo
-    actual_repo="$(cd "$repo_dir" && git remote get-url origin 2>/dev/null || true)"
+    actual_repo="$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)"
     if [[ "$actual_repo" == "https://github.com/${repo}" ]]; then
-      # Synchronize with remote while holding the repo lock.
-      if ! (cd "$repo_dir" && git fetch origin --quiet); then
-        log "FAILED to fetch repo $repo"
+      if ! git_error="$(git -C "$repo_dir" fetch origin --quiet 2>&1)"; then
+        log "FAILED to fetch repo $repo: $(repo_git_diagnostic "$git_error")"
         release_repo_lock "$repo"
         return 1
       fi
 
-      local head
-      local remote_head
-      head="$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true)"
-      remote_head="$(git -C "$repo_dir" rev-parse "origin/$(git -C "$repo_dir" symbolic-ref --short HEAD 2>/dev/null || git -C "$repo_dir" branch --show-current)" 2>/dev/null || git -C "$repo_dir" rev-parse "origin/master" 2>/dev/null || true)"
+      branch="$(repo_cache_remote_branch "$repo_dir" 2>/dev/null || true)"
+      if [ -z "$branch" ]; then
+        local current_branch origin_head
+        current_branch="$(git -C "$repo_dir" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$repo_dir" branch --show-current 2>/dev/null || true)"
+        origin_head="$(git -C "$repo_dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+        log "FAILED to resolve a remote branch for repo $repo (current_branch=${current_branch:-detached}, origin_head=${origin_head:-missing})"
+        release_repo_lock "$repo"
+        return 1
+      fi
 
-      if [ -n "$remote_head" ] && [ "$head" != "$remote_head" ]; then
-        log "repo $repo needs update, pulling"
-        if ! (cd "$repo_dir" && { git reset --hard "origin/$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current)" --quiet 2>/dev/null || git reset --hard origin/master --quiet 2>/dev/null; }); then
-          log "FAILED to update repo $repo"
+      remote_head_ref="refs/remotes/origin/$branch"
+      remote_head="$(git -C "$repo_dir" rev-parse --verify "$remote_head_ref^{commit}" 2>/dev/null || true)"
+      if [ -z "$remote_head" ]; then
+        log "FAILED to resolve $remote_head_ref after fetching repo $repo"
+        release_repo_lock "$repo"
+        return 1
+      fi
+      head="$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true)"
+
+      if [ "$head" != "$remote_head" ]; then
+        log "repo $repo needs update to origin/$branch"
+        if ! git_error="$(git -C "$repo_dir" reset --hard "$remote_head_ref" --quiet 2>&1)"; then
+          log "FAILED to update repo $repo to origin/$branch: $(repo_git_diagnostic "$git_error")"
           release_repo_lock "$repo"
           return 1
         fi
       fi
 
-      log "repo $repo is ready at $repo_dir"
+      log "repo $repo is ready at $repo_dir (branch=$branch)"
       echo "$repo_dir"
       return 0
     else
-      log "repo $repo origin mismatch, expected https://github.com/${repo}, got $actual_repo"
+      log "repo $repo origin mismatch (expected canonical HTTPS remote); replacing shared cache"
       rm -rf "$repo_dir"
     fi
   fi
@@ -292,12 +358,21 @@ ensure_repo() {
   # Lock is already held from the start of ensure_repo().
   log "cloning repo $repo to $repo_dir"
   rm -rf "$repo_dir"
-  mkdir -p "$repo_dir"
-  cd "$repo_dir"
+  if ! mkdir -p "$repo_dir"; then
+    log "FAILED to create shared checkout directory for repo $repo"
+    release_repo_lock "$repo"
+    return 1
+  fi
+  if ! cd "$repo_dir"; then
+    log "FAILED to enter shared checkout directory for repo $repo"
+    release_repo_lock "$repo"
+    return 1
+  fi
 
-  # Clone with minimal fetch
-  if ! git clone --depth 1 "https://github.com/${repo}" . 2>/dev/null; then
-    log "FAILED to clone repo $repo"
+  # Clone with minimal fetch. Preserve a short, redacted Git diagnostic so
+  # repeated infrastructure failures can be diagnosed from daemon.log.
+  if ! git_error="$(git clone --depth 1 "https://github.com/${repo}" . 2>&1)"; then
+    log "FAILED to clone repo $repo: $(repo_git_diagnostic "$git_error")"
     rm -rf "$repo_dir"
     release_repo_lock "$repo"
     return 1
