@@ -23,8 +23,12 @@ ORIGIN="$TEST_DIR/origin.git"
 SEED="$TEST_DIR/seed"
 CHECKOUT="$TEST_DIR/checkout"
 
-git init -q --bare --initial-branch=main "$ORIGIN"
-git init -q --initial-branch=main "$SEED"
+# Keep the test compatible with Git 2.25 ( --initial-branch was added in Git 2.28).
+# Explicitly set the unborn branch for both the bare remote and seed repository.
+git init -q --bare "$ORIGIN"
+git -C "$ORIGIN" symbolic-ref HEAD refs/heads/main
+git init -q "$SEED"
+git -C "$SEED" symbolic-ref HEAD refs/heads/main
 git -C "$SEED" config user.name "Manul Test"
 git -C "$SEED" config user.email "manul-test@example.invalid"
 printf 'main\n' >"$SEED/README.md"
