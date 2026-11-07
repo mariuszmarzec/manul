@@ -359,6 +359,82 @@ MOCK
 }
 
 # ---------------------------------------------------------------------------
+# 3c. AgentExecutor performs OpenCode preflight without starting the model
+# ---------------------------------------------------------------------------
+test_agent_executor_opencode_preflight_only() {
+  local tmp out
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home" "$tmp/runtime"
+
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'caracal-rag connected'
+  exit 0
+fi
+printf '%s\\n' "$*" >>"$MOCK_MODEL_LAUNCH_FILE"
+exit 99
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\\n' 'Preflight task prompt' >"$tmp/prompt"
+  jq -n --arg prompt "$tmp/prompt" --arg workspace "$tmp" --arg stdout "$tmp/stdout" --arg stderr "$tmp/stderr" \
+    '{taskId:"preflight-only",prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:$workspace,attempt:1,timeout:30,session_id:"",stdout_file:$stdout,stderr_file:$stderr,preflight_only:true}' >"$tmp/context.json"
+
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    MOCK_MODEL_LAUNCH_FILE="$tmp/model-launch" \
+    bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$tmp/context.json" 2>/dev/null)"
+
+  assert_json_status "$out" "READY" "AgentExecutor returns READY after successful OpenCode preflight"
+  printf '%s' "$out" | jq -e '.diagnostics.stage == "runtime_preflight" and .diagnostics.agent_started == false' >/dev/null \
+    && ok "OpenCode preflight result explicitly states that the agent did not start" \
+    || fail "OpenCode preflight result omitted its non-started state"
+  [ ! -s "$tmp/model-launch" ] \
+    && ok "OpenCode model is not launched during preflight-only execution" \
+    || fail "OpenCode model was launched during preflight-only execution"
+  [ ! -e "$tmp/.opencode/plugins/manul_fiteo_create_task.ts" ] \
+    && ok "Preflight-only execution cleans up its task-scoped plugin link" \
+    || fail "Preflight-only execution leaked its task-scoped plugin link"
+}
+
+# ---------------------------------------------------------------------------
+# 3d. OpenCode stderr artifacts survive generic failure classification
+# ---------------------------------------------------------------------------
+test_opencode_raw_stderr_diagnostic() {
+  local tmp out raw_stderr summary
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'caracal-rag connected'
+  exit 0
+fi
+printf '%s\\n' 'ERROR' >&2
+exit 1
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\\n' 'Do the task' >"$tmp/prompt"
+
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id opencode-stderr --prompt "$tmp/prompt" \
+      --workspace "$tmp" --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  raw_stderr="$(printf '%s' "$out" | jq -r '.diagnostics.raw_stderr // empty')"
+  summary="$(printf '%s' "$out" | jq -r '.summary // empty')"
+  [ -n "$raw_stderr" ] && [ -s "$raw_stderr" ] && grep -Fxq 'ERROR' "$raw_stderr" \
+    && ok "OpenCode exposes a retained raw stderr artifact for diagnosis" \
+    || fail "OpenCode raw stderr artifact is missing or empty"
+  ! printf '%s' "$summary" | grep -Fq 'error=ERROR' \
+    && ok "A bare ERROR token is not misreported as the actionable runtime error" \
+    || fail "OpenCode still reports a bare ERROR token as the runtime diagnostic"
+}
+
+# ---------------------------------------------------------------------------
 # 3b. OpenClaw clean exit without Manul completion marker
 # ---------------------------------------------------------------------------
 test_openclaw_no_marker() {
@@ -1905,6 +1981,8 @@ test_process_runner_idle_timeout
 test_openclaw_success
 test_openclaw_explicit_role
 test_agent_executor_openclaw_role_dispatch
+test_agent_executor_opencode_preflight_only
+test_opencode_raw_stderr_diagnostic
 test_openclaw_no_marker
 test_openclaw_failure
 test_openclaw_missing
