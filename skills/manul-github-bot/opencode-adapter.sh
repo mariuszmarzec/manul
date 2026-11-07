@@ -30,6 +30,7 @@ OPT_SESSION_ID=""
 OPT_STDOUT_FILE=""
 OPT_STDERR_FILE=""
 OPT_AUTO=false
+OPT_PREFLIGHT_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --stdout-file) OPT_STDOUT_FILE="$2"; shift 2 ;;
         --stderr-file) OPT_STDERR_FILE="$2"; shift 2 ;;
         --auto)       OPT_AUTO=true; shift ;;
+        --preflight-only) OPT_PREFLIGHT_ONLY=true; shift ;;
         *) echo "ERROR: unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -157,15 +159,51 @@ if [ "$OPT_AUTO" = "true" ]; then
 fi
 
 RAW_STDOUT_FILE="$(manul_task_file_path "${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.opencode.jsonl")"
+RAW_STDERR_FILE="$(manul_task_file_path "${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDERR_FILE")}" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.opencode.stderr")"
 CURRENT_RUN_STDOUT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.jsonl"
 CURRENT_RUN_STDERR_FILE="${RAW_STDOUT_FILE%.jsonl}.current.stderr"
 CURRENT_RUN_PROMPT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.prompt"
 # Aggregate all runtime events from the initial call and same-session resumes.
-mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" "$(dirname "$RAW_STDOUT_FILE")" 2>/dev/null || true
+mkdir -p "$(dirname "$OPT_STDOUT_FILE")" "$(dirname "$OPT_STDERR_FILE")" "$(dirname "$RAW_STDOUT_FILE")" "$(dirname "$RAW_STDERR_FILE")" 2>/dev/null || true
 
 log() {
     echo "[$(date -Is)] opencode-adapter: $*" >>"$OPT_STDERR_FILE"
 }
+
+append_redacted_stderr() {
+    local source_file="$1"
+    [ -s "$source_file" ] || return 0
+    python3 - "$source_file" "$RAW_STDERR_FILE" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+source_path = Path(sys.argv[1])
+target_path = Path(sys.argv[2])
+try:
+    content = source_path.read_text(errors="replace")
+except OSError as exc:
+    print(f"<unable to read stderr artifact: {exc.__class__.__name__}>")
+    raise SystemExit(0)
+
+# Redact values injected through secret-bearing environment variables before
+# retaining a durable copy of runtime stderr.
+for name, value in os.environ.items():
+    if value and re.search(r"(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PAT|CREDENTIAL|AUTH)", name, re.I):
+        content = content.replace(value, "[REDACTED]")
+content = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", content)
+content = re.sub(r"(?i)([?&](?:access_token|token|api[_-]?key|secret|password)=)[^&\s]+", r"\1[REDACTED]", content)
+content = re.sub(r'(?i)(\b(?:access_token|token|api[_-]?key|secret|password)\b\s*[:=]\s*)["\']?[^"\s,;}&]+', r"\1[REDACTED]", content)
+content = re.sub(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@", r"\1[REDACTED]@", content)
+try:
+    with target_path.open("a") as output:
+        output.write(content)
+except OSError as exc:
+    print(f"<unable to retain redacted stderr: {exc.__class__.__name__}>")
+PY
+}
+
 
 # Keep provider/global config immutable. OpenCode's global tool directory is
 # shared by aicode and interactive sessions, so Manul's Fiteo helper must be
@@ -588,6 +626,15 @@ if [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ]; then
     log "Todo local MCP preflight passed"
 fi
 
+# The dispatcher runs this phase before publishing TASK_STARTED. It uses the
+# same AgentExecutor and task-scoped configuration as a normal invocation, but
+# deliberately exits before launching the model.
+if [ "$OPT_PREFLIGHT_ONLY" = "true" ]; then
+    jq -cn --arg task_id "$OPT_TASK_ID" \
+        '{status:"READY",task_id:$task_id,exit_code:0,summary:"OpenCode runtime preflight passed",session_id:"",duration_s:0,runtime:"opencode",diagnostics:{stage:"runtime_preflight",agent_started:false}}'
+    exit 0
+fi
+
 # Append a truthful capability snapshot to every initial and resumed prompt.
 # It is derived from this invocation's effective OpenCode config (including the
 # task-local overlay); it never grants permissions or mutates the config.
@@ -636,6 +683,8 @@ if ! [[ "$STEP_LIMIT_CONTINUATIONS_MAX" =~ ^[0-9]+$ ]] || [ "$STEP_LIMIT_CONTINU
 fi
 
 : >"$RAW_STDOUT_FILE"
+: >"$RAW_STDERR_FILE"
+chmod 600 "$RAW_STDERR_FILE" 2>/dev/null || true
 session_id="$OPT_SESSION_ID"
 pr_rc=1
 final_step_limit_detected="false"
@@ -723,8 +772,9 @@ while true; do
     fi
     current_stderr_error_message=""
     if [ -s "$CURRENT_RUN_STDERR_FILE" ]; then
-        current_stderr_error_message="$(grep -Eio '.*(permission requested|auto-rejecting|error|failed|denied|refused|timeout).*' "$CURRENT_RUN_STDERR_FILE" 2>/dev/null | tail -n 1 | sed 's/[[:space:]]\+$//' || true)"
+        current_stderr_error_message="$(grep -Ei '.*(permission requested|auto-rejecting|error|failed|denied|refused|timeout).*' "$CURRENT_RUN_STDERR_FILE" 2>/dev/null | grep -Eiv '^[[:space:]]*ERROR[[:space:]]*$' | tail -n 1 | sed 's/[[:space:]]\+$//' || true)"
         cat "$CURRENT_RUN_STDERR_FILE" >>"$OPT_STDERR_FILE"
+        append_redacted_stderr "$CURRENT_RUN_STDERR_FILE" || log "WARN: could not retain redacted OpenCode stderr artifact"
     fi
 
     current_session_id=""
@@ -1089,11 +1139,12 @@ jq -cn \
     --arg last_event_type "$last_event_type" \
     --arg failure_code "$failure_code" \
     --arg raw_log "$RAW_STDOUT_FILE" \
+    --arg raw_stderr "$RAW_STDERR_FILE" \
     --arg permission_tool "$permission_tool" \
     --arg permission_operation "$permission_operation" \
     --arg permission_recovery_used "$permission_recovery_used" \
     --arg selected_agent "$OPT_AGENT" \
-    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, failure_code:$failure_code, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,permission_tool:$permission_tool,permission_operation:$permission_operation,permission_recovery_used:($permission_recovery_used|tonumber),selected_agent:$selected_agent,raw_log:$raw_log}}'
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:$runtime, failure_code:$failure_code, diagnostics:{error_type:$error_type,error_message:$error_message,error_source:$error_source,last_event_type:$last_event_type,permission_tool:$permission_tool,permission_operation:$permission_operation,permission_recovery_used:($permission_recovery_used|tonumber),selected_agent:$selected_agent,raw_log:$raw_log,raw_stderr:$raw_stderr}}'
 
 rm -f "$CURRENT_RUN_STDOUT_FILE" "$CURRENT_RUN_STDERR_FILE" "$CURRENT_RUN_PROMPT_FILE" 2>/dev/null || true
 

@@ -378,11 +378,13 @@ assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt >= datetime('now','
 
 # 5a.1) An adapter preflight failure after the dispatcher has bumped attempts
 # must roll that bump back and use the separate infrastructure failure counter.
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken,agentStartedAt) VALUES ('adapter-preflight','$REPO',801,'https://github.com/$REPO/issues/801','running',3,0,$CURRENT_TEST_PID,'adapter-preflight-token',datetime('now'));"
+# The preflight runs before agentStartedAt is written; it must not publish TASK_STARTED or consume an agent attempt.
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,preExecutionFailures,workerPid,claimToken) VALUES ('adapter-preflight','$REPO',801,'https://github.com/$REPO/issues/801','running',3,0,$CURRENT_TEST_PID,'adapter-preflight-token');"
 handle_pre_execution_failure "adapter-preflight" "adapter-preflight-token" "$REPO" 801 "" "" "Caracal MCP preflight failed before OpenCode task startup." "" 3 "caracal_mcp_preflight"
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight failure is requeued"
 assert_eq 2 "$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight failure rolls back the claimed agent attempt"
 assert_eq 1 "$(sqlite3 "$DB" "SELECT preExecutionFailures FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight failure consumes infrastructure budget only"
+assert_eq "" "$(sqlite3 "$DB" "SELECT COALESCE(agentStartedAt,'') FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight failure never records an agent start"
 assert_eq 1 "$(sqlite3 "$DB" "SELECT CASE WHEN nextAttemptAt IS NOT NULL THEN 1 ELSE 0 END FROM processed_comments WHERE commentId='adapter-preflight';")" "adapter preflight retry is scheduled"
 
 # 5b) Early workspace failures use the same attempt limit and publish a final
