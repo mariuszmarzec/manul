@@ -674,17 +674,8 @@ else
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 fi
 
-# `taskSources` is authoritative for generic providers. When configured, derive
-# the GitHub Issue repository set from all enabled github_issues sources so the
-# legacy GitHub event/context plane scans every configured GitHub source.
-if [ $# -eq 0 ] && jq -e '(.taskSources // []) | length > 0' "$CONFIG" >/dev/null 2>&1; then
-  mapfile -t REPOS < <(
-    jq -r '.taskSources[] | select((.enabled != false)) | select(.type == "github_issues") | .repositories[]?' "$CONFIG" 2>/dev/null |
-      sort -u
-  )
-fi
-
-# `taskSources` is authoritative for generic providers; legacy repositories remain GitHub Issues.
+# The top-level .repositories array is the sole repository inventory for both
+# GitHub event/context polling and the enabled GitHub Issues task-source provider.
 
 # Generic task-source configuration. `taskSources` is authoritative when present;
 # legacy `.repositories` continues to mean GitHub Issues.
