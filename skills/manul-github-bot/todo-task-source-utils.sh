@@ -16,9 +16,9 @@ todo_mcp_source_repository() {
   jq -r '.repository // empty' <<<"$1"
 }
 
-todo_mcp_source_repository_allowlist() {
+todo_mcp_source_repositories() {
   jq -c '
-    .repositoryAllowlist
+    .repositories
     | if type == "array" then map(select(type == "string")) | unique else [] end
   ' <<<"$1"
 }
@@ -38,11 +38,11 @@ todo_task_repository_catalog_path() {
 
 # Resolve a task target only from the curated project catalog. Explicit GitHub
 # URLs win; otherwise the longest unambiguous whole-phrase alias wins. A
-# source-level repositoryAllowlist can narrow the catalog, but never widen it.
+# The operator's global .repositories list is the allowlist; the catalog only maps names and skills.
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
-  local catalog_json matches_json match_json entry_json allowlist_json canonical_repository skills_json allowlist_enforced
+  local catalog_json matches_json match_json entry_json repositories_json canonical_repository skills_json
 
   catalog_file="$(todo_task_repository_catalog_path)"
   [ -r "$catalog_file" ] || {
@@ -134,11 +134,9 @@ todo_task_resolve_repository() {
   }
   canonical_repository="$(jq -r '.name' <<<"$entry_json")"
 
-  allowlist_json="$(todo_mcp_source_repository_allowlist "$source_json")" || return 2
-  allowlist_enforced="$(jq -r 'if has("repositoryAllowlistEnforced") then .repositoryAllowlistEnforced else (.repositoryAllowlist | type == "array") end' <<<"$source_json")"
-  if [ "$allowlist_enforced" = "true" ] &&
-      ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$allowlist_json" >/dev/null 2>&1; then
-    echo "repository $canonical_repository is excluded by this Todo source allowlist" >&2
+  repositories_json="$(todo_mcp_source_repositories "$source_json")" || return 2
+  if ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$repositories_json" >/dev/null 2>&1; then
+    echo "repository $canonical_repository is excluded by the global .repositories list" >&2
     return 1
   fi
 

@@ -242,10 +242,14 @@ configurable. The repository catalog is read from
 mapped skill is unavailable, Manul continues without that skill context. The
 resolved canonical `owner/repo` and routing provenance are persisted with the
 queued task.
-Configure `repositoryAllowlist` to narrow which catalog repositories the Todo
-sources may target. An absent project reference routes to informational execution;
-ambiguous aliases, uncatalogued explicit URLs, and disallowed targets are logged
-and not queued. Manul must never fall back to a hardcoded Todo repository.
+The top-level `.repositories` array in `~/.manul/config.json` is the only
+operator-configured repository list. GitHub Issues polling and both Todo sources
+use that same list; provider-local repository lists and `repositoryAllowlist`
+are obsolete and ignored. The catalog still supplies aliases and project skills,
+but a Todo target must also exist in the global list. An absent project reference
+routes to informational execution; ambiguous aliases, uncatalogued explicit URLs,
+and targets outside the global list are logged and not queued. Manul must never
+fall back to a hardcoded Todo repository.
 
 The local adapter connects directly to Todo Desktop at `http://127.0.0.1:8765/mcp` on native Linux/macOS hosts. Inside WSL it first tries the same loopback endpoint and falls back to the existing WSL bridge at `http://127.0.0.1:8766/mcp` when direct loopback is unavailable. It uses no bearer token and enables the source only after an unauthenticated MCP initialize and read-only `tools/list` handshake succeeds. The remote adapter accepts an HTTP or HTTPS MCP URL and uses Manul's dedicated PAT supplied through `FITEO_MANUL_PAT`. HTTPS is strongly recommended outside a trusted private network: an HTTP connection does not encrypt the bearer token in transit. Its URL can be configured as `"{env:FITEO_BASE_URL}/mcp"`, and `manulUserIdEnv` can point to `MANUL_USER_ID` (a positive numeric ID). Never use the operator's `FITEO_PAT` for Manul's task-scoped Fiteo connection.
 
@@ -608,6 +612,7 @@ bash skills/manul-github-bot/test_agent_execution_smoke.sh
 bash skills/manul-github-bot/test_manul_cli.sh
 bash skills/manul-github-bot/test_queue_reset.sh
 bash skills/manul-github-bot/test_github_control_protocol.sh
+bash skills/manul-github-bot/test_repository_config_migration.sh
 bash skills/manul-github-bot/test_orchestrator.sh
 ```
 

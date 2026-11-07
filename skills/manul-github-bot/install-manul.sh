@@ -69,7 +69,7 @@ fi
 CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 export MANUL_CANONICAL_DIR="$CANONICAL_DIR"
 
-for required in install-manul-symlinks.sh config.json.example manul-env.sh \
+for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh manul-env.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
              manul-shell.zsh update-manul.sh opencode-permissions.sh manul-daemon.sh manul-status.sh; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then
@@ -146,6 +146,12 @@ fi
 
 if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
+fi
+
+# Collapse duplicate repository lists without widening access. The migration
+# validates the canonical list before writing and keeps a recoverable backup.
+if ! bash "$CANONICAL_DIR/migrate-repository-config.sh" "$RUNTIME_DIR/config.json"; then
+    fail "Repository configuration migration failed"
 fi
 
 # Runtime selection is a single setting: automation.agentRuntime. Remove the

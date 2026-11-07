@@ -471,7 +471,8 @@ test_status() {
   LONG_TASK_ID="review-fix-conv-mariuszmarzec/fiteoApp-issue-22-5712883306"
   LONG_REPO="mariuszmarzec/repository-name-longer-than-twenty-characters"
   LONG_SOURCE_ID="provider-source-record-id-longer-than-twenty-four-characters"
-  LONG_CREATED="2026-10-30T13:28:12Z"
+  # Keep the stale row inside the configured seven-day list retention window.
+  LONG_CREATED="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   sqlite3 "$DB" "
     INSERT INTO processed_comments
       (commentId, repository, issueNumber, status, attempts, createdAt, taskSourceType, taskSourceId)

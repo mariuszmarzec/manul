@@ -69,6 +69,7 @@ SCRIPTS=(
     # (openclaw/opencode/codex/claude-code adapters). Kept in source only as a
     # historical reference for the original OpenClaw-only invocation path.
     "manul-comments-remove.sh"
+    "migrate-repository-config.sh"
     "manul-conversation-linker.sh"
     "manul-conversation.sh"
     "manul-daemon.sh"

@@ -70,7 +70,7 @@ OpenClaw configuration/state remains outside that ownership boundary.
 
 Manul separates the root task source from development artifacts such as pull requests and review threads.
 
-Configured sources live in `.taskSources[]`; disabled entries are ignored and enabled entries are polled independently:
+Provider connections and enablement live in `.taskSources[]`; disabled entries are ignored and enabled entries are polled independently. The top-level `.repositories` array is the sole configured repository inventory used by GitHub Issues discovery and Todo repository routing. Provider entries cannot override it:
 
 ```text
 Task sources
@@ -100,7 +100,7 @@ that child by reading the task tree back before the daemon stores its local
 receipt and marks the root last. The source fingerprint excludes only that one
 valid, source-version-bound result child, so unrelated user edits remain visible.
 
-The legacy `.repositories` configuration remains the default GitHub Issues source when `.taskSources` is absent.
+The top-level `.repositories` array is authoritative both with and without explicit `.taskSources`. The installer removes legacy top-level `repositoryAllowlist` and nested `.taskSources[].repositories` duplicates without merging them into the global list.
 ## Task execution plane
 
 ```

@@ -32,34 +32,10 @@
   "allowedUsers": [
     "<GITHUB_LOGIN>"
   ],
-  "repositoryAllowlist": [
-    "mariuszmarzec/globalskills",
-    "mariuszmarzec/interview-subjects",
-    "mariuszmarzec/fiteo",
-    "mariuszmarzec/caracal-rag",
-    "mariuszmarzec/todo",
-    "mariuszmarzec/shoppingListGenerator",
-    "mariuszmarzec/cheatDay",
-    "mariuszmarzec/fiteoApp",
-    "mariuszmarzec/QuickMVI",
-    "mariuszmarzec/manul"
-  ],
   "taskSources": [
     {
       "type": "github_issues",
-      "enabled": true,
-      "repositories": [
-        "mariuszmarzec/globalskills",
-        "mariuszmarzec/interview-subjects",
-        "mariuszmarzec/fiteo",
-        "mariuszmarzec/caracal-rag",
-        "mariuszmarzec/todo",
-        "mariuszmarzec/shoppingListGenerator",
-        "mariuszmarzec/cheatDay",
-        "mariuszmarzec/fiteoApp",
-        "mariuszmarzec/QuickMVI",
-        "mariuszmarzec/manul"
-      ]
+      "enabled": true
     },
     {
       "type": "jira_tasks",
