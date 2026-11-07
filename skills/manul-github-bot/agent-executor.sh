@@ -53,6 +53,7 @@ AgentExecutor.execute() {
     timeout="$(jq -r '.timeout // 0' "$ctx_file" 2>/dev/null)"
     session_id="$(jq -r '.session_id // ""' "$ctx_file" 2>/dev/null)"
     auto_accept="$(jq -r '.autoAccept // false' "$ctx_file" 2>/dev/null)"
+    preflight_only="$(jq -r '.preflight_only // false' "$ctx_file" 2>/dev/null)"
 
     # Derive stdout/stderr files. The caller (daemon) may supply explicit paths
     # in the context JSON; otherwise fall back to MANUL_TASKS_DIR. The daemon
@@ -145,9 +146,21 @@ AgentExecutor.execute() {
         return 1
     fi
 
-    local -a adapter_auto_args=()
+    if [ "$preflight_only" = "true" ] && [ "$execution_runtime" != "opencode" ]; then
+        # Only OpenCode currently has a separate live MCP preflight. Other
+        # runtimes retain their existing startup behavior.
+        jq -cn --arg task_id "$task_id" \
+            '{status:"READY",task_id:$task_id,exit_code:0,summary:"Runtime has no separate preflight phase",session_id:"",duration_s:0,diagnostics:{stage:"runtime_preflight",agent_started:false,preflight:"not_required"}}'
+        AgentExecutor_ExitCode=0
+        return 0
+    fi
+
+    local -a adapter_auto_args=() adapter_preflight_args=()
     if [ "$auto_accept" = "true" ]; then
         adapter_auto_args=(--auto)
+    fi
+    if [ "$preflight_only" = "true" ]; then
+        adapter_preflight_args=(--preflight-only)
     fi
     # Execute the adapter; it writes its ExecutionResult JSON to stdout.
     local adapter_output
@@ -167,6 +180,7 @@ AgentExecutor.execute() {
         --stdout-file "$stdout_file" \
         --stderr-file "$stderr_file" \
         "${adapter_auto_args[@]}" \
+        "${adapter_preflight_args[@]}" \
         2>"$stderr_file")"
 
     local rc=$?
