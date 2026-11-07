@@ -378,7 +378,7 @@ printf '%s\n' "$*" >>"$MOCK_MODEL_LAUNCH_FILE"
 exit 99
 MOCK
   chmod +x "$tmp/bin/opencode"
-  printf '%s\\n' 'Preflight task prompt' >"$tmp/prompt"
+  printf '%s\n' 'Preflight task prompt' >"$tmp/prompt"
   jq -n --arg prompt "$tmp/prompt" --arg workspace "$tmp" --arg stdout "$tmp/stdout" --arg stderr "$tmp/stderr" \
     '{taskId:"preflight-only",prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:$workspace,attempt:1,timeout:30,session_id:"",stdout_file:$stdout,stderr_file:$stderr,preflight_only:true}' >"$tmp/context.json"
 
@@ -417,7 +417,7 @@ printf '%s\n' 'ERROR' >&2
 exit 1
 MOCK
   chmod +x "$tmp/bin/opencode"
-  printf '%s\\n' 'Do the task' >"$tmp/prompt"
+  printf '%s\n' 'Do the task' >"$tmp/prompt"
 
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
