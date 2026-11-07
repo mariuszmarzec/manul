@@ -251,11 +251,11 @@ test_dispatch_stops_after_unconfirmed_task_started() {
   fi
   call_line="$(printf '%s\n' "$dispatch_body" | grep -n "if ! publish_task_started_for_claim" | head -1 | cut -d: -f1)"
   prompt_line="$(printf '%s\n' "$dispatch_body" | grep -n 'Create per-task prompt' | head -1 | cut -d: -f1)"
-  if [ -z "$call_line" ] || [ -z "$prompt_line" ] || [ "$prompt_line" -le "$call_line" ]; then
-    echo "FAIL: TASK_STARTED guard is missing or appears after prompt creation" >&2
+  if [ -z "$call_line" ] || [ -z "$prompt_line" ] || [ "$prompt_line" -ge "$call_line" ]; then
+    echo "FAIL: task prompt must be prepared before TASK_STARTED publication" >&2
     return 1
   fi
-  echo "PASS: TASK_STARTED publication failure exits dispatch before prompt/runtime setup"
+  echo "PASS: task prompt is prepared before TASK_STARTED; failed publication exits before runtime launch"
 }
 test_dispatch_stops_after_unconfirmed_task_started
 
