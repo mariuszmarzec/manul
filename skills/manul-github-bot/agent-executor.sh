@@ -42,7 +42,7 @@ AgentExecutor.execute() {
         return 1
     fi
 
-    local task_id prompt workspace workspace_root workdir agent attempt timeout session_id stdout_file stderr_file
+    local task_id prompt workspace workspace_root workdir agent attempt timeout session_id stdout_file stderr_file auto_accept preflight_only
     task_id="$(jq -r '.taskId // ""' "$ctx_file" 2>/dev/null)"
     prompt="$(jq -r '.prompt // ""' "$ctx_file" 2>/dev/null)"
     workspace="$(jq -r '.workspace // ""' "$ctx_file" 2>/dev/null)"
