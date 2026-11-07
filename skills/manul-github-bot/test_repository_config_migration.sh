@@ -59,6 +59,7 @@ ORIGINAL_REPOSITORIES='["owner/keep","owner/test-manul-e2e"]'
 
 bash "$MIGRATOR" "$CONFIG" > "$TEST_DIR/migration.log"
 assert_eq "top-level repository list is preserved exactly" "$ORIGINAL_REPOSITORIES" "$(jq -c '.repositories' "$CONFIG")"
+assert_eq "legacy extra repository is not merged into the global list" "false" "$(jq -r '.repositories | index("owner/legacy-extra") != null' "$CONFIG")"
 assert_eq "unrelated automation config is preserved" "opencode" "$(jq -r '.automation.agentRuntime' "$CONFIG")"
 assert_eq "Todo provider URL survives migration" "http://127.0.0.1:8766/mcp" "$(jq -r '.taskSources[1].url' "$CONFIG")"
 assert_eq "fixed Jira target remains intact" "owner/jira-target" "$(jq -r '.taskSources[3].repository' "$CONFIG")"
