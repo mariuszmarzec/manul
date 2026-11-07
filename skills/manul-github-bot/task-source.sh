@@ -96,58 +96,48 @@ task_source_ensure_workspace_context() {
 
 task_source_configured_sources() {
   local config="$1"
+  local trigger allowed_users repositories_json
 
-  # Explicit taskSources are independent provider configurations. Only
-  # GitHub-specific defaults are inherited from the top-level configuration.
+  trigger="$(jq -r '.trigger // "/manul"' "$config")"
+  allowed_users="$(jq -c '.allowedUsers // []' "$config")"
+  # The operator config has exactly one repository list. Provider-local legacy
+  # lists are ignored; this canonical list is projected into provider payloads.
+  repositories_json="$(jq -c '.repositories // [] | if type == "array" then map(select(type == "string")) | unique else [] end' "$config")" || return 1
+
   if jq -e '(.taskSources // []) | length > 0' "$config" >/dev/null 2>&1; then
-    local trigger allowed_users repository_allowlist repository_allowlist_enforced
-    trigger="$(jq -r '.trigger // "/manul"' "$config")"
-    allowed_users="$(jq -c '.allowedUsers // []' "$config")"
-    repository_allowlist="$(jq -c '.repositoryAllowlist // [] | if type == "array" then map(select(type == "string")) | unique else [] end' "$config")"
-    repository_allowlist_enforced="$(jq -r 'has("repositoryAllowlist")' "$config")"
-    jq -c --arg trigger "$trigger" --argjson allowedUsers "$allowed_users" --argjson repositoryAllowlist "$repository_allowlist" --argjson repositoryAllowlistEnforced "$repository_allowlist_enforced" '
-      .taskSources[]
-      | select((.enabled != false))
-      | if .type == "github_issues"
-        then .trigger = (.trigger // $trigger)
-           | .allowedUsers = (.allowedUsers // $allowedUsers)
-        elif (.type == "todo_local_mcp" or .type == "todo_remote_mcp")
-        then . as $source
-           | (if .type == "todo_local_mcp" then del(.tokenEnv) else . end) as $normalizedSource
-           | $normalizedSource
-           | .repositoryAllowlist = (
-               if ($source | has("repositoryAllowlist")) then
-                 if ($source.repositoryAllowlist | type) != "array" then []
-                 elif $repositoryAllowlistEnforced then
-                   $source.repositoryAllowlist
-                   | map(select(type == "string"))
-                   | map(select(. as $candidate | any($repositoryAllowlist[]; ascii_downcase == ($candidate | ascii_downcase))))
-                   | unique
-                 else
-                   $source.repositoryAllowlist | map(select(type == "string")) | unique
-                 end
-               else $repositoryAllowlist
-               end
-             )
-           | .repositoryAllowlistEnforced = (
-               $repositoryAllowlistEnforced or ($source | has("repositoryAllowlist"))
-             )
-        else .
-        end
-    ' "$config"
+    jq -c \
+      --arg trigger "$trigger" \
+      --argjson allowedUsers "$allowed_users" \
+      --argjson repositories "$repositories_json" '
+        .taskSources[]
+        | select((.enabled != false))
+        | if .type == "github_issues"
+          then .trigger = (.trigger // $trigger)
+             | .allowedUsers = (.allowedUsers // $allowedUsers)
+             | .repositories = $repositories
+          elif (.type == "todo_local_mcp" or .type == "todo_remote_mcp")
+          then (if .type == "todo_local_mcp" then del(.tokenEnv) else . end)
+             | .repositories = $repositories
+             | del(.repositoryAllowlist, .repositoryAllowlistEnforced)
+          else .
+          end
+      ' "$config"
     return 0
   fi
 
-  # Backward-compatible default: GitHub Issues only.
-  jq -c     --arg trigger "$(jq -r '.trigger // "/manul"' "$config")"     --argjson allowedUsers "$(jq -c '.allowedUsers // []' "$config")" '
+  # Backward-compatible default: GitHub Issues only, using the same global list.
+  jq -cn \
+    --argjson repositories "$repositories_json" \
+    --arg trigger "$trigger" \
+    --argjson allowedUsers "$allowed_users" '
       {
         type:"github_issues",
         enabled:true,
-        repositories:(.repositories // []),
+        repositories:$repositories,
         trigger:$trigger,
         allowedUsers:$allowedUsers
       }
-    ' "$config"
+    '
 }
 
 task_source_identity() {
