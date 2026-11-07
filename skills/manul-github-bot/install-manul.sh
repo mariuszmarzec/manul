@@ -150,7 +150,7 @@ fi
 
 # Collapse duplicate repository lists without widening access. The migration
 # validates the canonical list before writing and keeps a recoverable backup.
-if ! "$CANONICAL_DIR/migrate-repository-config.sh" "$RUNTIME_DIR/config.json"; then
+if ! bash "$CANONICAL_DIR/migrate-repository-config.sh" "$RUNTIME_DIR/config.json"; then
     fail "Repository configuration migration failed"
 fi
 
