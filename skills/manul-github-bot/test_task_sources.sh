@@ -35,6 +35,9 @@ assert_contains "GitHub provider receives top-level repositories" "$sources" '"r
 assert_not_contains "nested GitHub list cannot override global repositories" "$sources" "owner/stale-nested"
 assert_not_contains "disabled Jira source is omitted" "$sources" '"type":"jira_tasks"'
 
+example_repo_list_count="$(jq '[.repositories, .taskSources[]?.repositories, .repositoryAllowlist] | map(select(type == "array")) | length' "$SCRIPT_DIR/config.json.example")"
+assert_eq "canonical config example has exactly one repository list" "1" "$example_repo_list_count"
+
 cat >"$WORK/todo-sources.json" <<'JSON'
 {
   "repositories": ["owner/catalog-a", "owner/catalog-b"],
