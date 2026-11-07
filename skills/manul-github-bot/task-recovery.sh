@@ -20,6 +20,37 @@ RETRY_DELAY_SECONDS="${MANUL_RETRY_DELAY_SECONDS:-${CFG_RETRY_DELAY:-60}}"
 
 log() { echo "[$(date -Is)] $*"; }
 
+# Keep manual recovery compatible with databases created before the separate
+# infrastructure-failure budget was introduced. The daemon has the same
+# idempotent migration; task-recovery must also be safe when run on its own.
+ensure_recovery_tracking_columns() {
+    local columns alter_output
+
+    columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+    if ! printf '%s\n' "$columns" | grep -q '|preExecutionFailures|'; then
+        alter_output="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN preExecutionFailures INTEGER NOT NULL DEFAULT 0; COMMIT;" 2>&1)" || {
+            if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|preExecutionFailures|'; then
+                log "ERROR: failed to add preExecutionFailures column during task recovery: $alter_output"
+                return 1
+            fi
+        }
+        log "migration: preExecutionFailures column added or already present"
+    fi
+
+    columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+    if ! printf '%s\n' "$columns" | grep -q '|agentStartedAt|'; then
+        alter_output="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN agentStartedAt TEXT; UPDATE processed_comments SET agentStartedAt=COALESCE(processedAt,datetime('now')) WHERE status='running' AND agentStartedAt IS NULL; COMMIT;" 2>&1)" || {
+            if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|agentStartedAt|'; then
+                log "ERROR: failed to add agentStartedAt column during task recovery: $alter_output"
+                return 1
+            fi
+        }
+        log "migration: agentStartedAt column added; legacy running claims preserved as execution attempts"
+    fi
+
+    return 0
+}
+
 post_terminal_failure_feedback() {
     if [ "${MANUL_MODE:-bot}" = "human" ]; then
         log "terminal failure status comment suppressed in human mode for $1"
@@ -104,13 +135,35 @@ mark_task_failed() {
 
 retry_failed_task() {
   local comment_id="$1"
-  log "Retrying failed task $comment_id from scratch"
-  terminate_task_executor "$comment_id"
-  sqlite3 "$DB" "
+  ensure_recovery_tracking_columns || return 1
+  local safe_comment_id changed
+  safe_comment_id="$(printf '%s' "$comment_id" | sed "s/'/''/g")"
+
+  # A failed row is terminal and must not own a live executor. Do not touch a
+  # PID file here: a concurrent dispatcher may already have claimed a newer
+  # task after a state transition. The guarded UPDATE is the only mutation.
+  changed="$(sqlite3 "$DB" "
     UPDATE processed_comments
-    SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now')
-    WHERE commentId='$comment_id' AND status='failed';
-  " 2>/dev/null
+    SET status='queued',
+        attempts=0,
+        preExecutionFailures=0,
+        agentStartedAt=NULL,
+        processedAt=NULL,
+        heartbeatAt=NULL,
+        workerPid=NULL,
+        leaseExpiresAt=NULL,
+        claimToken=NULL,
+        nextAttemptAt=datetime('now')
+    WHERE commentId='$safe_comment_id' AND status='failed';
+    SELECT changes();
+  " 2>>"$LOG" | tail -n 1)" || changed="0"
+
+  if [ "${changed:-0}" -ne 1 ]; then
+    log "ERROR: failed task $comment_id was not retried because it no longer exists or is not failed"
+    return 1
+  fi
+
+  log "Failed task $comment_id requeued from scratch (agent attempts and infrastructure failures reset)"
 }
 
 # Retry a task that was marked terminal 'stale'. A stale row blocks re-polling
@@ -272,7 +325,8 @@ reset_all_tasks() {
     fi
 
     if [ "$status_filter" = "failed" ]; then
-        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=0, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now') WHERE status='failed';" 2>/dev/null
+        ensure_recovery_tracking_columns || return 1
+        sqlite3 "$DB" "UPDATE processed_comments SET status='queued', attempts=0, preExecutionFailures=0, agentStartedAt=NULL, processedAt=NULL, heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, nextAttemptAt=datetime('now') WHERE status='failed';" 2>/dev/null
     else
         local running_tasks
         running_tasks="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE status='running';" 2>/dev/null || true)"
