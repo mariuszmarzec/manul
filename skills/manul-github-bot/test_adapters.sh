@@ -371,7 +371,7 @@ test_agent_executor_opencode_preflight_only() {
 #!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  printf '%s\\n' 'caracal-rag connected'
+  printf '%s\n' 'caracal-rag connected'
   exit 0
 fi
 printf '%s\\n' "$*" >>"$MOCK_MODEL_LAUNCH_FILE"
@@ -410,7 +410,7 @@ test_opencode_raw_stderr_diagnostic() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  printf '%s\\n' 'caracal-rag connected'
+  printf '%s\n' 'caracal-rag connected'
   exit 0
 fi
 printf '%s\\n' 'ERROR' >&2
