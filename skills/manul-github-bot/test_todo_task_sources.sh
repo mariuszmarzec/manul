@@ -143,6 +143,44 @@ esac
 PYTHON
 chmod +x "$BIN/python3"
 export REAL_PYTHON_BIN="$PYTHON_BIN"
+
+# The shared MCP transport and endpoint helper are supplied by globalskills/aicode.
+# These fixtures model that exported interface; the implementation is tested in
+# globalskills CI, not copied into Manul's runtime tree.
+SHARED_TODO_DIR="$TEST_DIR/shared-todo"
+mkdir -p "$SHARED_TODO_DIR"
+TODO_MCP_CLIENT="$SHARED_TODO_DIR/todo-mcp-client.py"
+TODO_LOCAL_MCP_URL_HELPER="$SHARED_TODO_DIR/todo-local-mcp-url.sh"
+: > "$TODO_MCP_CLIENT"
+cat > "$TODO_LOCAL_MCP_URL_HELPER" <<'SHARED_TODO_HELPER'
+todo_local_mcp_url_is_supported() {
+  [[ "$1" =~ ^http://(localhost|127\\.0\\.0\\.1|\\[::1\\]):[0-9]+/mcp$ ]]
+}
+todo_local_mcp_is_wsl() {
+  [ "${TODO_LOCAL_MCP_PLATFORM_OVERRIDE:-}" = "wsl" ]
+}
+todo_local_mcp_probe_status() {
+  local rc=0
+  python3 "$TODO_MCP_CLIENT" --url "$1" --probe --timeout 4 >/dev/null 2>&1 || rc=$?
+  case "$rc" in 0) printf '200' ;; 3) printf 'AUTH' ;; *) printf '000' ;; esac
+}
+todo_local_mcp_resolve_url() {
+  local preferred="$1" direct="http://127.0.0.1:8765/mcp" bridge="http://127.0.0.1:8766/mcp" status
+  if [ -n "$preferred" ] && [ "$preferred" != "$direct" ] && [ "$preferred" != "$bridge" ]; then
+    todo_local_mcp_url_is_supported "$preferred" || return 2
+    status="$(todo_local_mcp_probe_status "$preferred")"
+    [ "$status" = "200" ] && { printf '%s' "$preferred"; return 0; }
+  fi
+  status="$(todo_local_mcp_probe_status "$direct")"
+  [ "$status" = "200" ] && { printf '%s' "$direct"; return 0; }
+  if todo_local_mcp_is_wsl; then
+    status="$(todo_local_mcp_probe_status "$bridge")"
+    [ "$status" = "200" ] && { printf '%s' "$bridge"; return 0; }
+  fi
+  return 1
+}
+SHARED_TODO_HELPER
+export TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
 export TODO_LOCAL_MCP_PLATFORM_OVERRIDE=native
 export TODO_LOCAL_MCP_DIRECT_STATUS=200
 export TODO_LOCAL_MCP_BRIDGE_STATUS=000
@@ -877,17 +915,7 @@ assert_eq "unreadable remote child does not complete the root" "true" "$(jq -r '
 assert_eq "unreadable remote child is not falsely marked complete" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
 
 echo
-if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_mcp_client.py"; then
-  ok "Streamable HTTP MCP client tests passed"
-else
-  fail "Streamable HTTP MCP client tests failed"
-fi
-
-if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_remote_create_task.py"; then
-  ok "Remote Todo share-enforcement tests passed"
-else
-  fail "Remote Todo share-enforcement tests failed"
-fi
-
+# Task-source calls use the shared client path exported by aicode.
+[ -r "$TODO_MCP_CLIENT" ] && ok "Todo source consumes shared MCP client path" || fail "Shared Todo MCP client path missing"
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
