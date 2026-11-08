@@ -309,7 +309,7 @@ mkdir -p "$START_RUNTIME" "$CANONICAL_RUNTIME" "$FAKE_BIN"
 # isolated canonical tree with the same files as the real skill source so this
 # test exercises startup/symlink behavior rather than a deliberately incomplete
 # fixture.
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.py "$CANONICAL_RUNTIME/"
+cp "$SCRIPT_DIR"/*.sh "$CANONICAL_RUNTIME/"
 cp "$SCRIPT_DIR/orchestrator.prompt.md" "$CANONICAL_RUNTIME/orchestrator.prompt.md"
 chmod +x "$CANONICAL_RUNTIME"/*.sh
 
