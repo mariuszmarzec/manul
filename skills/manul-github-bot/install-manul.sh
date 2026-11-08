@@ -96,7 +96,7 @@ echo
 #   claude    - alternate agent runtime (ClaudeCodeAdapter)
 # At least one agent runtime must be present; config selects the default.
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl crontab; do
+for cmd in bash git gh jq sqlite3 curl crontab python3; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -106,14 +106,8 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-if ! command -v openclaw >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1 && \
-   [ ! -x "${OPENCLAW_BIN:-}" ] && [ ! -x "${OPENCODE_BIN:-}" ] && \
-   [ ! -x "${CODEX_BIN:-}" ] && [ ! -x "${CLAUDE_BIN:-}" ]; then
-    echo "ERROR: No agent runtime found (need openclaw, opencode, codex, or claude, or a valid *_BIN override)" >&2
-    echo "Install at least one of: openclaw, opencode, codex, claude" >&2
-    exit 1
-fi
-echo "Prerequisites OK: bash git jq sqlite3 curl crontab + at least one supported agent runtime"
+
+echo "Prerequisites OK: bash git gh jq sqlite3 curl crontab python3"
 echo
 
 # 2. Ensure runtime directory
@@ -175,11 +169,9 @@ if jq -e '((.automation? // {}) | if type == "object" then has("roleRuntime") el
     echo "  Removed obsolete automation.roleRuntime; all tasks use automation.agentRuntime"
 fi
 
-# The Todo MCP task-source adapters use the Python standard library client.
-# Keep Python optional for installations that do not enable either Todo source.
-if jq -e 'any(.taskSources[]?; (.enabled != false) and (.type == "todo_local_mcp" or .type == "todo_remote_mcp"))' "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
-    command -v python3 >/dev/null 2>&1 || fail "An enabled Todo MCP task source requires python3"
-fi
+# Python 3 is used by the daemon's SQLite JSON/lifecycle helpers and secret
+# redaction; the shared Todo MCP client is an optional additional use.
+command -v python3 >/dev/null 2>&1 || fail "Python 3 is required by the Manul runtime"
 
 # 4b. Persist provider-specific environment needed by unattended processes.
 #     Only an explicit allowlist is copied from the installer environment.
@@ -198,6 +190,21 @@ source "$CANONICAL_DIR/manul-env.sh"
 if ! manul_env_load "$RUNTIME_DIR"; then
     fail "Could not load $RUNTIME_DIR/.env for provider configuration"
 fi
+
+# Validate the backend selected by automation.agentRuntime, not merely the
+# presence of some other supported CLI on the host.
+SELECTED_RUNTIME="$(jq -r '.automation.agentRuntime // "openclaw"' "$RUNTIME_DIR/config.json")"
+case "$SELECTED_RUNTIME" in
+    openclaw) RUNTIME_COMMAND="openclaw"; RUNTIME_OVERRIDE="\${OPENCLAW_BIN:-}" ;;
+    opencode) RUNTIME_COMMAND="opencode"; RUNTIME_OVERRIDE="\${OPENCODE_BIN:-}" ;;
+    codex) RUNTIME_COMMAND="codex"; RUNTIME_OVERRIDE="\${CODEX_BIN:-}" ;;
+    claude-code) RUNTIME_COMMAND="claude"; RUNTIME_OVERRIDE="\${CLAUDE_BIN:-}" ;;
+    *) fail "Unsupported automation.agentRuntime '$SELECTED_RUNTIME' (expected openclaw, opencode, codex, or claude-code)" ;;
+esac
+if ! command -v "$RUNTIME_COMMAND" >/dev/null 2>&1 && [ ! -x "$RUNTIME_OVERRIDE" ]; then
+    fail "automation.agentRuntime selects '$SELECTED_RUNTIME', but '$RUNTIME_COMMAND' is unavailable; install it or configure the matching *_BIN override"
+fi
+echo "Selected agent runtime available: $SELECTED_RUNTIME"
 
 # 4c. Configure provider-owned OpenCode permissions required by unattended Manul execution.
 echo
