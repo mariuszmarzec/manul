@@ -229,7 +229,7 @@ PY
 OPENCODE_TASK_CONFIG_DIR=""
 
 cleanup_opencode_task_config() {
-    if [ -n "\${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
+    if [ -n "${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
         rm -rf -- "$OPENCODE_TASK_CONFIG_DIR"
         OPENCODE_TASK_CONFIG_DIR=""
     fi
