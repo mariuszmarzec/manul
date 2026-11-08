@@ -331,10 +331,11 @@ export TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
 # than risk shadowing an MCP entry whose name could not be inspected.
 _OVERLAY_JSON_FILE="$OPENCODE_TASK_CONFIG_DIR/opencode-manul-overlay.json"
 _OPENCODE_SCAN_ROOT="${_workdir_real:-$_workspace_real}"
+_OVERLAY_ERROR_FILE="$OPENCODE_TASK_CONFIG_DIR/overlay.stderr"
 if ! python3 - "$_OVERLAY_JSON_FILE" "$_workspace_real" "$_workspace_base_real" \
     "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${TODO_LOCAL_MCP_URL:-}" \
     "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$HOME" "${XDG_CONFIG_HOME:-$HOME/.config}" \
-    "$_OPENCODE_SCAN_ROOT" "${OPENCODE_CONFIG_CONTENT:-}" <<'PY_MANUL_OVERLAY'
+    "$_OPENCODE_SCAN_ROOT" "${OPENCODE_CONFIG_CONTENT:-}" 2>"$_OVERLAY_ERROR_FILE" <<'PY_MANUL_OVERLAY'
 import json
 import os
 import re
@@ -601,8 +602,12 @@ combined = deep_merge(existing_inline, overlay)
 Path(output).write_text(json.dumps(combined, separators=(",", ":")) + "\n", encoding="utf-8")
 PY_MANUL_OVERLAY
 then
-    log "unable to build safe JSONC-compatible OpenCode runtime overlay"
-    printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode runtime overlay","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"task_config","agent_started":false}}\n' "$OPT_TASK_ID"
+    _overlay_error="$(head -n 2 "$_OVERLAY_ERROR_FILE" 2>/dev/null | tr '\n' ' ' | cut -c 1-220)"
+    [ -n "$_overlay_error" ] || _overlay_error="unknown overlay generation error"
+    printf '%s\n' "OpenCode overlay generation failed: $_overlay_error" >> "$RAW_STDERR_FILE"
+    log "unable to build safe JSONC-compatible OpenCode runtime overlay: $_overlay_error"
+    jq -cn --arg task_id "$OPT_TASK_ID" --arg detail "$_overlay_error" \
+      '{status:"FAILED",task_id:$task_id,exit_code:65,summary:("Unable to build task-scoped OpenCode runtime overlay: " + $detail),session_id:"",duration_s:0,failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"task_config",agent_started:false}}'
     exit 65
 fi
 chmod 600 "$_OVERLAY_JSON_FILE"
@@ -662,19 +667,25 @@ write_runtime_capability_context() {
     printf '%s\n' '- Access is still subject to OpenCode tool-level and path-level decisions. An external-directory allow rule is not a guarantee that every bash command or tool call will be allowed.'
     printf '%s\n' '- Never inspect or modify sibling task workspaces, shared caches, Manul databases/logs/configuration, adapters, or other runtime state. Never try to bypass a denial via another tool, a different path, a symlink, a wrapper, or a reshaped command.'
     printf '%s\n' '' 'Effective V2 external_directory permission rules (path patterns are JSON-quoted):'
-    if [ -n "${OPENCODE_CONFIG:-}" ] && [ -r "$OPENCODE_CONFIG" ]; then
+    if [ -n "${OPENCODE_CONFIG_CONTENT:-}" ]; then
+        _runtime_capability_rules="$(jq -r '
+            (.permissions // [])[]?
+            | select(.action == "external_directory")
+            | "  - " + (.resource | tojson) + " => " + (.effect | tostring)
+        ' <<<"$OPENCODE_CONFIG_CONTENT" 2>/dev/null || true)"
+    elif [ -n "${OPENCODE_CONFIG:-}" ] && [ -r "$OPENCODE_CONFIG" ]; then
         _runtime_capability_rules="$(jq -r '
             (.permissions // [])[]?
             | select(.action == "external_directory")
             | "  - " + (.resource | tojson) + " => " + (.effect | tostring)
         ' "$OPENCODE_CONFIG" 2>/dev/null || true)"
-        if [ -n "$_runtime_capability_rules" ]; then
-            printf '%s\n' "$_runtime_capability_rules"
-        else
-            printf '%s\n' '  - No readable external-directory rules were found; do not infer access.'
-        fi
     else
-        printf '%s\n' '  - Effective config path is unavailable to the adapter; do not infer external-path access.'
+        _runtime_capability_rules=""
+    fi
+    if [ -n "$_runtime_capability_rules" ]; then
+        printf '%s\n' "$_runtime_capability_rules"
+    else
+        printf '%s\n' '  - No readable external-directory rules were found; do not infer access.'
     fi
     cat <<'RUNTIME_CAPABILITY_EOF'
 ## Required behavior when a capability is missing
