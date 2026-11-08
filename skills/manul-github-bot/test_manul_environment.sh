@@ -214,8 +214,8 @@ if ! grep -qE '^(export[[:space:]]+)?CARACAL_(MCP_URL|ACCESS_TOKEN|RESOLVE_LIVE)
    (
      unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN OPENCLAW_STATE_DIR OPENCODE_CONFIG
      source "$ENV_FILE3"
-     [ -z "\${CARACAL_MCP_URL:-}" ] &&
-     [ -z "\${CARACAL_ACCESS_TOKEN:-}" ] &&
+     [ -z "${CARACAL_MCP_URL:-}" ] &&
+     [ -z "${CARACAL_ACCESS_TOKEN:-}" ] &&
      [ "$OPENCLAW_STATE_DIR" = "/operator/chosen/state" ] &&
      [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
    ); then
