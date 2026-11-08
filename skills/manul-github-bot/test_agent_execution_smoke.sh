@@ -232,8 +232,6 @@ chmod +x "$FAKE_BIN/opencode"
 export OPENCODE_PROOF_FILE
 export AGENT_RUNTIME=opencode
 export OPENCODE_BIN="$FAKE_BIN/opencode"
-export CARACAL_MCP_URL="http://127.0.0.1:3500/mcp"
-export CARACAL_ACCESS_TOKEN="test-caracal-token"
 
 OPENCODE_CTX_FILE="$MANUL_DIR/state/tasks/opencode-role.ctx.json"
 OPENCODE_RESULT_FILE="$MANUL_DIR/state/tasks/opencode-role.executor-result"
