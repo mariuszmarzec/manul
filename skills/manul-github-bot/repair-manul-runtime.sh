@@ -118,10 +118,28 @@ if ! manul_env_load "$RUNTIME_DIR"; then
     fail "Could not load $RUNTIME_DIR/.env for provider configuration"
 fi
 
+SELECTED_RUNTIME="$(jq -r '.automation.agentRuntime // "openclaw"' "$RUNTIME_DIR/config.json")"
+case "$SELECTED_RUNTIME" in
+    openclaw) RUNTIME_COMMAND="openclaw"; RUNTIME_OVERRIDE="\${OPENCLAW_BIN:-}" ;;
+    opencode) RUNTIME_COMMAND="opencode"; RUNTIME_OVERRIDE="\${OPENCODE_BIN:-}" ;;
+    codex) RUNTIME_COMMAND="codex"; RUNTIME_OVERRIDE="\${CODEX_BIN:-}" ;;
+    claude-code) RUNTIME_COMMAND="claude"; RUNTIME_OVERRIDE="\${CLAUDE_BIN:-}" ;;
+    *) fail "Unsupported automation.agentRuntime '$SELECTED_RUNTIME'" ;;
+esac
+if ! command -v "$RUNTIME_COMMAND" >/dev/null 2>&1 && [ ! -x "$RUNTIME_OVERRIDE" ]; then
+    fail "automation.agentRuntime selects '$SELECTED_RUNTIME', but '$RUNTIME_COMMAND' is unavailable"
+fi
+echo "Selected agent runtime available: $SELECTED_RUNTIME"
+
 echo
-echo "  Preparing OpenCode provider permissions..."
-if ! bash "$CANONICAL_DIR/opencode-permissions.sh"; then
-    fail "Could not prepare required OpenCode permissions"
+if [ "$SELECTED_RUNTIME" = "opencode" ]; then
+    echo
+    echo "  Validating operator OpenCode configuration (read-only)..."
+    if ! bash "$CANONICAL_DIR/opencode-permissions.sh"; then
+        fail "OpenCode JSON/JSONC configuration validation failed"
+    fi
+else
+    echo "Skipping OpenCode config validation; selected backend is $SELECTED_RUNTIME"
 fi
 
 DB_FILE="$STATE_DIR/manul.db"
