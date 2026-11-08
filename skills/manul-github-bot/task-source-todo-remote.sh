@@ -78,14 +78,20 @@ task_source_todo_remote_poll() {
     echo "task-source: Todo Remote source is disabled because globalskills/aicode Todo MCP client is unavailable" >&2
     return 0
   fi
-  source_json="$(todo_source_remote_config "$1")" || return $?
+  if ! source_json="$(todo_source_remote_config "$1")"; then
+    echo "task-source: Todo Remote credentials/configuration unavailable; skipping optional source" >&2
+    return 0
+  fi
   manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
   [[ "$manul_user_id" =~ ^[1-9][0-9]*$ ]] || {
     echo "task-source: todo_remote_mcp requires a positive numeric manulUserId" >&2
     return 2
   }
 
-  tasks_json="$(todo_mcp_source_list_tasks "$source_json" todo_remote_mcp)" || return $?
+  if ! tasks_json="$(todo_mcp_source_list_tasks "$source_json" todo_remote_mcp)"; then
+    echo "task-source: Todo Remote MCP is unavailable; skipping optional source" >&2
+    return 0
+  fi
   # Fiteo returns both owned roots and tasks shared with the PAT owner. Select
   # only explicitly shared tasks with edit permission. If both an ancestor and
   # descendant are shared, queue the ancestor once and keep the returned tree.
