@@ -466,7 +466,7 @@ paths.extend(sorted(managed_paths))
 def canonical_action(action):
     return {"bash": "shell", "task": "subagent", "write": "edit", "patch": "edit"}.get(action, action)
 
-def collect_permission_rules(obj):
+def collect_legacy_permission_rules(obj):
     rules = []
     legacy = obj.get("permission")
     if isinstance(legacy, dict):
@@ -478,6 +478,10 @@ def collect_permission_rules(obj):
                 for resource, effect in value.items():
                     if isinstance(effect, str):
                         rules.append({"action": action, "resource": resource, "effect": effect})
+    return rules
+
+def collect_permission_rules(obj):
+    rules = collect_legacy_permission_rules(obj)
     native = obj.get("permissions")
     if isinstance(native, list):
         for rule in native:
@@ -534,7 +538,7 @@ if inline_content:
             mcp = parsed.get("mcp") or {}
             if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
                 names.update(mcp["servers"].keys())
-            operator_permissions.extend(collect_permission_rules(parsed))
+            operator_permissions.extend(collect_legacy_permission_rules(parsed))
     except Exception as exc:
         print(f"invalid inherited OPENCODE_CONFIG_CONTENT: {exc}", file=sys.stderr)
         raise SystemExit(2)
