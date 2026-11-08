@@ -565,22 +565,28 @@ provided, the task is automatically classified as informational
 configuration opt-in. The legacy `/manul report <question>` spelling remains
 accepted as an explicit informational-mode alias but is not required.
 
-A missing project reference is distinct from a routing error. Multiple equally
-specific aliases, an uncatalogued explicit GitHub URL, a disallowed repository,
-or an unavailable/invalid catalog remain fail-closed and are not converted to
-informational work. The common poller accepts `execution.kind=report_only`
-only for the two Todo source types; all other unsupported execution kinds fail
-closed.
+A missing project reference is distinct from a routing error. An explicit
+GitHub URL is resolved before consulting the optional catalog and works when
+the repository is present in the global `.repositories` allowlist. If there is
+no explicit URL and the optional catalog is missing or has no matching alias,
+the normal task is treated as informational (`report_only`). Multiple equally
+specific aliases, a disallowed repository, or an invalid catalog that is
+present remain routing errors and are not queued.
+
+The common poller accepts `execution.kind=report_only` only for the two Todo
+source types; all other unsupported execution kinds fail closed.
 
 Todo providers do not select a configured default repository. For each
-active root, the adapter resolves the execution target from the task description:
-an explicit GitHub repository URL takes precedence; otherwise the longest
-whole-phrase alias in the curated project catalog
-(`skills/globalskills-repository/project-repositories.json`) must identify
-exactly one canonical `owner/repo`. The resolved `repository`, method,
-matched alias and mapped skill names are stored in normalized metadata as
-`repositoryResolution`. Full contents of the mapped skills are included in
-the task prompt; workers must not inspect global skill paths.
+active root, an explicit GitHub repository URL takes precedence and is
+resolved without requiring the optional project catalog. Otherwise the
+longest whole-phrase alias in the curated project catalog
+(`~/.agents/skills/globalskills-repository/project-repositories.json`) must
+identify exactly one canonical `owner/repo`. If neither URL nor catalog alias
+resolves, the task becomes report-only. Mapped project skill files are loaded
+only when present under `~/.agents/skills`; a missing file is skipped.
+Resolved repository metadata, resolution method, matched alias and mapped
+skill names are stored as `repositoryResolution`. Workers must not inspect
+global skill paths.
 
 The top-level `.repositories` array in `~/.manul/config.json` is the single
 operator-controlled repository list for all task sources. GitHub Issues polling
