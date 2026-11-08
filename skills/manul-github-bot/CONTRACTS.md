@@ -17,7 +17,7 @@ Supported commands parsed from a `/manul` command are:
 | `/manul status` | query conversation status |
 | `/manul close` | close a conversation |
 
-Every task uses automation.agentRuntime (default openclaw), whether or not a canonical role is explicit. OpenCode receives a role through its native --agent <role> option. OpenClaw, Codex, and Claude Code receive the canonical role definition from ~/.agents/agents/<role>.md, with YAML frontmatter stripped and the role instructions prepended to the task prompt. OpenClaw continues to use its configured main entry point rather than treating a canonical role as an OpenClaw config-agent ID. Agent definitions remain canonical; Manul must not copy them into another source directory. Unknown/unconfigured roles fail closed.
+Every task uses automation.agentRuntime (default openclaw), whether or not a canonical role is explicit. OpenCode receives a role through its native --agent <role> option only when `opencode debug agent <role>` confirms that native agent exists; otherwise the adapter omits `--agent` and preserves the operator's `default_agent` or OpenCode's built-in `build`. OpenClaw, Codex, and Claude Code prepend the canonical role definition from ~/.agents/agents/<role>.md when it is present, with YAML frontmatter stripped. If that optional file is missing, they use the selected backend's default behavior; OpenClaw uses its configured main entry point. Agent definitions remain canonical; Manul must not copy them into another source directory. A role that is not permitted by Manul's `agents[]` configuration still fails closed.
 
 Routine ambiguity should be resolved by the agent. User input is requested only for a materially important unresolved decision.
 
@@ -553,22 +553,25 @@ provided, the task is automatically classified as informational
 configuration opt-in. The legacy `/manul report <question>` spelling remains
 accepted as an explicit informational-mode alias but is not required.
 
-A missing project reference is distinct from a routing error. Multiple equally
-specific aliases, an uncatalogued explicit GitHub URL, a disallowed repository,
-or an unavailable/invalid catalog remain fail-closed and are not converted to
-informational work. The common poller accepts `execution.kind=report_only`
+A missing project reference is distinct from a routing error. An explicit GitHub
+URL is usable without the catalog when it is present in the global
+`.repositories` allowlist. Without an explicit URL, an unavailable/invalid
+catalog disables alias routing and the task is informational/report-only.
+Multiple equally-specific aliases and repositories outside the global list
+remain fail-closed. The common poller accepts `execution.kind=report_only`
 only for the two Todo source types; all other unsupported execution kinds fail
 closed.
 
 Todo providers do not select a configured default repository. For each
-active root, the adapter resolves the execution target from the task description:
-an explicit GitHub repository URL takes precedence; otherwise the longest
-whole-phrase alias in the curated project catalog
-(`skills/globalskills-repository/project-repositories.json`) must identify
-exactly one canonical `owner/repo`. The resolved `repository`, method,
-matched alias and mapped skill names are stored in normalized metadata as
-`repositoryResolution`. Full contents of the mapped skills are included in
-the task prompt; workers must not inspect global skill paths.
+active root, an explicit GitHub repository URL takes precedence and does not
+require a catalog entry. Otherwise, the longest whole-phrase alias in the
+optional project catalog (`~/.agents/skills/globalskills-repository/project-repositories.json`)
+must identify exactly one canonical `owner/repo`. If the catalog is unavailable,
+alias routing is disabled and a task without an explicit URL becomes
+report-only. The resolved `repository`, method, matched alias and available
+mapped skill names are stored in normalized metadata as `repositoryResolution`.
+Mapped skills are read only from `~/.agents/skills/<skill>/SKILL.md`; a missing
+skill file is skipped and workers must not inspect global skill paths.
 
 The top-level `.repositories` array in `~/.manul/config.json` is the single
 operator-controlled repository list for all task sources. GitHub Issues polling
@@ -576,11 +579,12 @@ uses it directly; Todo Local and Todo Remote require the resolved project to be
 present in it. Per-source repository lists and `repositoryAllowlist` fields are
 not configuration inputs and cannot widen or narrow this list. The curated
 catalog supplies aliases and mapped project skills, but does not grant access.
-A missing match, multiple equally-specific project matches, an uncatalogued
-explicit URL, or a repository outside the global list is fail-closed: log the
-source task ID and skip it without creating a queue entry or falling back to a
-static repository. The route already stored with a queued task is reused across
-retries; changing the catalog does not silently retarget existing queue rows.
+A missing alias, multiple equally-specific project matches, or a repository
+outside the global list is fail-closed. An explicit URL needs no catalog entry
+but must still be in the global list. A Todo task with neither an explicit URL
+nor a usable alias is classified as report-only. The route already stored with
+a queued task is reused across retries; changing the catalog does not silently
+retarget existing queue rows.
 
 The two Todo providers are separate adapters with different MCP tool names and
 authentication. Local uses the existing loopback bridge without a bearer token
@@ -589,6 +593,23 @@ and is available only after an unauthenticated MCP initialize plus read-only
 and a PAT from an environment variable. HTTPS is required on untrusted/public
 networks because HTTP does not encrypt the bearer token in transit.
 Tokens never appear in normalized task JSON or configuration values.
+
+The shared Streamable HTTP Todo MCP client and local endpoint resolver are
+owned by `globalskills/aicode`, not by the standalone Manul repository.
+The `aicode` launcher exports their paths through `TODO_MCP_CLIENT` and
+`TODO_LOCAL_MCP_URL_HELPER`. Manul consumes only those exported paths; it
+does not search for a globalskills checkout or keep a copy of the transport.
+When the shared client is unavailable, polling skips the affected optional
+Todo source and continues with other providers. The shared client and its
+transport tests are owned by Globalskills CI.
+
+Manul does not depend on Caracal and does not read Caracal endpoint/token
+secrets, inject a Caracal MCP entry, or run a Caracal connectivity preflight.
+OpenCode operator configuration is loaded by OpenCode itself. Manul preserves
+`OPENCODE_CONFIG` and operator JSON/JSONC files, contributes only a temporary
+`OPENCODE_CONFIG_CONTENT` overlay, and injects Manul-owned MCP names only when
+they do not collide with known operator entries. Optional MCP connectivity
+never blocks OpenCode task startup.
 
 A Todo root is queued once with its complete subtask tree. Descendants are ordered
 implementation steps, not separate queue entries. The adapter preserves the
