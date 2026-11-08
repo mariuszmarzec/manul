@@ -62,7 +62,9 @@ SQL
 WORKDIR="$TMP/workdir"
 ORIGIN="$TMP/origin.git"
 mkdir -p "$WORKDIR"
-git init --quiet --initial-branch=main "$WORKDIR"
+# Git 2.25 does not support git init --initial-branch (added in 2.28).
+git init --quiet "$WORKDIR"
+git -C "$WORKDIR" symbolic-ref HEAD refs/heads/main
 git -C "$WORKDIR" config user.name test
 git -C "$WORKDIR" config user.email test@example.com
 printf 'base\n' >"$WORKDIR/README.md"
