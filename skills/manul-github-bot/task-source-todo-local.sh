@@ -46,7 +46,7 @@ todo_source_local_config() {
 }
 task_source_todo_local_poll() {
   local source_json tasks_json task_json normalized resolution task_id
-  source_json="$(todo_source_local_config "$1")"
+  source_json="$(todo_source_local_config "$1")" || return $?
 
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" todo_local_mcp)" || return $?
   while IFS= read -r task_json; do
@@ -82,12 +82,12 @@ task_source_todo_local_poll() {
 
 task_source_todo_local_revalidate() {
   local source_json="$1" source_id="$2"
-  source_json="$(todo_source_local_config "$source_json")"
+  source_json="$(todo_source_local_config "$source_json")" || return $?
   todo_task_still_current "$source_json" todo_local_mcp "$source_id"
 }
 
 task_source_todo_local_complete() {
   local source_json="$1" source_id="$2"
-  source_json="$(todo_source_local_config "$source_json")"
+  source_json="$(todo_source_local_config "$source_json")" || return $?
   todo_task_mark_done "$source_json" todo_local_mcp "$source_id"
 }
