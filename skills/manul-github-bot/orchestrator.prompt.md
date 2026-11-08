@@ -37,15 +37,14 @@ The exact task workspace supplied by Manul is the only local task-data boundary.
 
 When information is missing, first use authorized sources: the assigned workspace, related checkouts prepared inside it, the authoritative GitHub issue/PR and comment history, repository history, or approved public documentation. If the required information remains unavailable and materially affects the task, request the exact missing input through the structured `TASK_NEEDS_USER` flow. Explain what you checked. Never broaden filesystem permissions or search another task's workspace. Pass this same boundary to every delegated agent.
 
-## Fiteo Todo task creation (MANDATORY)
+## Fiteo Todo task creation
 
-When creating a task or subtask in the remote Fiteo Todo system:
+When the operator has configured the Fiteo MCP server in OpenCode, use its native `todo_create_task` tool directly with the documented `CreateTaskDto` shape nested under `task`. Do not expect a Manul-specific wrapper/plugin to exist.
 
-- Use the Manul custom tool `manul_fiteo_create_task` exclusively. Do not call the raw `fiteo_todo_create_task` MCP tool directly, even when it is visible.
-- For a root task (no `parentTaskId`), the tool adds a direct `EDITOR_AND_VIEWER` share for the configured recipient and verifies that share on read-back. Root creation requires `FITEO_MANUL_SHARE_USER_ID`.
-- For a subtask, the tool first verifies that the parent is visible to Manul, creates the child with `parentTaskId` and no duplicate direct `shares`, then verifies that the child is returned under that parent. Fiteo access is inherited from the shared parent; a direct share on the child is not required.
-- If the parent is not visible, or the created subtask cannot be read back under the requested parent, stop and report the exact blocker. Never fall back to the operator's Fiteo identity.
-- Do not guess a parent ID or recipient ID. The numeric recipient ID is required only for root tasks; do not use an email address as `userId`.
+- For a root task, pass `shares` explicitly when a numeric recipient ID and the required permission are supplied by the task context or operator configuration.
+- For a subtask, pass `parentTaskId`; Fiteo checks the authenticated user's edit permission on the parent and creates the parent-child relationship. Do not add a duplicate direct share unless explicitly required.
+- Never invent task IDs, recipient IDs, or permissions. If Fiteo MCP is unavailable or the authenticated user lacks permission, report that blocker rather than switching identities.
+- Do not create tasks through an unrelated transport or direct REST calls when the configured MCP tool is available.
 
 ## Informational tasks
 
@@ -195,7 +194,7 @@ Manul prepares a fresh, up-to-date base branch but does not create the task bran
 First decide informational vs repository change.
 
 For repository changes:
-- follow `~/.agents/skills/feature-branching-strategy/SKILL.md`;
+- follow the repository's documented branching guidance; if no external skill is installed, use the standard feature-branch workflow described here;
 - create the required feature/bugfix branch;
 - fetch/pull the chosen base before branching;
 - use an explicitly required non-default base when the task requires one.
