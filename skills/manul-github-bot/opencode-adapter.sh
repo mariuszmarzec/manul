@@ -571,10 +571,14 @@ permissions = operator_permissions + [
     {"action": "external_directory", "resource": workspace, "effect": "allow"},
     {"action": "external_directory", "resource": workspace.rstrip("/") + "/*", "effect": "allow"},
 ]
-tools = {}
+# Never permit the raw operator Fiteo create tool inside a Manul task.
+# Task creation is only available through the dedicated Manul-authenticated
+# MCP connection below; the user's global Fiteo server remains untouched.
+tools = {"fiteo_todo_create_task": False}
 if fiteo_url and fiteo_pat:
     if "manul-fiteo" in names:
-        print("operator MCP 'manul-fiteo' already exists; leaving it untouched", file=sys.stderr)
+        print("operator MCP 'manul-fiteo' already exists; disabling that reserved tool namespace for this task", file=sys.stderr)
+        tools["manul_fiteo_*"] = False
     elif any(fnmatch.fnmatchcase("manul_fiteo_todo_create_task", pattern) for pattern in tool_rule_patterns):
         print("an operator tool rule already matches the Manul Fiteo tool; preserving it without adding an override", file=sys.stderr)
         servers["manul-fiteo"] = {
