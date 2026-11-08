@@ -208,7 +208,7 @@ mkdir -p "$AICODE_SOURCE_DIR"
 : > "$AICODE_SOURCE_DIR/todo-mcp-client.py"
 cat > "$AICODE_SOURCE_DIR/todo-local-mcp-url.sh" <<'HELPER'
 todo_local_mcp_url_is_supported() {
-  [[ "$1" =~ ^http://(localhost|127\\.0\\.0\\.1)(:[0-9]+)?/mcp$ ]]
+  [[ "$1" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?/mcp$ ]]
 }
 
 todo_local_mcp_probe() {
@@ -219,7 +219,7 @@ todo_local_mcp_probe() {
 
 todo_local_mcp_resolve_url() {
   local preferred="$1" direct="http://127.0.0.1:8765/mcp" bridge="http://127.0.0.1:8766/mcp"
-  local direct_status bridge_status
+  local direct_status bridge_status platform="${TODO_LOCAL_MCP_PLATFORM_OVERRIDE:-native}"
   direct_status="$(printenv TODO_LOCAL_MCP_DIRECT_STATUS 2>/dev/null || printf '200')"
   bridge_status="$(printenv TODO_LOCAL_MCP_BRIDGE_STATUS 2>/dev/null || printf '000')"
   if [ -n "$preferred" ] && [ "$preferred" != "$direct" ] && [ "$preferred" != "$bridge" ]; then
@@ -231,7 +231,7 @@ todo_local_mcp_resolve_url() {
     printf '%s' "$direct"
     return 0
   fi
-  if [ "$bridge_status" = "200" ]; then
+  if [ "$platform" = "wsl" ] && [ "$bridge_status" = "200" ]; then
     printf '%s' "$bridge"
     return 0
   fi
