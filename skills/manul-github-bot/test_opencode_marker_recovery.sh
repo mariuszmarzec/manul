@@ -28,7 +28,6 @@ chmod +x "$tmp/bin/opencode"
 printf '%s\n' 'Do the task' >"$tmp/prompt"
 
 out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
-  CARACAL_MCP_URL="http://127.0.0.1:3500/mcp" CARACAL_ACCESS_TOKEN="test-caracal-token" \
   AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
   MANUL_WORKSPACE="$WORKSPACE_BASE" MANUL_TASK_WORKSPACE_ROOT="$TASK_WORKSPACE" \
   HOME="$TEST_HOME" OPENCODE_CONFIG="$TEST_HOME/.config/opencode/opencode.json" \
