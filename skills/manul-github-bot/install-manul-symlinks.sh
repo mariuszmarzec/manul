@@ -199,10 +199,64 @@ for script in "${SCRIPTS[@]}"; do
     CHANGED=$((CHANGED + 1))
 done
 
-# Older installers registered a Manul-only OpenCode custom tool globally.
-# Remove only symlinks whose literal target is the old Manul runtime/canonical
-# path. Keep regular files and all unrelated symlinks: they may belong to the
-# operator, and the removed plugin source is no longer available for comparison.
+# Remove the obsolete task-local Fiteo wrapper symlink left by older installers.
+# Only remove a Manul-owned symlink target or a byte-identical copy of the old
+# tracked source; preserve unrelated files occupying the same path.
+LEGACY_RUNTIME_TOOL="$RUNTIME_DIR/manul_fiteo_create_task.ts"
+LEGACY_TOOL_BLOB="b28cb74259fdd9dac5d1b95d6c3c6abf299bdf80"
+if [ -L "$LEGACY_RUNTIME_TOOL" ]; then
+    legacy_runtime_target="$(readlink -- "$LEGACY_RUNTIME_TOOL" 2>/dev/null || true)"
+    case "$legacy_runtime_target" in
+        "$CANONICAL_DIR/manul_fiteo_create_task.ts"|"$RUNTIME_DIR/manul_fiteo_create_task.ts")
+            if $DRY_RUN; then
+                echo "[dry-run] Would remove obsolete Manul runtime tool symlink: $LEGACY_RUNTIME_TOOL"
+            else
+                rm -f -- "$LEGACY_RUNTIME_TOOL"
+                CHANGED=$((CHANGED + 1))
+                echo "Removed obsolete Manul runtime tool symlink: $LEGACY_RUNTIME_TOOL"
+            fi
+            ;;
+        *) echo "Preserving unrelated runtime tool symlink: $LEGACY_RUNTIME_TOOL" ;;
+    esac
+elif [ -f "$LEGACY_RUNTIME_TOOL" ]; then
+    legacy_runtime_blob="$(git hash-object --no-filters "$LEGACY_RUNTIME_TOOL" 2>/dev/null || true)"
+    if [ "$legacy_runtime_blob" = "$LEGACY_TOOL_BLOB" ]; then
+        if $DRY_RUN; then
+            echo "[dry-run] Would remove byte-identical obsolete Manul runtime tool: $LEGACY_RUNTIME_TOOL"
+        else
+            rm -f -- "$LEGACY_RUNTIME_TOOL"
+            CHANGED=$((CHANGED + 1))
+            echo "Removed byte-identical obsolete Manul runtime tool: $LEGACY_RUNTIME_TOOL"
+        fi
+    else
+        echo "Preserving unrelated runtime file: $LEGACY_RUNTIME_TOOL"
+    fi
+fi
+
+# Remove only the package that the old Manul installer provisioned for its
+# now-retired OpenCode plugin. Preserve other packages in the canonical
+# node_modules tree and remove parent directories only when they are empty.
+LEGACY_PLUGIN_PACKAGE="$CANONICAL_DIR/node_modules/@opencode/plugin"
+LEGACY_PLUGIN_PACKAGE_JSON="$LEGACY_PLUGIN_PACKAGE/package.json"
+if [ -f "$LEGACY_PLUGIN_PACKAGE_JSON" ] &&
+   jq -e '.name == "@opencode/plugin"' "$LEGACY_PLUGIN_PACKAGE_JSON" >/dev/null 2>&1; then
+    if $DRY_RUN; then
+        echo "[dry-run] Would remove obsolete Manul @opencode/plugin package: $LEGACY_PLUGIN_PACKAGE"
+    else
+        rm -rf -- "$LEGACY_PLUGIN_PACKAGE"
+        rmdir -- "$CANONICAL_DIR/node_modules/@opencode" 2>/dev/null || true
+        rmdir -- "$CANONICAL_DIR/node_modules" 2>/dev/null || true
+        CHANGED=$((CHANGED + 1))
+        echo "Removed obsolete Manul @opencode/plugin package"
+    fi
+fi
+
+# Older installers registered this Manul-only tool in OpenCode's global
+# tools directory. Remove only a link to the old Manul runtime/canonical path
+# or an exact copy of the former tracked source. Never touch unrelated files.
+OPENCODE_TOOL_SOURCE="$RUNTIME_DIR/manul_fiteo_create_task.ts"
+OPENCODE_TOOL_SOURCE_REAL="$(realpath -e -- "$OPENCODE_TOOL_SOURCE" 2>/dev/null || true)"
+# This is the immutable Git blob SHA of the removed TypeScript tool.
 OPENCODE_CONFIG_CANDIDATES=("$HOME/.config/opencode")
 XDG_OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 if [ "$XDG_OPENCODE_CONFIG_DIR" != "$HOME/.config/opencode" ]; then
@@ -224,21 +278,41 @@ for opencode_config_dir in "${OPENCODE_CONFIG_CANDIDATES[@]}"; do
     legacy_tool="$opencode_config_dir/tools/manul_fiteo_create_task.ts"
     if [ -L "$legacy_tool" ]; then
         legacy_target="$(readlink -- "$legacy_tool" 2>/dev/null || true)"
-        case "$legacy_target" in
-            "$RUNTIME_DIR/manul_fiteo_create_task.ts"|"$CANONICAL_DIR/manul_fiteo_create_task.ts")
-                if $DRY_RUN; then
-                    echo "[dry-run] Would remove obsolete Manul-owned OpenCode tool symlink: $legacy_tool"
-                else
-                    rm -f -- "$legacy_tool"
-                    echo "Removed obsolete Manul-owned OpenCode tool symlink: $legacy_tool"
-                fi
-                ;;
-            *)
-                echo "Preserving unrelated OpenCode tool symlink: $legacy_tool"
-                ;;
-        esac
+        legacy_tool_real="$(realpath -e -- "$legacy_tool" 2>/dev/null || true)"
+        if [ -n "$OPENCODE_TOOL_SOURCE_REAL" ] && [ "$legacy_tool_real" = "$OPENCODE_TOOL_SOURCE_REAL" ]; then
+            remove_legacy_tool=true
+        else
+            case "$legacy_target" in
+                "$RUNTIME_DIR/manul_fiteo_create_task.ts"|"$CANONICAL_DIR/manul_fiteo_create_task.ts") remove_legacy_tool=true ;;
+                *) remove_legacy_tool=false ;;
+            esac
+        fi
+        if $remove_legacy_tool; then
+            if $DRY_RUN; then
+                echo "[dry-run] Would remove obsolete global Manul tool registration: $legacy_tool"
+            else
+                rm -f -- "$legacy_tool"
+                CHANGED=$((CHANGED + 1))
+                echo "Removed obsolete global Manul tool registration: $legacy_tool"
+            fi
+        else
+            echo "Preserving unrelated OpenCode tool symlink: $legacy_tool"
+        fi
+    elif [ -f "$legacy_tool" ]; then
+        legacy_tool_blob="$(git hash-object --no-filters "$legacy_tool" 2>/dev/null || true)"
+        if [ "$legacy_tool_blob" = "$LEGACY_TOOL_BLOB" ]; then
+            if $DRY_RUN; then
+                echo "[dry-run] Would remove byte-identical legacy Manul tool copy: $legacy_tool"
+            else
+                rm -f -- "$legacy_tool"
+                CHANGED=$((CHANGED + 1))
+                echo "Removed byte-identical legacy Manul tool copy: $legacy_tool"
+            fi
+        else
+            echo "Preserving unrelated OpenCode custom tool: $legacy_tool"
+        fi
     elif [ -e "$legacy_tool" ]; then
-        echo "Preserving existing OpenCode custom tool file: $legacy_tool"
+        echo "Preserving unrelated OpenCode custom tool: $legacy_tool"
     fi
 done
 
