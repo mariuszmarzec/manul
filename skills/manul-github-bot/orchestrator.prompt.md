@@ -41,7 +41,7 @@ When information is missing, first use authorized sources: the assigned workspac
 
 When creating a task or subtask in the remote Fiteo Todo system:
 
-- Use the existing Fiteo MCP tool `fiteo_todo_create_task` directly. Manul does not install or inject a wrapper plugin.
+- Use the native MCP tool `manul_fiteo_todo_create_task` from the namespaced Manul Fiteo server directly. Manul does not install or inject a wrapper plugin.
 - For a root task (no `parentTaskId`), include `shares` with the configured Manul recipient and permission `EDITOR_AND_VIEWER`. Read the recipient from `FITEO_MANUL_SHARE_USER_ID`; never guess it or use an email address as `userId`.
 - For a subtask, pass the verified parent ID as `parentTaskId`. Do not add a duplicate direct `shares` entry: Fiteo inherits access from the shared parent.
 - Do not fall back to the operator's Fiteo identity. Use only the Manul-specific Fiteo MCP connection when it is available.
