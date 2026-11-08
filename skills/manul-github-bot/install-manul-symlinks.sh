@@ -238,6 +238,19 @@ for opencode_config_dir in "\${OPENCODE_CONFIG_CANDIDATES[@]}"; do
     fi
 done
 
+# Remove the exact package installed by the previous Manul installer.
+# Other packages under the canonical checkout's node_modules are untouched.
+LEGACY_OPENCODE_PLUGIN_DIR="$CANONICAL_DIR/node_modules/@opencode/plugin"
+if [ -d "$LEGACY_OPENCODE_PLUGIN_DIR" ]; then
+    if $DRY_RUN; then
+        echo "[dry-run] Would remove obsolete Manul-owned package: $LEGACY_OPENCODE_PLUGIN_DIR"
+    else
+        rm -rf -- "$LEGACY_OPENCODE_PLUGIN_DIR"
+        rmdir "$CANONICAL_DIR/node_modules/@opencode" 2>/dev/null || true
+        rmdir "$CANONICAL_DIR/node_modules" 2>/dev/null || true
+        echo "Removed obsolete Manul-owned @opencode/plugin package"
+    fi
+fi
 # Verify every runtime symlink. A missing or misplaced entry is a hard failure.
 echo
 echo "=== Verification ==="
