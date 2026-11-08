@@ -36,9 +36,9 @@ todo_task_repository_catalog_path() {
   printf '%s\n' "$HOME/.agents/skills/globalskills-repository/project-repositories.json"
 }
 
-# Resolve a task target only from the curated project catalog. Explicit GitHub
-# URLs win; otherwise the longest unambiguous whole-phrase alias wins. A
-# The operator's global .repositories list is the allowlist; the catalog only maps names and skills.
+# Resolve an explicit GitHub URL without requiring the optional project catalog.
+# Otherwise resolve the longest unambiguous whole-phrase alias from that catalog.
+# The operator's global .repositories list remains the only execution allowlist.
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
