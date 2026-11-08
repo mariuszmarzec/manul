@@ -7,10 +7,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="${OPENCODE_CONFIG:-}"
 if [ -z "$CONFIG" ]; then
-  if [ -f "$HOME/.config/opencode/opencode.json" ]; then
-    CONFIG="$HOME/.config/opencode/opencode.json"
-  elif [ -f "$HOME/.config/opencode/opencode.jsonc" ]; then
-    CONFIG="$HOME/.config/opencode/opencode.jsonc"
+  OPENCODE_CONFIG_DIR="\${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  if [ -f "$OPENCODE_CONFIG_DIR/opencode.json" ]; then
+    CONFIG="$OPENCODE_CONFIG_DIR/opencode.json"
+  elif [ -f "$OPENCODE_CONFIG_DIR/opencode.jsonc" ]; then
+    CONFIG="$OPENCODE_CONFIG_DIR/opencode.jsonc"
   fi
 fi
 
