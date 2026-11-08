@@ -1610,6 +1610,56 @@ MOCK
     || fail "Manul changed the project-owned OpenCode JSONC"
 }
 
+# A project tool rule that matches the native Fiteo MCP tool must not be shadowed.
+test_opencode_preserves_project_tool_rule() {
+  local tmp home workspace project global_config project_config before_hash out
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  home="$tmp/home"
+  workspace="$home/.manul/workspace/ws-project-tool-rule"
+  project="$workspace/repos/example/project"
+  mkdir -p "$tmp/bin" "$home/.config/opencode" "$home/.manul" "$project/.opencode"
+  global_config="$home/.config/opencode/opencode.json"
+  project_config="$project/.opencode/opencode.jsonc"
+  printf '%s\n' '{"model":"test/provider"}' >"$global_config"
+  cat >"$project_config" <<'JSONC'
+{
+  // Explicit project denial must remain effective after Manul adds its server.
+  "tools": { "manul_fiteo_*": false, },
+}
+JSONC
+  before_hash="$(sha256sum "$project_config" | awk '{print $1}')"
+  cat >"$home/.manul/.env" <<'ENV'
+FITEO_BASE_URL=https://runtime-fiteo.example
+FITEO_MANUL_PAT=runtime-fiteo-pat
+ENV
+  chmod 600 "$home/.manul/.env"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+jq -e '
+  .mcp.servers["manul-fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
+  and .tools["manul_fiteo_*"] == null
+' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
+cat >/dev/null
+printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-project-tool-rule","part":{"type":"text","text":"TASK_DONE project tool rule preserved"}}'
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  printf '%s\n' 'Use Fiteo only when the operator permits it' >"$tmp/prompt"
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    OPENCODE_CONFIG="$global_config" \
+    MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" \
+    MANUL_TASK_WORKSPACE_ROOT="$workspace" MANUL_TASK_WORKDIR="$project" \
+    AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id project-tool-rule --prompt "$tmp/prompt" \
+      --workspace "$workspace" --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenCode preserves an existing project tool rule"
+  [ "$(sha256sum "$project_config" | awk '{print $1}')" = "$before_hash" ] \
+    && ok "Project tool denial remains byte-identical" \
+    || fail "Manul changed the project-owned tool rule"
+}
+
 # 10c. Local Todo MCP is optional and uses the helper exported by aicode.
 test_opencode_todo_local_mcp() {
   local tmp home workspace global_config before_hash out
@@ -1848,6 +1898,7 @@ test_opencode_missing
 test_opencode_continuation
 test_opencode_optional_mcp_overlay
 test_opencode_preserves_project_mcp_collision
+test_opencode_preserves_project_tool_rule
 test_opencode_todo_local_mcp
 test_agent_executor_dispatch
 test_runtime_selection
