@@ -148,33 +148,30 @@ chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
 chmod 644 "$PERM_CANON/manul-queue-reset.sh"
 
-# Simulate both forms produced by the old installer: a global symlink and a
-# byte-identical copy in an explicitly configured OpenCode config directory.
+# Simulate the legacy plugin registrations left by the previous installer.
 ln -s "$PERM_RUN/manul_fiteo_create_task.ts" "$PERM_HOME/.config/opencode/tools/manul_fiteo_create_task.ts"
 ln -s "$PERM_RUN/manul_fiteo_create_task.ts" "$PERM_ROOT/xdg/opencode/tools/manul_fiteo_create_task.ts"
-cp "$PERM_CANON/manul_fiteo_create_task.ts" "$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
+cat > "$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts" <<'LEGACY_PLUGIN'
+export default Plugin.define({
+  id: "manul.fiteo-create-task",
+  setup() {
+    return { name: "manul_fiteo_create_task" }
+  }
+})
+LEGACY_PLUGIN
 printf '%s\n' 'operator-owned tool' > "$PERM_ROOT/opencode/tools/operator_tool.ts"
 
-# Keep the runtime test independent of the network while exercising the
-# installer's exact npm invocation and expected package location.
+# The installer must never invoke npm or provision packages.
 cat > "$PERM_ROOT/bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
-set -euo pipefail
-prefix=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --prefix) prefix="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-[ -n "$prefix" ] || exit 2
-mkdir -p "$prefix/node_modules/@opencode/plugin"
-printf '%s\n' '{"name":"@opencode/plugin","version":"2.2.5"}' > "$prefix/node_modules/@opencode/plugin/package.json"
+printf '%s\n' "$*" >> "$NPM_INVOKED_FILE"
+exit 99
 MOCK_NPM
 chmod +x "$PERM_ROOT/bin/npm"
 
 set +e
 PATH="$PERM_ROOT/bin:$PATH" HOME="$PERM_HOME" XDG_CONFIG_HOME="$PERM_ROOT/xdg" \
+  NPM_INVOKED_FILE="$PERM_ROOT/npm-invoked" \
   OPENCODE_CONFIG_DIR="$PERM_ROOT/opencode" MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
 PERM_RC=$?
@@ -198,9 +195,9 @@ if [ "$PERM_RC" -eq 0 ] &&
    [ ! -e "$PERM_OPENCODE_TOOL_GLOBAL" ] && [ ! -L "$PERM_OPENCODE_TOOL_GLOBAL" ] &&
    [ ! -e "$PERM_OPENCODE_TOOL_XDG" ] && [ ! -L "$PERM_OPENCODE_TOOL_XDG" ] &&
    [ ! -e "$PERM_OPENCODE_TOOL_CUSTOM" ] && [ ! -L "$PERM_OPENCODE_TOOL_CUSTOM" ]; then
-  ok "Installer removes legacy Manul registrations from default, XDG, and custom OpenCode tool dirs"
+  ok "Installer removes only identifiable legacy Manul plugin registrations"
 else
-  fail "Installer left a legacy Manul tool registered globally (rc=$PERM_RC)"
+  fail "Installer left an identifiable legacy Manul plugin registration (rc=$PERM_RC)"
 fi
 
 if [ -f "$PERM_ROOT/opencode/tools/operator_tool.ts" ] &&
@@ -210,11 +207,16 @@ else
   fail "Installer modified an unrelated operator-owned OpenCode tool"
 fi
 
-if [ -f "$PERM_CANON/node_modules/@opencode/plugin/package.json" ] &&
-   grep -Fq '"version":"2.2.5"' "$PERM_CANON/node_modules/@opencode/plugin/package.json"; then
-  ok "Installer provisions @opencode/plugin beside the canonical Manul tool"
+if [ ! -s "$PERM_ROOT/npm-invoked" ] && [ ! -e "$PERM_CANON/node_modules" ]; then
+  ok "Installer never invokes npm or installs an OpenCode package"
 else
-  fail "Installer did not provision the OpenCode V2 plugin dependency"
+  fail "Installer unexpectedly invoked npm or created node_modules"
+fi
+
+if [ -L "$PERM_RUN/jsonc-to-json.py" ] && [ -r "$PERM_RUN/jsonc-to-json.py" ]; then
+  ok "Installer deploys the JSONC parser runtime helper"
+else
+  fail "Installer did not deploy jsonc-to-json.py"
 fi
 
 if [ -L "$PERM_RUN/agent-task-runner.sh" ] && [ -x "$PERM_RUN/agent-task-runner.sh" ]; then
@@ -301,7 +303,7 @@ fi
 # task-source adapters (added in 9415b99), every poll cycle dies with
 # `task_source_configured_sources: command not found` and the generic
 # provider path silently degrades to legacy GitHub Issues only.
-for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh task-source-todo-local.sh task-source-todo-remote.sh todo-task-source-utils.sh todo-mcp-client.py; do
+for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh task-source-todo-local.sh task-source-todo-remote.sh todo-task-source-utils.sh jsonc-to-json.py; do
   if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
        | grep -q "\"$_ts\""; then
     ok "Installer declares $_ts"
@@ -309,9 +311,9 @@ for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh
     fail "Installer does not declare $_ts (generic task-source adapter missing from runtime)"
   fi
 done
-grep -q 'enabled Todo MCP task source requires python3' "$SCRIPT_DIR/install-manul.sh" \
-  && ok "Installer requires python3 only when a Todo MCP source is enabled" \
-  || fail "Installer does not validate python3 for enabled Todo MCP sources"
+grep -q 'python3 is required by the Manul runtime' "$SCRIPT_DIR/install-manul.sh" \
+  && ok "Installer validates Python 3 as a required runtime dependency" \
+  || fail "Installer does not validate Python 3 as a required runtime dependency"
 
 # Runtime session-state helper must be deployed alongside the execution controller.
 if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
