@@ -19,7 +19,6 @@ set -u
 MANUL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$MANUL_SCRIPT_DIR/manul-paths.sh"
 source "$MANUL_SCRIPT_DIR/process-runner.sh"
-source "$MANUL_SCRIPT_DIR/todo-local-mcp-url.sh"
 unset TODO_LOCAL_MCP_TOKEN
 
 OPT_TASK_ID=""
@@ -152,9 +151,6 @@ fi
 CONTINUATION_PROMPT="Continue exactly where you left off. Do not re-plan or restate the task. Make the next concrete changes in the current workspace, run the relevant checks, and finish the task. When the task is genuinely complete, emit exactly one final line: TASK_DONE"
 PERMISSION_RECOVERY_PROMPT="A tool call was rejected by the OpenCode permission policy. Do not repeat the denied operation, rephrase it, split it into smaller calls, or try to reach the same denied resource through another tool, path, symlink, wrapper, subagent, or command. Do not change or bypass permissions. Re-evaluate the original task goal and choose an independent alternative that stays inside the assigned workspace and uses currently allowed capabilities. For build diagnostics, prefer rerunning the repository's documented command with useful flags and save a concise, secret-free log under the task workspace (for example, tmp/diagnostics/). If no safe alternative can provide the required evidence, explain exactly what is missing and why, preserve all completed work, and emit TASK_FAILED with a concise reason. Never claim success without verification."
 AGENT_ARGS=()
-if [ -n "$OPT_AGENT" ]; then
-    AGENT_ARGS=(--agent "$OPT_AGENT")
-fi
 AUTO_ARGS=()
 if [ "$OPT_AUTO" = "true" ]; then
     AUTO_ARGS=(--auto)
@@ -207,116 +203,33 @@ PY
 }
 
 
-# Keep provider/global config immutable. OpenCode's global tool directory is
-# shared by aicode and interactive sessions, so Manul's Fiteo helper must be
-# visible only from this task workspace. The runtime installer removes any
-# obsolete global registration; this temporary project-local link is cleaned
-# on every adapter exit.
-OPENCODE_TASK_CONFIG_DIR=""
-OPENCODE_MANUL_TOOL_SOURCE=""
-OPENCODE_MANUL_TOOL_TARGET=""
-OPENCODE_MANUL_TOOL_CREATED=false
-OPENCODE_PROJECT_PLUGINS_DIR=""
-OPENCODE_PROJECT_PLUGINS_DIR_CREATED=false
-OPENCODE_PROJECT_CONFIG_DIR=""
-OPENCODE_PROJECT_CONFIG_DIR_CREATED=false
-
+# OpenCode reads the operator's JSON/JSONC files itself. Manul contributes
+# only a temporary runtime overlay through OPENCODE_CONFIG_CONTENT; it never
+# replaces OPENCODE_CONFIG or writes to an operator-owned configuration file.
+OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
 cleanup_opencode_task_config() {
-    if [ "$OPENCODE_MANUL_TOOL_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_MANUL_TOOL_TARGET:-}" ] &&
-       [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        _cleanup_tool_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
-        if [ -n "${OPENCODE_MANUL_TOOL_SOURCE:-}" ] &&
-           [ "$_cleanup_tool_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-            rm -f -- "$OPENCODE_MANUL_TOOL_TARGET"
-        fi
-    fi
-    if [ "$OPENCODE_PROJECT_PLUGINS_DIR_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_PROJECT_PLUGINS_DIR:-}" ] &&
-       [ -d "$OPENCODE_PROJECT_PLUGINS_DIR" ] && [ ! -L "$OPENCODE_PROJECT_PLUGINS_DIR" ]; then
-        rmdir -- "$OPENCODE_PROJECT_PLUGINS_DIR" 2>/dev/null || true
-    fi
-    if [ "$OPENCODE_PROJECT_CONFIG_DIR_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_PROJECT_CONFIG_DIR:-}" ] &&
-       [ -d "$OPENCODE_PROJECT_CONFIG_DIR" ] && [ ! -L "$OPENCODE_PROJECT_CONFIG_DIR" ]; then
-        rmdir -- "$OPENCODE_PROJECT_CONFIG_DIR" 2>/dev/null || true
-    fi
     if [ -n "${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
         rm -rf -- "$OPENCODE_TASK_CONFIG_DIR"
         OPENCODE_TASK_CONFIG_DIR=""
     fi
 }
-
-prepare_opencode_manul_tool() {
-    local project_config plugins_dir existing_real
-    OPENCODE_MANUL_TOOL_SOURCE="$(realpath -e -- "$MANUL_SCRIPT_DIR/manul_fiteo_create_task.ts" 2>/dev/null || true)"
-    if [ -z "$OPENCODE_MANUL_TOOL_SOURCE" ] || [ ! -f "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-        log "Manul Fiteo V2 plugin source is missing from the canonical runtime"
-        return 1
-    fi
-
-    project_config="$OPT_WORKSPACE/.opencode"
-    plugins_dir="$project_config/plugins"
-    OPENCODE_PROJECT_CONFIG_DIR="$project_config"
-    OPENCODE_PROJECT_PLUGINS_DIR="$plugins_dir"
-    OPENCODE_MANUL_TOOL_TARGET="$plugins_dir/manul_fiteo_create_task.ts"
-
-    # Do not follow project-controlled symlinks or overwrite existing config.
-    if [ -L "$project_config" ] || { [ -e "$project_config" ] && [ ! -d "$project_config" ]; }; then
-        log "refusing to inject Manul tool: workspace .opencode is not a real directory"
-        return 1
-    fi
-    if [ ! -d "$project_config" ]; then
-        if ! mkdir -- "$project_config"; then return 1; fi
-        OPENCODE_PROJECT_CONFIG_DIR_CREATED=true
-    fi
-
-    if [ -L "$plugins_dir" ] || { [ -e "$plugins_dir" ] && [ ! -d "$plugins_dir" ]; }; then
-        log "refusing to inject Manul tool: workspace .opencode/plugins is not a real directory"
-        return 1
-    fi
-    if [ ! -d "$plugins_dir" ]; then
-        if ! mkdir -- "$plugins_dir"; then return 1; fi
-        OPENCODE_PROJECT_PLUGINS_DIR_CREATED=true
-    fi
-
-    if [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        existing_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
-        if [ "$existing_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-            # This is a stale link from an interrupted previous Manul attempt,
-            # or an already prepared link owned by this exact runtime. Adopt it
-            # so the EXIT trap removes it after the current invocation.
-            OPENCODE_MANUL_TOOL_CREATED=true
-            log "adopted existing Manul Fiteo V2 plugin link for this task invocation"
-            return 0
-        fi
-        log "refusing to overwrite an existing workspace V2 plugin symlink"
-        return 1
-    fi
-    if [ -e "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        log "refusing to overwrite an existing workspace V2 plugin"
-        return 1
-    fi
-    if ! ln -s "$OPENCODE_MANUL_TOOL_SOURCE" "$OPENCODE_MANUL_TOOL_TARGET"; then
-        log "failed to create task-local Manul Fiteo V2 plugin link"
-        return 1
-    fi
-    OPENCODE_MANUL_TOOL_CREATED=true
-    log "registered Manul Fiteo V2 plugin only in the active task workspace"
-}
-
 trap cleanup_opencode_task_config EXIT HUP INT TERM
 
-# Respect a configured provider path, but also cover OpenCode's canonical
-# default when OPENCODE_CONFIG is not exported by the unattended launcher.
-_OPENCODE_BASE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
+# Respect custom JSON or JSONC paths. If no explicit config was supplied,
+# recognise either default filename; OpenCode remains responsible for loading it.
+_OPENCODE_BASE_CONFIG="${OPENCODE_CONFIG:-}"
+if [ -z "$_OPENCODE_BASE_CONFIG" ]; then
+    for _candidate in "$HOME/.config/opencode/opencode.json" "$HOME/.config/opencode/opencode.jsonc"; do
+        if [ -f "$_candidate" ]; then _OPENCODE_BASE_CONFIG="$_candidate"; break; fi
+    done
+fi
 _TASK_WORKSPACE_ROOT_INPUT="${MANUL_TASK_WORKSPACE_ROOT:-}"
 _TASK_WORKDIR_INPUT="${MANUL_TASK_WORKDIR:-}"
 _workspace_real=""
 _workdir_real=""
 # Runner-supplied paths are authoritative. Validate them before starting the
 # model so a stale/wrong home prefix cannot turn into a permission retry loop.
-if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -f "$_OPENCODE_BASE_CONFIG" ]; then
+if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -n "$_OPENCODE_BASE_CONFIG" ]; then
     _workspace_real="$(realpath -e -- "$OPT_WORKSPACE" 2>/dev/null || true)"
     _workspace_base_real="$(realpath -e -- "$MANUL_WORKSPACE" 2>/dev/null || true)"
     _assigned_workspace_real="$(realpath -e -- "${_TASK_WORKSPACE_ROOT_INPUT:-$OPT_WORKSPACE}" 2>/dev/null || true)"
@@ -351,46 +264,19 @@ if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -f "$_OPENCODE_BASE_CONFIG" ]; then
 else
     _workspace_real="$(realpath -e -- "$OPT_WORKSPACE" 2>/dev/null || true)"
 fi
-
 if [ -z "$_workspace_real" ] || [ ! -d "$_workspace_real" ]; then
     printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Cannot resolve OpenCode task workspace","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
     exit 66
 fi
-
 if [ -z "${_workspace_base_real:-}" ]; then
     _workspace_base_real="$(realpath -m -- "$MANUL_WORKSPACE")"
 fi
+export MANUL_TASK_WORKSPACE_ROOT="$_workspace_real"
+if [ -n "$_workdir_real" ]; then export MANUL_TASK_WORKDIR="$_workdir_real"; fi
 
-if ! prepare_opencode_manul_tool; then
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Unable to prepare task-scoped Manul Fiteo V2 plugin without overwriting workspace configuration","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"manul_plugin_scope","agent_started":false}}\n' "$OPT_TASK_ID"
-    exit 78
-fi
-
-# Caracal is a required capability for Manul's OpenCode runtime. Never start
-# a task with a half-configured MCP definition: OpenCode resolves env placeholders
-# in the adapter's child process, not from an interactive OpenCode UI session.
-# Fallback to the single Caracal provider (~/.caracal/env.sh) for credentials
-# when the daemon has not already provided them. The provider loads the token
-# from secrets.yaml and resolves the live loopback URL via caracal-rag check.
-# Manul-specific context (MANUL_TASK_WORKSPACE_ROOT, etc.) is preserved.
-# shellcheck source=~/.caracal/env.sh
-if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
-   [[ "${CARACAL_MCP_URL:-}" =~ ^http://127\.0\.0\.1:0/ ]]; then
-    # Try the Caracal provider. Use CARACAL_RESOLVE_LIVE=1 to force a fresh
-    # healthcheck so a long-running daemon cannot pin a stale port.
-    if CARACAL_RESOLVE_LIVE=1 . "$HOME/.caracal/env.sh" 2>/dev/null; then
-        log "resolved Caracal MCP from ~/.caracal/env.sh"
-    else
-        log "required Caracal MCP URL/token is missing or disconnected"
-        printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"caracal_mcp_config","agent_started":false}}\n' "$OPT_TASK_ID"
-        exit 78
-    fi
-fi
-export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
-
-# The daemon can outlive an aicode launch. Refresh Fiteo credentials from the
-# latest runtime file for every task, while leaving unrelated inherited values
-# untouched. The endpoint and PAT are stored atomically by manul-env.sh.
+# A daemon can outlive the aicode launcher. Refresh Manul's dedicated Fiteo
+# identity from the runtime-owned environment file for each task. This is
+# independent of the operator's own Fiteo MCP and PAT.
 _FITEO_RUNTIME_ENV_FILE="$MANUL_DIR/.env"
 if [ -f "$_FITEO_RUNTIME_ENV_FILE" ]; then
     _fiteo_runtime_values="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s|%s|%s" "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${FITEO_MANUL_SHARE_USER_ID:-}"' _ "$_FITEO_RUNTIME_ENV_FILE" 2>/dev/null)" || _fiteo_runtime_values=""
@@ -411,231 +297,287 @@ fi
 TODO_LOCAL_MCP_AVAILABLE=0
 TODO_LOCAL_MCP_CONNECTED=0
 unset TODO_LOCAL_MCP_URL
-if command -v python3 >/dev/null 2>&1; then
-    _todo_local_resolved_url="$(todo_local_mcp_resolve_url "")" || _todo_local_resolved_url=""
-    if [ -n "$_todo_local_resolved_url" ]; then
-        TODO_LOCAL_MCP_URL="$_todo_local_resolved_url"
-        TODO_LOCAL_MCP_AVAILABLE=1
-        TODO_LOCAL_MCP_CONNECTED=1
-        log "Todo local MCP initialize/tools/list handshake succeeded at $TODO_LOCAL_MCP_URL; adding it to the task-scoped OpenCode config"
-    else
-        log "Todo local MCP is unavailable on the current host; continuing without this optional MCP"
+# The shared endpoint resolver and Streamable HTTP client are owned by
+# globalskills/aicode. Manul consumes only the exported paths; it never
+# searches for or hardcodes another repository checkout.
+if [ -n "${TODO_LOCAL_MCP_URL_HELPER:-}" ] &&
+   [ -r "$TODO_LOCAL_MCP_URL_HELPER" ] &&
+   [ -n "${TODO_MCP_CLIENT:-}" ] &&
+   [ -r "$TODO_MCP_CLIENT" ] &&
+   command -v python3 >/dev/null 2>&1; then
+    if ! declare -F todo_local_mcp_resolve_url >/dev/null 2>&1; then
+        source "$TODO_LOCAL_MCP_URL_HELPER" || true
     fi
+    if declare -F todo_local_mcp_resolve_url >/dev/null 2>&1; then
+        _todo_local_resolved_url="$(todo_local_mcp_resolve_url "")" || _todo_local_resolved_url=""
+        if [ -n "$_todo_local_resolved_url" ]; then
+            TODO_LOCAL_MCP_URL="$_todo_local_resolved_url"
+            TODO_LOCAL_MCP_AVAILABLE=1
+            TODO_LOCAL_MCP_CONNECTED=1
+            log "shared Todo local MCP handshake succeeded; adding optional Manul Todo MCP"
+        else
+            log "Todo local MCP is unavailable; continuing without this optional MCP"
+        fi
+    else
+        log "shared Todo endpoint helper has no resolver; continuing without optional Todo MCP"
+    fi
+else
+    log "shared Todo MCP helpers are unavailable; continuing without optional Todo MCP"
 fi
 export TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
 
-if [ -n "$_workspace_real" ]; then
-    export MANUL_TASK_WORKSPACE_ROOT="$_workspace_real"
-fi
-if [ -n "$_workdir_real" ]; then
-    export MANUL_TASK_WORKDIR="$_workdir_real"
-fi
-
-# Build an invocation-local OpenCode V2 config for every task. Move legacy
-# named MCP entries under mcp.servers, preserve MCP-wide settings and migrate
-# legacy enabled/timeout fields before injecting Manul's required servers.
-# Preserve unrelated settings and keep the operator/global file immutable.
-OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
-_original_opencode_config="$_OPENCODE_BASE_CONFIG"
-OPENCODE_CONFIG="$OPENCODE_TASK_CONFIG_DIR/opencode.json"
-if [ -f "$_original_opencode_config" ]; then
-    _config_input="$_original_opencode_config"
-else
-    _config_input="/dev/null"
-fi
-if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_base_real:-}" '
-    def migrate_mcp_server:
-      . as $server
-      | (if ($server.timeout | type) == "number" then
-           .timeout = {catalog: $server.timeout, execution: $server.timeout}
-         else . end)
-      | if ($server | has("enabled")) then
-          .disabled = ($server.enabled | not) | del(.enabled)
-        else . end
-      | if has("clientId") then .client_id = .clientId | del(.clientId) else . end
-      | if has("clientSecret") then .client_secret = .clientSecret | del(.clientSecret) else . end
-      | if has("callbackPort") then .callback_port = .callbackPort | del(.callbackPort) else . end
-      | if has("redirectUri") then .redirect_uri = .redirectUri | del(.redirectUri) else . end;
-    (.[0] // {}) as $root
-    | ([
-        $root.permission // {} | to_entries[]? as $entry
-        | if ($entry.value | type) == "string" then
-            {
-              action: (if $entry.key == "bash" then "shell" elif $entry.key == "task" then "subagent" elif ($entry.key == "write" or $entry.key == "patch") then "edit" else $entry.key end),
-              resource: "*",
-              effect: $entry.value
-            }
-          elif ($entry.value | type) == "object" then
-            $entry.value | to_entries[]
-            | {
-                action: (if $entry.key == "bash" then "shell" elif $entry.key == "task" then "subagent" elif ($entry.key == "write" or $entry.key == "patch") then "edit" else $entry.key end),
-                resource: .key,
-                effect: .value
-              }
-          else empty end
-      ]) as $legacyPermissions
-    | ($root.mcp // {} | if type == "object" then . else {} end) as $mcp
-    | ($mcp.servers // {} | if type == "object" then . else {} end) as $nativeServers
-    | ($mcp | del(.servers, .timeout)) as $legacyServers
-    | $root
-    | .mcp = (
-        (if ($mcp.timeout | type) == "number" then
-           {timeout:{catalog:$mcp.timeout,execution:$mcp.timeout}}
-         elif ($mcp.timeout | type) == "object" then
-           {timeout:$mcp.timeout}
-         else {} end)
-        + {servers: (
-            ($legacyServers + $nativeServers)
-            | with_entries(.value |= migrate_mcp_server)
-            + {
-                "caracal-rag": {type:"remote",url:"{env:CARACAL_MCP_URL}",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:CARACAL_ACCESS_TOKEN}"}},
-                "fiteo": {type:"remote",url:"{env:FITEO_BASE_URL}/mcp",oauth:false,disabled:false,headers:{Authorization:"Bearer {env:FITEO_MANUL_PAT}"}}
-              }
-          )}
-      )
-    | if (($mcp.timeout // null) | type) == "number" then
-        .mcp.timeout = {catalog:$mcp.timeout,execution:$mcp.timeout}
-      else .
-      end
-    | if (($root.experimental.mcp_timeout // null) | type) == "number" then
-        .mcp.timeout = (
-          (.mcp.timeout // {} | if type == "object" then . else {} end)
-          | . + {
-              catalog: (.catalog // $root.experimental.mcp_timeout),
-              execution: (.execution // $root.experimental.mcp_timeout)
-            }
-        )
-        | .experimental |= del(.mcp_timeout)
-      else .
-      end
-    | .permissions = (
-        ($legacyPermissions + ((.permissions // []) | if type == "array" then . else [] end))
-        | reduce [
-            {action:"external_directory",resource:($workspaceBase + "/*"),effect:"deny"},
-            {action:"external_directory",resource:$workspace,effect:"allow"},
-            {action:"external_directory",resource:($workspace + "/*"),effect:"allow"},
-            {action:"caracal_rag_*",resource:"*",effect:"allow"},
-            {action:"fiteo_*",resource:"*",effect:"allow"},
-            {action:"manul_fiteo_create_task",resource:"*",effect:"allow"},
-            {action:"fiteo_todo_create_task",resource:"*",effect:"deny"}
-          ][] as $rule (. ; map(select(.action != $rule.action or .resource != $rule.resource)) + [$rule])
-      )
-    | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*":true,"fiteo_*":true,"manul_fiteo_create_task":true,"fiteo_todo_create_task":false})
-    | .agent = ((.agent // {}) | if type == "object" then with_entries(
-        if .key == "chat" then .
-        else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"caracal-rag_*":true,"fiteo_*":true,"manul_fiteo_create_task":true,"fiteo_todo_create_task":false})
-        end
-      ) else {} end)
-    | if (env.TODO_LOCAL_MCP_AVAILABLE // "0") == "1" then
-        .mcp.servers["todo-local"] = {type:"remote",url:"{env:TODO_LOCAL_MCP_URL}",oauth:false,disabled:false}
-        | .permissions = ((.permissions // []) | map(select(.action != "todo_local_*" or .resource != "*")) + [{action:"todo_local_*",resource:"*",effect:"allow"}])
-        | .tools = ((.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*":true})
-        | .agent = ((.agent // {}) | if type == "object" then with_entries(if .key == "chat" then . else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | . + {"todo-local_*":true}) end) else {} end)
-      else
-        .mcp.servers |= del(."todo-local")
-        | .permissions = ((.permissions // []) | map(select(.action != "todo_local_*" or .resource != "*")))
-        | .tools = ((.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*"))
-        | .agent = ((.agent // {}) | if type == "object" then with_entries(if .key == "chat" then . else .value.tools = ((.value.tools // {}) | if type == "object" then . else {} end | del(."todo-local_*")) end) else {} end)
-      end
-' "$_config_input" >"$OPENCODE_CONFIG"; then
-    cleanup_opencode_task_config
-    printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode config with Caracal MCP","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"task_config","agent_started":false}}\n' "$OPT_TASK_ID"
-    exit 65
-fi
-chmod 600 "$OPENCODE_CONFIG"
-export OPENCODE_CONFIG
-log "using task-scoped OpenCode config with required Caracal MCP; global config unchanged"
-
-# A saved URL/token is not proof that Caracal is reachable and authenticated.
-# Check OpenCode's actual MCP registry before running any task tools. The raw
-# files live in the task-local config directory and are deleted by the EXIT
-# trap, so preserve only a bounded, redacted summary before returning failure.
-CARACAL_PREFLIGHT_STDOUT="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stdout"
-CARACAL_PREFLIGHT_STDERR="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
-: >"$CARACAL_PREFLIGHT_STDOUT"
-: >"$CARACAL_PREFLIGHT_STDERR"
-ProcessRunner_TmpStdout="$CARACAL_PREFLIGHT_STDOUT"
-ProcessRunner_TmpStderr="$CARACAL_PREFLIGHT_STDERR"
-_caracal_preflight_result="$(ProcessRunner.run --timeout 45 --cwd "$OPT_WORKSPACE" -- "$OPENCODE_BIN" mcp list)"
-_caracal_preflight_rc="$(printf '%s\n' "$_caracal_preflight_result" | head -n 1 | cut -d'|' -f1)"
-_mcp_preflight_stage=""
-_mcp_preflight_label=""
-_mcp_preflight_summary=""
-if ! grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag' "$CARACAL_PREFLIGHT_STDOUT"; then
-    _mcp_preflight_stage="caracal_mcp_preflight"
-    _mcp_preflight_label="Caracal"
-    _mcp_preflight_summary="Caracal MCP did not report a live connected status in OpenCode; task was not started"
-elif [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ] &&
-     ! grep -Eiq 'todo-local[[:space:]].*connected|connected.*todo-local' "$CARACAL_PREFLIGHT_STDOUT"; then
-    _mcp_preflight_stage="todo_local_mcp_preflight"
-    _mcp_preflight_label="Todo local"
-    _mcp_preflight_summary="Todo local MCP was reachable but did not report connected in OpenCode; task was not started"
-fi
-# OpenCode may report a non-zero aggregate MCP-list status when an optional
-# server such as Fiteo is offline. Caracal's explicit connected status is the
-# required gate; a failure from an unrelated MCP must not block this task.
-
-if [ -n "$_mcp_preflight_stage" ]; then
-    log "$_mcp_preflight_label MCP preflight failed; OpenCode reported the server disconnected or unavailable"
-
-    log_caracal_preflight_file() {
-        local stream="$1" file="$2" redacted_output
-        if [ ! -s "$file" ]; then
-            log "$_mcp_preflight_label MCP preflight $stream: <empty>"
-            return 0
-        fi
-        redacted_output="$(python3 - "$file" <<'PY'
+# Inspect known operator config layers read-only before using Manul-owned MCP
+# names. If any existing file is malformed, skip optional injection rather
+# than risk shadowing an MCP entry whose name could not be inspected.
+_OVERLAY_JSON_FILE="$OPENCODE_TASK_CONFIG_DIR/opencode-manul-overlay.json"
+if ! python3 - "$_OVERLAY_JSON_FILE" "$_workspace_real" "$_workspace_base_real" \
+    "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${TODO_LOCAL_MCP_URL:-}" \
+    "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$HOME" "${OPT_WORKSPACE}" \
+    "${OPENCODE_CONFIG_CONTENT:-}" <<'PY_MANUL_OVERLAY'
+import json
 import os
 import re
 import sys
 from pathlib import Path
 
-try:
-    content = Path(sys.argv[1]).read_text(errors="replace")
-except OSError as exc:
-    print(f"<unable to read captured output: {exc.__class__.__name__}>")
-    raise SystemExit(0)
+output, workspace, workspace_base, fiteo_url, fiteo_pat, todo_url, custom_config, custom_dir, home, worktree, inline_content = sys.argv[1:]
 
-for token_name in ("CARACAL_ACCESS_TOKEN",):
-    token = os.environ.get(token_name, "")
-    if token:
-        content = content.replace(token, "[REDACTED]")
-content = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", content)
-content = re.sub(r"(?i)([?&](?:access_token|token|api[_-]?key|secret|password)=)[^&\s]+", r"\1[REDACTED]", content)
-content = re.sub(r'(?i)(\b(?:access_token|token|api[_-]?key|secret|password)\b\s*[:=]\s*)[^\s,;"}]+', r"\1[REDACTED]", content)
-content = re.sub(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@", r"\1[REDACTED]@", content)
-lines = content.splitlines()
-for line in lines[:20]:
-    print(line[:500])
-if len(lines) > 20:
-    print(f"... {len(lines) - 20} additional lines omitted")
-PY
-)" || redacted_output="<unable to redact captured output>"
-        while IFS= read -r line; do
-            log "$_mcp_preflight_label MCP preflight $stream: $line"
-        done <<<"$redacted_output"
-    }
+def parse_jsonc(text):
+    # Remove line/block comments while preserving strings and newlines.
+    cleaned = []
+    i = 0
+    in_string = False
+    escaped = False
+    line_comment = False
+    block_comment = False
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if line_comment:
+            if ch == "\n":
+                line_comment = False
+                cleaned.append(ch)
+            else:
+                cleaned.append(" ")
+        elif block_comment:
+            if ch == "*" and nxt == "/":
+                cleaned.extend("  ")
+                i += 1
+                block_comment = False
+            else:
+                cleaned.append("\n" if ch == "\n" else " ")
+        elif in_string:
+            cleaned.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+            cleaned.append(ch)
+        elif ch == "/" and nxt == "/":
+            cleaned.extend("  ")
+            i += 1
+            line_comment = True
+        elif ch == "/" and nxt == "*":
+            cleaned.extend("  ")
+            i += 1
+            block_comment = True
+        else:
+            cleaned.append(ch)
+        i += 1
+    if in_string or block_comment:
+        raise ValueError("unterminated JSONC string/comment")
 
-    log "$_mcp_preflight_label MCP preflight exit code: ${_caracal_preflight_rc:-unknown}"
-    log_caracal_preflight_file stdout "$CARACAL_PREFLIGHT_STDOUT"
-    log_caracal_preflight_file stderr "$CARACAL_PREFLIGHT_STDERR"
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"%s","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"%s","agent_started":false}}\n' \
-        "$OPT_TASK_ID" "$_mcp_preflight_summary" "$_mcp_preflight_stage"
-    exit 78
+    # Strip trailing commas outside quoted strings.
+    source = "".join(cleaned)
+    result = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(source):
+        ch = source[i]
+        if in_string:
+            result.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+            result.append(ch)
+        elif ch == ",":
+            j = i + 1
+            while j < len(source) and source[j].isspace():
+                j += 1
+            if j < len(source) and source[j] in "]}":
+                pass
+            else:
+                result.append(ch)
+        else:
+            result.append(ch)
+        i += 1
+    return json.loads("".join(result))
+
+def deep_merge(left, right):
+    if isinstance(left, dict) and isinstance(right, dict):
+        out = dict(left)
+        for key, value in right.items():
+            out[key] = deep_merge(out[key], value) if key in out else value
+        return out
+    if isinstance(left, list) and isinstance(right, list):
+        return left + right
+    return right
+
+paths = [
+    Path(home) / ".config/opencode/opencode.json",
+    Path(home) / ".config/opencode/opencode.jsonc",
+    Path("/etc/opencode/opencode.json"),
+    Path("/etc/opencode/opencode.jsonc"),
+    Path("/Library/Application Support/opencode/opencode.json"),
+    Path("/Library/Application Support/opencode/opencode.jsonc"),
+    Path(worktree) / "opencode.json",
+    Path(worktree) / "opencode.jsonc",
+    Path(worktree) / ".opencode/opencode.json",
+    Path(worktree) / ".opencode/opencode.jsonc",
+]
+if custom_config:
+    paths.append(Path(custom_config))
+if custom_dir:
+    paths.extend([Path(custom_dir) / "opencode.json", Path(custom_dir) / "opencode.jsonc"])
+
+names = set()
+scan_ok = True
+for path in dict.fromkeys(paths):
+    if not path.is_file():
+        continue
+    try:
+        obj = parse_jsonc(path.read_text(encoding="utf-8"))
+    except Exception:
+        scan_ok = False
+        continue
+    if not isinstance(obj, dict):
+        scan_ok = False
+        continue
+    mcp = obj.get("mcp") or {}
+    if isinstance(mcp, dict):
+        servers = mcp.get("servers")
+        if isinstance(servers, dict):
+            names.update(servers.keys())
+        # Older Manul/OpenCode configs may still use named entries directly
+        # under mcp. Treat them as occupied too.
+        names.update(k for k, v in mcp.items() if k not in {"servers", "timeout"} and isinstance(v, dict))
+
+existing_inline = {}
+if inline_content:
+    try:
+        parsed = parse_jsonc(inline_content)
+        if isinstance(parsed, dict):
+            existing_inline = parsed
+            mcp = parsed.get("mcp") or {}
+            if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
+                names.update(mcp["servers"].keys())
+    except Exception as exc:
+        print(f"invalid inherited OPENCODE_CONFIG_CONTENT: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+# Keep stable, Manul-specific names. Any collision means the operator owns the
+# existing entry; never replace it with Manul's credentials or endpoint.
+servers = {}
+permissions = [
+    {"action": "external_directory", "resource": workspace_base.rstrip("/") + "/*", "effect": "deny"},
+    {"action": "external_directory", "resource": workspace, "effect": "allow"},
+    {"action": "external_directory", "resource": workspace.rstrip("/") + "/*", "effect": "allow"},
+]
+tools = {}
+if fiteo_url and fiteo_pat:
+    if "manul-fiteo" in names:
+        print("operator MCP 'manul-fiteo' already exists; leaving it untouched", file=sys.stderr)
+    elif scan_ok:
+        servers["manul-fiteo"] = {
+            "type": "remote",
+            "url": "{env:FITEO_BASE_URL}/mcp",
+            "oauth": False,
+            "disabled": False,
+            "headers": {"Authorization": "Bearer {env:FITEO_MANUL_PAT}"},
+        }
+        permissions.append({"action": "manul_fiteo_*", "resource": "*", "effect": "allow"})
+        tools["manul_fiteo_*"] = True
+    else:
+        print("could not safely inspect all OpenCode config layers; skipping optional Manul Fiteo MCP", file=sys.stderr)
+if todo_url:
+    if "manul-todo-local" in names:
+        print("operator MCP 'manul-todo-local' already exists; leaving it untouched", file=sys.stderr)
+    elif scan_ok:
+        servers["manul-todo-local"] = {
+            "type": "remote",
+            "url": todo_url,
+            "oauth": False,
+            "disabled": False,
+        }
+        permissions.append({"action": "manul_todo_local_*", "resource": "*", "effect": "allow"})
+        tools["manul_todo_local_*"] = True
+    else:
+        print("could not safely inspect all OpenCode config layers; skipping optional Manul Todo MCP", file=sys.stderr)
+
+overlay = {
+    "permissions": permissions,
+}
+if servers:
+    overlay["mcp"] = {"servers": servers}
+if tools:
+    overlay["tools"] = tools
+combined = deep_merge(existing_inline, overlay)
+Path(output).write_text(json.dumps(combined, separators=(",", ":")) + "\n", encoding="utf-8")
+PY_MANUL_OVERLAY
+then
+    log "unable to build safe JSONC-compatible OpenCode runtime overlay"
+    printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Unable to build task-scoped OpenCode runtime overlay","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"task_config","agent_started":false}}\n' "$OPT_TASK_ID"
+    exit 65
 fi
-log "Caracal MCP preflight passed"
+chmod 600 "$_OVERLAY_JSON_FILE"
+OPENCODE_CONFIG_CONTENT="$(cat "$_OVERLAY_JSON_FILE")"
+export OPENCODE_CONFIG_CONTENT
+log "using a temporary OpenCode runtime overlay; operator JSON/JSONC files and OPENCODE_CONFIG remain unchanged"
+
+if [ -n "${FITEO_BASE_URL:-}" ] && [ -n "${FITEO_MANUL_PAT:-}" ]; then
+    log "optional Manul Fiteo MCP is configured when its reserved server name is free"
+fi
 if [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ]; then
-    log "Todo local MCP preflight passed"
+    log "optional Manul local Todo MCP is configured when its reserved server name is free"
 fi
 
-# The dispatcher runs this phase before publishing TASK_STARTED. It uses the
-# same AgentExecutor and task-scoped configuration as a normal invocation, but
-# deliberately exits before launching the model.
+# The preflight contract checks that the selected OpenCode binary and the
+# task-scoped config can start. Optional MCP servers never gate agent startup.
 if [ "$OPT_PREFLIGHT_ONLY" = "true" ]; then
     jq -cn --arg task_id "$OPT_TASK_ID" \
         '{status:"READY",task_id:$task_id,exit_code:0,summary:"OpenCode runtime preflight passed",session_id:"",duration_s:0,runtime:"opencode",diagnostics:{stage:"runtime_preflight",agent_started:false}}'
     exit 0
 fi
+
+# A missing native OpenCode agent definition is optional. Let OpenCode use the
+# operator's default_agent setting, or its built-in build agent when unset.
+if [ -n "$OPT_AGENT" ]; then
+    _agent_check_stdout="$OPENCODE_TASK_CONFIG_DIR/agent-check.stdout"
+    _agent_check_stderr="$OPENCODE_TASK_CONFIG_DIR/agent-check.stderr"
+    ProcessRunner_TmpStdout="$_agent_check_stdout"
+    ProcessRunner_TmpStderr="$_agent_check_stderr"
+    _agent_check_result="$(ProcessRunner.run --timeout 15 --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agent "$OPT_AGENT")"
+    _agent_check_header="$(printf '%s\n' "$_agent_check_result" | head -n 1)"
+    _agent_check_rc="${_agent_check_header%%|*}"
+    ProcessRunner_TmpStdout=""
+    ProcessRunner_TmpStderr=""
+    if [ "$_agent_check_rc" != "0" ]; then
+        log "OpenCode agent '$OPT_AGENT' is unavailable; using configured default_agent or built-in build"
+        OPT_AGENT=""
+    fi
+fi
+AGENT_ARGS=()
+if [ -n "$OPT_AGENT" ]; then AGENT_ARGS=(--agent "$OPT_AGENT"); fi
 
 # Append a truthful capability snapshot to every initial and resumed prompt.
 # It is derived from this invocation's effective OpenCode config (including the
