@@ -90,9 +90,10 @@ Prefer small, surgical changes.
 
 Before declaring success:
 
-- run the relevant tests;
-- run the broader Manul test suite when architecture or shared helpers change;
-- inspect `git diff` and `git status`;
+- run the relevant tests in GitHub Actions CI, not on the operator's machine
+  with an installed Manul runtime;
+- run the broader Manul test suite in CI when architecture or shared helpers change;
+- inspect the PR diff and CI results;
 - never claim a test passed without actually running it.
 
 Do not modify `manul.db` as part of repository changes.
