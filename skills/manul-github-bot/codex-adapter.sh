@@ -61,7 +61,7 @@ if [ -n "$OPT_AGENT" ]; then
 fi
 if [ -n "$OPT_AGENT" ]; then
   awk 'NR == 1 && $0 == "---" { front=1; next } front && $0 == "---" { front=0; next } !front { print }' "$ROLE_FILE" > "$ROLE_BODY_FILE"
-  { printf 'Use canonical Manul role %s; preserve the lifecycle protocol in the task prompt.\n\n' "$OPT_AGENT"; cat "$ROLE_BODY_FILE"; printf '\\n\\n--- Original Manul task prompt ---\\n'; cat "$OPT_PROMPT"; } > "$CURRENT_PROMPT_FILE" || fail 1 "Could not prepare role prompt"
+  { printf 'Use canonical Manul role %s; preserve the lifecycle protocol in the task prompt.\n\n' "$OPT_AGENT"; cat "$ROLE_BODY_FILE"; printf '\n\n--- Original Manul task prompt ---\n'; cat "$OPT_PROMPT"; } > "$CURRENT_PROMPT_FILE" || fail 1 "Could not prepare role prompt"
 else
   cp -- "$OPT_PROMPT" "$CURRENT_PROMPT_FILE" || fail 1 "Could not stage task prompt"
 fi
