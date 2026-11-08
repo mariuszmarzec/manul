@@ -95,8 +95,6 @@ if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
    ! grep -q '^CLAUDE_CONFIG_DIR=' "$ENV_FILE" ||
    ! grep -q '^CLAUDE_BIN=' "$ENV_FILE" ||
    ! grep -q '^CLAUDE_MODEL=' "$ENV_FILE" ||
-   ! grep -q '^CARACAL_MCP_URL=' "$ENV_FILE" ||
-   ! grep -q '^CARACAL_ACCESS_TOKEN=' "$ENV_FILE" ||
    ! grep -q '^FITEO_BASE_URL=' "$ENV_FILE" ||
     ! grep -q '^FITEO_MANUL_PAT=' "$ENV_FILE" ||
     ! grep -q '^FITEO_MANUL_SHARE_USER_ID=1$' "$ENV_FILE" ||
@@ -133,8 +131,8 @@ if (
   [ "$CLAUDE_CONFIG_DIR" = "$TMP/claude config" ] &&
   [ "$CLAUDE_BIN" = "$TMP/bin/claude-custom" ] &&
   [ "$CLAUDE_MODEL" = "claude-test-model" ] &&
-  [ "$CARACAL_MCP_URL" = "http://127.0.0.1:3400/mcp" ] &&
-  [ "$CARACAL_ACCESS_TOKEN" = "caracal-test-token" ] &&
+  [ -z "${CARACAL_MCP_URL:-}" ] &&
+  [ -z "${CARACAL_ACCESS_TOKEN:-}" ] &&
   [ "$FITEO_BASE_URL" = "https://fiteo-test.example" ] &&
   [ "$FITEO_MANUL_PAT" = "fiteo-test-pat" ] &&
   [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
@@ -197,9 +195,8 @@ else
   fail "Bootstrap overwrote or failed to append provider configuration"
 fi
 
-# Caracal runtime values are the exception to general preservation: the launcher
-# refreshes these two allowlisted keys so background task runners do not keep a
-# stale endpoint or bearer token after Caracal config changes.
+# Caracal is operator/aicode-owned. Manul removes legacy persisted values
+# and never copies current Caracal environment variables into ~/.manul/.env.
 PRESERVE_CARACAL="$TMP/preserve-caracal"
 mkdir -p "$PRESERVE_CARACAL"
 cat > "$PRESERVE_CARACAL/.env" <<'EOF'
@@ -213,17 +210,18 @@ CARACAL_MCP_URL="http://127.0.0.1:3400/mcp"
 CARACAL_ACCESS_TOKEN="new-caracal-test-token"
 export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
 ENV_FILE3="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE_CARACAL")"
-if (
-  unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN OPENCLAW_STATE_DIR OPENCODE_CONFIG
-  source "$ENV_FILE3"
-  [ "$CARACAL_MCP_URL" = "http://127.0.0.1:3400/mcp" ] &&
-  [ "$CARACAL_ACCESS_TOKEN" = "new-caracal-test-token" ] &&
-  [ "$OPENCLAW_STATE_DIR" = "/operator/chosen/state" ] &&
-  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
-); then
-  ok "Bootstrap refreshes Caracal URL/token while preserving unrelated operator settings"
+if ! grep -qE '^(export[[:space:]]+)?CARACAL_(MCP_URL|ACCESS_TOKEN|RESOLVE_LIVE)=' "$ENV_FILE3" &&
+   (
+     unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN OPENCLAW_STATE_DIR OPENCODE_CONFIG
+     source "$ENV_FILE3"
+     [ -z "\${CARACAL_MCP_URL:-}" ] &&
+     [ -z "\${CARACAL_ACCESS_TOKEN:-}" ] &&
+     [ "$OPENCLAW_STATE_DIR" = "/operator/chosen/state" ] &&
+     [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
+   ); then
+  ok "Bootstrap removes legacy Caracal values and preserves unrelated operator settings"
 else
-  fail "Bootstrap did not refresh Caracal runtime credentials correctly"
+  fail "Bootstrap retained Caracal settings in Manul environment"
 fi
 
 # Fiteo MCP credentials are refreshed as one pair even when no Todo remote
