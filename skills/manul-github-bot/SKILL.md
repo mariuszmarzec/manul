@@ -178,7 +178,7 @@ All tasks -> AGENT_RUNTIME -> OpenClaw / OpenCode / Codex / Claude Code
 Role selection -> adapter input, never a second runtime selector
 ```
 
-This means a plain `/manul run <task>` uses the configured backend (OpenClaw by default), and `/manul run --agent coder <task>` uses that same backend with the canonical coder instructions. OpenCode uses its native `--agent` option. OpenClaw, Codex, and Claude Code prepend the role definition from `~/.agents/agents/<role>.md` to the original prompt; OpenClaw invokes its configured `main` entry point rather than interpreting `coder` as an OpenClaw config-agent ID. This is direct CLI execution through the selected adapter, not an ACP session spawned by OpenClaw.
+This means a plain `/manul run <task>` uses the configured backend (OpenClaw by default), and `/manul run --agent coder <task>` uses that same backend when its role definition is available. OpenCode uses its native `--agent` option only when `opencode debug agent <role>` confirms that the native agent exists; otherwise Manul omits the flag so OpenCode uses the operator's `default_agent` or built-in `build`. OpenClaw, Codex, and Claude Code prepend the role definition from `~/.agents/agents/<role>.md` when it exists. If that optional file is missing, the selected backend's default is used (OpenClaw's configured `main`). A role name that is not allowed by Manul's `agents[]` configuration is still rejected. This is direct CLI execution through the selected adapter, not an ACP session spawned by OpenClaw.
 
 Use `/manul --auto run <task>` to run one task directly through OpenCode's
 native `opencode run --auto` option. Manul persists this per-task choice in
@@ -229,31 +229,46 @@ original task or its other subtasks still invalidate the queued source. Partial
 writes are retried by reusing the exact child instead of creating duplicates.
 The root is marked done last, after the result and all original descendants.
 
-Todo sources do not have a fixed project repository. Manul resolves each
-Todo root independently using the curated catalog at
-`skills/globalskills-repository/project-repositories.json`: an explicit
-GitHub repository URL in the task takes precedence; otherwise the longest
-whole-phrase project alias must identify exactly one catalog entry. Relevant
-project skills listed by that entry are included as task context rather than
-being opened by the worker from a global path. Manul reads mapped skill files
-only from `~/.agents/skills/<skill>/SKILL.md`; this source is fixed and is not
-configurable. The repository catalog is read from
-`~/.agents/skills/globalskills-repository/project-repositories.json`. If a
-mapped skill is unavailable, Manul continues without that skill context. The
-resolved canonical `owner/repo` and routing provenance are persisted with the
-queued task.
+Todo sources do not have a fixed project repository. Each Todo root resolves its
+execution target independently. An explicit GitHub repository URL works without
+the optional project catalog, provided that repository is present in the global
+`.repositories` allowlist. Without an explicit URL, the longest whole-phrase
+alias in `~/.agents/skills/globalskills-repository/project-repositories.json`
+must identify exactly one catalog entry. The catalog supplies aliases and
+optional mapped project skills. If the catalog is missing, alias routing is
+disabled; the task is treated as informational/report-only. Missing mapped
+skill files are skipped rather than blocking execution. Manul reads mapped
+skills only from `~/.agents/skills/<skill>/SKILL.md`.
+
 The top-level `.repositories` array in `~/.manul/config.json` is the only
 operator-configured repository list. GitHub Issues polling and both Todo sources
 use that same list; provider-local repository lists and `repositoryAllowlist`
-are obsolete and ignored. The catalog still supplies aliases and project skills,
-but a Todo target must also exist in the global list. An absent project reference
-routes to informational execution; ambiguous aliases, uncatalogued explicit URLs,
-and targets outside the global list are logged and not queued. Manul must never
-fall back to a hardcoded Todo repository.
+are obsolete and ignored. The catalog does not grant access: explicit URLs and
+catalog aliases must resolve to a repository in the global list. Ambiguous
+aliases and targets outside the global list are logged and not queued. Manul
+must never fall back to a hardcoded Todo repository.
 
-The local adapter connects directly to Todo Desktop at `http://127.0.0.1:8765/mcp` on native Linux/macOS hosts. Inside WSL it first tries the same loopback endpoint and falls back to the existing WSL bridge at `http://127.0.0.1:8766/mcp` when direct loopback is unavailable. It uses no bearer token and enables the source only after an unauthenticated MCP initialize and read-only `tools/list` handshake succeeds. The remote adapter accepts an HTTP or HTTPS MCP URL and uses Manul's dedicated PAT supplied through `FITEO_MANUL_PAT`. HTTPS is strongly recommended outside a trusted private network: an HTTP connection does not encrypt the bearer token in transit. Its URL can be configured as `"{env:FITEO_BASE_URL}/mcp"`, and `manulUserIdEnv` can point to `MANUL_USER_ID` (a positive numeric ID). Never use the operator's `FITEO_PAT` for Manul's task-scoped Fiteo connection.
+The local adapter connects to Todo Desktop through the shared endpoint resolver
+and Streamable HTTP client exported by `globalskills/aicode`. The remote adapter
+uses the same shared client and Manul's dedicated PAT supplied through
+`FITEO_MANUL_PAT`. The shared client/helper paths are passed in the environment
+by the `aicode` launcher; Manul does not search another checkout or hardcode a
+globalskills path. If the shared helpers are unavailable, Todo sources are
+skipped and other sources continue polling. HTTPS is strongly recommended for
+remote MCP outside a trusted private network; HTTP does not encrypt the bearer
+token in transit. Never use the operator's `FITEO_PAT` for Manul's task-scoped
+Fiteo connection.
 
-When creating tasks through Fiteo, always use the `manul_fiteo_create_task` V2 plugin tool rather than calling `fiteo_todo_create_task` directly. A root task gets an explicit `EDITOR_AND_VIEWER` share and that share is verified on read-back; root creation requires `FITEO_MANUL_SHARE_USER_ID`, the numeric Fiteo ID of the intended recipient. A subtask is different: the tool first verifies that its parent is visible, creates the child with `parentTaskId` and no duplicate direct share, then verifies that the child is returned under that parent. Fiteo access is inherited from the shared parent, so a direct share on the child is not required. A subtask must not be created when its parent is not visible or when read-back does not confirm the parent-child relationship. Neither token nor recipient ID belongs in `config.json`.
+When creating tasks through Fiteo, use its native `todo_create_task` MCP tool
+directly; Manul does not install a wrapper or OpenCode plugin. For a root task,
+pass `shares: [{ userId: FITEO_MANUL_SHARE_USER_ID, permission:
+"EDITOR_AND_VIEWER" }]` when a recipient share is required. For a subtask,
+pass `parentTaskId` and do not add a duplicate direct share; Fiteo grants
+access through the parent. In OpenCode the Manul-owned server is named
+`manul-fiteo`, and its create tool appears as
+`manul_fiteo_todo_create_task`. If the MCP is unavailable, report the
+capability as unavailable rather than falling back to the operator's Fiteo
+identity. Never put the PAT or recipient ID in `config.json`.
 
 A Todo root is one Manul task. Its nested subtasks are included as ordered implementation steps in pre-order, preserving the order returned by Todo; they are not queued as independent tasks. Manul revalidates the source tree before execution and marks the root and descendants done only after repository delivery has been verified. For Fiteo, descendants are updated before the root so a partial failure can be retried while the root remains active.
 
@@ -549,46 +564,27 @@ diagnostic archives under `/tmp/manul-diagnostics`, ensure that directory is
 user-owned and mode `700`, and redact credentials before sharing artifacts.
 
 The operator `.env` is runtime-owned and mode 600. It carries only explicitly
-supported provider variables, including custom OpenClaw paths and `OPENCODE_CONFIG`,
-plus `CARACAL_MCP_URL` and `CARACAL_ACCESS_TOKEN`. The Caracal URL/token are
-refreshed from the launcher's current environment while unrelated operator settings
-are preserved. Arbitrary environment variables are never copied.
+supported provider variables, including custom backend paths and
+`OPENCODE_CONFIG`, plus credentials explicitly named by enabled task sources.
+Caracal is not a Manul dependency: Manul does not read Caracal secrets, persist
+Caracal endpoint/token values, inject a `caracal-rag` MCP server, or perform a
+Caracal preflight.
 
-For an OpenCode task, `opencode-adapter.sh` adds the authenticated `caracal-rag`
-MCP entry to an invocation-local `opencode.json` under the V2
-`mcp.servers["caracal-rag"]` schema with migrated V2 timeout settings. It does not mutate the operator's global config.
-Before starting the task, it runs `opencode mcp list` and refuses to launch the
-task unless Caracal reports a live connected status. A URL or token alone is not
-treated as proof of access.
+OpenCode loads the operator's JSON or JSONC configuration itself. Manul leaves
+`OPENCODE_CONFIG` and all operator config files untouched, then supplies a
+temporary task-scoped `OPENCODE_CONFIG_CONTENT` overlay. The overlay adds only
+Manul-owned MCP names (`manul-fiteo` and, when available,
+`manul-todo-local`); it checks known config layers for name collisions and
+never replaces an existing operator MCP entry. Optional MCP outages or missing
+Todo helpers do not block agent startup. The overlay adds the exact leased
+workspace permission boundary and is discarded after the task.
 
-The Manul-only `manul_fiteo_create_task` V2 plugin is registered only inside the active task workspace under `.opencode/plugins/`; it is never installed globally. The installer removes only a legacy
-Manul-owned global registration (a symlink to the Manul runtime tool or a
-byte-identical copy), preserving unrelated operator tools. It provisions the
-matching `@opencode/plugin` dependency beside the canonical Manul skill.
-For each OpenCode task, the adapter creates a temporary project-local symlink at
-`<task-workspace>/.opencode/plugins/manul_fiteo_create_task.ts`; it refuses to
-overwrite a pre-existing tool or follow a symlinked config directory. The
-adapter removes its own symlink and any empty directories it created on exit,
-including after errors or timeouts. This keeps aicode and unrelated OpenCode
-sessions from importing Manul tools while preserving the required Fiteo task
-creation/share-verification path inside Manul executions.
-
-In this deployment, OpenClaw runs OpenCode through ACPX. The `aicode`
-launcher configures the ACPX `opencode` harness to invoke
-`aicode/opencode-acp-caracal.sh` and sets
-`plugins.entries.acpx.config.probeAgent` to `opencode`, so ACPX startup
-healthchecks validate the harness actually used. The wrapper resolves the
-current Caracal loopback endpoint and token from Caracal's local config/secret
-store, sets `OPENCODE_CONFIG`, checks that `opencode mcp list` reports Caracal
-connected, and only then starts `opencode acp`. Its stdout remains reserved for
-ACP protocol messages. This avoids relying on environment captured when a
-long-lived OpenClaw Gateway first started and avoids registering a duplicate
-native OpenClaw MCP server for the same tools.
-
-The ACPX plugin must already be installed and enabled. The launcher fails if
-it cannot configure the `opencode` ACP target or if Caracal is not connected.
-Selecting an OpenCode model provider alone is not ACP delegation; this setup
-specifically configures the ACPX `opencode` harness.
+The shared Streamable HTTP Todo MCP client and local endpoint resolver are
+owned by `globalskills/aicode`. The `aicode` launcher exports their paths;
+Manul consumes those exported paths without searching another checkout. If
+the helpers are unavailable, Todo sources are skipped while GitHub Issues and
+other configured sources continue to work. The task-creation wrapper and
+OpenCode plugin have been removed; agents use the native Fiteo MCP capability.
 
 For an existing installation, run `manul --update`. It fetches only
 `origin/main`, refuses local changes or a non-fast-forward checkout, and runs
@@ -658,12 +654,14 @@ Use task recovery only for manual intervention; normal stale recovery belongs to
 
 ### Explicit role does not execute
 
-Check that the role is present in `agents[]` in `~/.manul/config.json`, then
-the configured `automation.agentRuntime`. OpenCode uses its native
-`--agent <role>` option; OpenClaw, Codex, and Claude Code receive the canonical
-role instructions from `~/.agents/agents/<role>.md` in the prompt. OpenClaw
-uses its `main` entry point. An unknown role or missing canonical role
-definition fails before the runtime starts.
+Check that the role is present in `agents[]` in
+`~/.manul/config.json`, then check the configured
+`automation.agentRuntime`. A role not allowed by `agents[]` is rejected. If
+its optional definition file is missing, OpenClaw, Codex, and Claude Code use
+the selected backend's default behavior; OpenClaw uses `main`. OpenCode
+checks the native role with `opencode debug agent` and omits `--agent` when
+it is unavailable, allowing the operator's `default_agent` or built-in
+`build` to be used.
 
 ### OpenClaw execution failure
 
