@@ -430,6 +430,66 @@ MOCK_CLAUDE
   grep -Fxq 'Original task prompt for missing role' "$tmp/claude.prompt" \
     && ok "Claude Code receives the original prompt without a missing role wrapper" \
     || fail "Claude Code did not fall back to the original task prompt"
+
+  cat >"$tmp/bin/openclaw" <<'MOCK_OPENCLAW'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" > "$MOCK_OPENCLAW_ARGS"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--message-file" ]; then
+    cat "$2" > "$MOCK_OPENCLAW_PROMPT"
+    break
+  fi
+  shift
+done
+printf '%s\\n' 'TASK_DONE openclaw default'
+MOCK_OPENCLAW
+  chmod +x "$tmp/bin/openclaw"
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw" \
+    MOCK_OPENCLAW_ARGS="$tmp/openclaw.args" MOCK_OPENCLAW_PROMPT="$tmp/openclaw.prompt" \
+    AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/openclaw-adapter.sh" --task-id openclaw-missing-role \
+      --prompt "$tmp/prompt" --workspace "$tmp" --agent coder --attempt 1 \
+      --timeout 30 --session-id "" --stdout-file "$tmp/openclaw.stdout" \
+      --stderr-file "$tmp/openclaw.stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenClaw falls back when an optional canonical role file is missing"
+  grep -q -- '--agent main' "$tmp/openclaw.args" \
+    && ok "OpenClaw uses its configured main entry point when the role file is missing" \
+    || fail "OpenClaw did not use main for a missing role"
+  grep -Fxq 'Original task prompt for missing role' "$tmp/openclaw.prompt" \
+    && ok "OpenClaw keeps the original prompt when the canonical role is missing" \
+    || fail "OpenClaw did not fall back to the original task prompt"
+
+  cat >"$tmp/bin/opencode" <<'MOCK_OPENCODE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agent" ]; then
+  printf '%s\\n' "$*" > "$MOCK_OPENCODE_AGENT_CHECK"
+  exit 1
+fi
+printf '%s\\n' "$*" > "$MOCK_OPENCODE_ARGS"
+cat > "$MOCK_OPENCODE_PROMPT"
+printf '%s\\n' '{"type":"text","timestamp":1,"sessionID":"ses-opencode-missing-role","part":{"type":"text","text":"TASK_DONE opencode default"}}'
+MOCK_OPENCODE
+  chmod +x "$tmp/bin/opencode"
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+    MOCK_OPENCODE_AGENT_CHECK="$tmp/opencode-agent-check" \
+    MOCK_OPENCODE_ARGS="$tmp/opencode.args" MOCK_OPENCODE_PROMPT="$tmp/opencode.prompt" \
+    AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id opencode-missing-role \
+      --prompt "$tmp/prompt" --workspace "$tmp" --agent coder --attempt 1 \
+      --timeout 30 --session-id "" --stdout-file "$tmp/opencode.stdout" \
+      --stderr-file "$tmp/opencode.stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenCode falls back when a native role is unavailable"
+  [ -s "$tmp/opencode-agent-check" ] \
+    && ok "OpenCode checks native agent availability" \
+    || fail "OpenCode did not check native agent availability"
+  ! grep -q -- '--agent coder' "$tmp/opencode.args" \
+    && ok "OpenCode omits an unavailable native agent and preserves configured default_agent" \
+    || fail "OpenCode passed a missing native agent to the runtime"
+  grep -Fxq 'Original task prompt for missing role' "$tmp/opencode.prompt" \
+    && ok "OpenCode keeps the original task prompt when the native agent is missing" \
+    || fail "OpenCode lost the original prompt during native-agent fallback"
 }
 
 # ---------------------------------------------------------------------------
