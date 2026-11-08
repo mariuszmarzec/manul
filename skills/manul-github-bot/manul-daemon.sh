@@ -881,9 +881,9 @@ recover_stale_tasks() {
 declare -A HEARTBEAT_PIDS
 
 # Determine the base branch that a standalone task should start from.
-# This mirrors feature-branching-strategy's preferred order for the initial
-# workspace: develop -> master -> repository default branch. The agent may
-# later choose a different, explicitly required base branch before branching.
+# Use the built-in policy order: develop -> master -> repository default branch.
+# The optional feature-branching-strategy skill may provide additional guidance
+# to the agent, but it is never required to prepare or execute a task.
 determine_task_base_branch() {
   local workdir="$1"
   local default_branch="$2"
@@ -4700,7 +4700,8 @@ PROMPT_APPEND
 PROMPT_APPEND
     else
       # Standalone issue task: daemon prepares the base; the agent owns the
-      # repository-change branch decision and follows feature-branching-strategy.
+      # repository-change branch decision using the built-in branch policy (and the
+      # optional feature-branching-strategy skill when it is available).
       cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This is a standalone task (not tied to an existing PR)
 - Current branch: __CURRENT_BRANCH__
