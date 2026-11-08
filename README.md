@@ -78,26 +78,16 @@ operator-specific `config.json`.
 
 ## Development and tests
 
-The runtime scripts and tests live together under
-`skills/manul-github-bot/` because the scripts source one another relative to
-their canonical directory.
+The runtime scripts and Manul-specific regression tests live under
+`skills/manul-github-bot/`. Shared Todo MCP transport and endpoint discovery
+are owned and tested by `globalskills/aicode`; Manul CI uses a mock shared
+component to test the source-adapter contract.
 
-Run the hermetic test suite locally:
-
-```bash
-for test in skills/manul-github-bot/test_*.sh; do
-  case "$(basename "$test")" in
-    test_manul_pr_workflow.sh|test_concurrency_impl.sh) continue ;;
-  esac
-  bash "$test"
-done
-python3 skills/manul-github-bot/test_todo_mcp_client.py
-```
-
-The host repository runs its own integration checks for global agent definitions.
-`test_manul_pr_workflow.sh`
-is an operator-side workflow test that uses the configured runtime database;
-do not run it against a disposable CI environment.
+Run the hermetic shell regression suite in GitHub Actions CI. Do not run test
+scripts against an operator machine with an installed Manul runtime. The
+operator-side `test_manul_pr_workflow.sh` uses the configured runtime database
+and is not part of the disposable hermetic CI suite. End-to-end testing against
+a dedicated test repository is a separate, explicit workflow.
 
 ## Extraction provenance
 
