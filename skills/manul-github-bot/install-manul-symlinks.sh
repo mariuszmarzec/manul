@@ -199,6 +199,34 @@ for script in "${SCRIPTS[@]}"; do
     CHANGED=$((CHANGED + 1))
 done
 
+# Remove obsolete helper symlinks from earlier Manul installations. The
+# shared Todo implementations now live in globalskills/aicode, and Manul no
+# longer has its own task-creation wrapper. Remove only symlinks whose literal
+# target is the corresponding old canonical source; preserve regular files,
+# user replacements, and symlinks owned by anything else.
+OBSOLETE_MANUL_HELPERS=(
+    "todo-local-mcp-url.sh"
+    "todo-mcp-client.py"
+    "todo-remote-create-task.py"
+)
+for obsolete_helper in "${OBSOLETE_MANUL_HELPERS[@]}"; do
+    obsolete_runtime_path="$RUNTIME_DIR/$obsolete_helper"
+    if [ -L "$obsolete_runtime_path" ]; then
+        obsolete_target="$(readlink -- "$obsolete_runtime_path" 2>/dev/null || true)"
+        if [ "$obsolete_target" = "$CANONICAL_DIR/$obsolete_helper" ]; then
+            if $DRY_RUN; then
+                echo "[dry-run] Would remove obsolete Manul helper symlink: $obsolete_runtime_path"
+            else
+                rm -f -- "$obsolete_runtime_path"
+                CHANGED=$((CHANGED + 1))
+                echo "Removed obsolete Manul helper symlink: $obsolete_runtime_path"
+            fi
+        else
+            echo "Preserving unrelated runtime helper symlink: $obsolete_runtime_path"
+        fi
+    fi
+done
+
 # Remove the obsolete task-local Fiteo wrapper symlink left by older installers.
 # Only remove a Manul-owned symlink target or a byte-identical copy of the old
 # tracked source; preserve unrelated files occupying the same path.
