@@ -74,6 +74,10 @@ todo_source_remote_config() {
 
 task_source_todo_remote_poll() {
   local source_json manul_user_id tasks_json shared_task_json normalized resolution task_id
+  if ! todo_mcp_client_available; then
+    echo "task-source: Todo Remote source is disabled because globalskills/aicode Todo MCP client is unavailable" >&2
+    return 0
+  fi
   source_json="$(todo_source_remote_config "$1")" || return $?
   manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
   [[ "$manul_user_id" =~ ^[1-9][0-9]*$ ]] || {
