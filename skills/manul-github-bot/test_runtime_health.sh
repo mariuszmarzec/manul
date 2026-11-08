@@ -152,6 +152,9 @@ chmod 644 "$PERM_CANON/manul-queue-reset.sh"
 # runtime/global symlinks and the known Manul-owned plugin package may be removed.
 ln -s "$PERM_CANON/manul_fiteo_create_task.ts" "$PERM_RUN/manul_fiteo_create_task.ts"
 ln -s "$PERM_RUN/manul_fiteo_create_task.ts" "$PERM_HOME/.config/opencode/tools/manul_fiteo_create_task.ts"
+ln -s "$PERM_CANON/todo-local-mcp-url.sh" "$PERM_RUN/todo-local-mcp-url.sh"
+ln -s "$PERM_CANON/todo-mcp-client.py" "$PERM_RUN/todo-mcp-client.py"
+ln -s "$PERM_CANON/todo-remote-create-task.py" "$PERM_RUN/todo-remote-create-task.py"
 ln -s "$PERM_RUN/manul_fiteo_create_task.ts" "$PERM_ROOT/xdg/opencode/tools/manul_fiteo_create_task.ts"
 printf '%s\n' 'operator-owned legacy tool name' > "$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
 printf '%s\n' 'operator-owned tool' > "$PERM_ROOT/opencode/tools/operator_tool.ts"
@@ -212,6 +215,14 @@ if [ "$PERM_RC" -eq 0 ] &&
 else
   fail "Installer removed unrelated Node modules or retained the retired plugin package"
 fi
+
+for obsolete_helper in todo-local-mcp-url.sh todo-mcp-client.py todo-remote-create-task.py; do
+  if [ ! -L "$PERM_RUN/$obsolete_helper" ] && [ ! -e "$PERM_RUN/$obsolete_helper" ]; then
+    ok "Installer removes obsolete Manul helper symlink: $obsolete_helper"
+  else
+    fail "Installer retained obsolete Manul helper symlink: $obsolete_helper"
+  fi
+done
 
 if [ -f "$PERM_ROOT/opencode/tools/operator_tool.ts" ] &&
    [ "$(cat "$PERM_ROOT/opencode/tools/operator_tool.ts")" = "operator-owned tool" ]; then
