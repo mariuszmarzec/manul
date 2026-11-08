@@ -51,9 +51,15 @@ task_source_todo_local_poll() {
     echo "task-source: Todo Local source is disabled because globalskills/aicode Todo MCP helpers are unavailable" >&2
     return 0
   fi
-  source_json="$(todo_source_local_config "$1")"
+  if ! source_json="$(todo_source_local_config "$1")"; then
+    echo "task-source: Todo Local endpoint is unavailable or invalid; skipping optional source" >&2
+    return 0
+  fi
 
-  tasks_json="$(todo_mcp_source_list_tasks "$source_json" todo_local_mcp)" || return $?
+  if ! tasks_json="$(todo_mcp_source_list_tasks "$source_json" todo_local_mcp)"; then
+    echo "task-source: Todo Local MCP is unavailable; skipping optional source" >&2
+    return 0
+  fi
   while IFS= read -r task_json; do
     [ -n "$task_json" ] || continue
     todo_task_is_active "$task_json" || continue
