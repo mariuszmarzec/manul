@@ -206,11 +206,15 @@ if ! command -v "$RUNTIME_COMMAND" >/dev/null 2>&1 && [ ! -x "$RUNTIME_OVERRIDE"
 fi
 echo "Selected agent runtime available: $SELECTED_RUNTIME"
 
-# 4c. Configure provider-owned OpenCode permissions required by unattended Manul execution.
-echo
-echo "  Preparing OpenCode provider permissions..."
-if ! bash "$CANONICAL_DIR/opencode-permissions.sh"; then
-    fail "Could not prepare required OpenCode permissions"
+# 4c. Validate OpenCode JSON/JSONC only when OpenCode is the selected backend.
+if [ "$SELECTED_RUNTIME" = "opencode" ]; then
+    echo
+    echo "  Validating operator OpenCode configuration (read-only)..."
+    if ! bash "$CANONICAL_DIR/opencode-permissions.sh"; then
+        fail "OpenCode JSON/JSONC configuration validation failed"
+    fi
+else
+    echo "Skipping OpenCode config validation; selected backend is $SELECTED_RUNTIME"
 fi
 
 # 5. Bootstrap/migrate the DB
