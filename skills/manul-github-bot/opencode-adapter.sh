@@ -160,11 +160,19 @@ if ! [[ "$AGENT_STEP_IDLE_TIMEOUT" =~ ^[0-9]+$ ]] || [ "$AGENT_STEP_IDLE_TIMEOUT
     AGENT_STEP_IDLE_TIMEOUT=3600
 fi
 
+_OPENCODE_AGENT_CONFIG_DIR=""
+if [ -n "${OPENCODE_CONFIG:-}" ]; then
+    _OPENCODE_AGENT_CONFIG_DIR="$(dirname -- "$OPENCODE_CONFIG")"
+else
+    _OPENCODE_AGENT_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+fi
+
 CONTINUATION_PROMPT="Continue exactly where you left off. Do not re-plan or restate the task. Make the next concrete changes in the current workspace, run the relevant checks, and finish the task. When the task is genuinely complete, emit exactly one final line: TASK_DONE"
 PERMISSION_RECOVERY_PROMPT="A tool call was rejected by the OpenCode permission policy. Do not repeat the denied operation, rephrase it, split it into smaller calls, or try to reach the same denied resource through another tool, path, symlink, wrapper, subagent, or command. Do not change or bypass permissions. Re-evaluate the original task goal and choose an independent alternative that stays inside the assigned workspace and uses currently allowed capabilities. For build diagnostics, prefer rerunning the repository's documented command with useful flags and save a concise, secret-free log under the task workspace (for example, tmp/diagnostics/). If no safe alternative can provide the required evidence, explain exactly what is missing and why, preserve all completed work, and emit TASK_FAILED with a concise reason. Never claim success without verification."
 AGENT_ARGS=()
 if [ -n "$OPT_AGENT" ]; then
     if [ -r "$OPT_WORKSPACE/.opencode/agents/$OPT_AGENT.md" ] ||
+       [ -r "$_OPENCODE_AGENT_CONFIG_DIR/agents/$OPT_AGENT.md" ] ||
        [ -r "$HOME/.config/opencode/agents/$OPT_AGENT.md" ]; then
         AGENT_ARGS=(--agent "$OPT_AGENT")
     else
@@ -358,19 +366,12 @@ OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXX
 _original_opencode_config="$_OPENCODE_BASE_CONFIG"
 OPENCODE_CONFIG="$OPENCODE_TASK_CONFIG_DIR/opencode.json"
 if [ -f "$_original_opencode_config" ]; then
-    case "$_original_opencode_config" in
-        *.jsonc)
-            _config_input="$OPENCODE_TASK_CONFIG_DIR/operator-config.json"
-            if ! python3 "$MANUL_SCRIPT_DIR/jsonc-to-json.py" "$_original_opencode_config" >"$_config_input"; then
-                cleanup_opencode_task_config
-                printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Invalid OpenCode JSONC configuration; the original file was not modified","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"opencode_jsonc_parse","agent_started":false}}\n' "$OPT_TASK_ID"
-                exit 65
-            fi
-            ;;
-        *)
-            _config_input="$_original_opencode_config"
-            ;;
-    esac
+    _config_input="$OPENCODE_TASK_CONFIG_DIR/operator-config.json"
+    if ! python3 "$MANUL_SCRIPT_DIR/jsonc-to-json.py" "$_original_opencode_config" >"$_config_input"; then
+        cleanup_opencode_task_config
+        printf '{"status":"FAILED","task_id":"%s","exit_code":65,"summary":"Invalid OpenCode JSON/JSONC configuration; the original file was not modified","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"opencode_jsonc_parse","agent_started":false}}\n' "$OPT_TASK_ID"
+        exit 65
+    fi
 else
     _config_input="/dev/null"
 fi
@@ -507,14 +508,6 @@ if [ "$OPT_PREFLIGHT_ONLY" = "true" ]; then
     exit 0
 fi
 
-# The dispatcher runs this phase before publishing TASK_STARTED. It uses the
-# same AgentExecutor and task-scoped configuration as a normal invocation, but
-# deliberately exits before launching the model.
-if [ "$OPT_PREFLIGHT_ONLY" = "true" ]; then
-    jq -cn --arg task_id "$OPT_TASK_ID" \
-        '{status:"READY",task_id:$task_id,exit_code:0,summary:"OpenCode runtime preflight passed",session_id:"",duration_s:0,runtime:"opencode",diagnostics:{stage:"runtime_preflight",agent_started:false}}'
-    exit 0
-fi
 
 # Append a truthful capability snapshot to every initial and resumed prompt.
 # It is derived from this invocation's effective OpenCode config (including the
