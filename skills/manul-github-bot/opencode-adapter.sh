@@ -354,7 +354,7 @@ fi
 # named MCP entries under mcp.servers, preserve MCP-wide settings and migrate
 # legacy enabled/timeout fields before injecting Manul's required servers.
 # Preserve unrelated settings and keep the operator/global file immutable.
-OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "\${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
+OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
 _original_opencode_config="$_OPENCODE_BASE_CONFIG"
 OPENCODE_CONFIG="$OPENCODE_TASK_CONFIG_DIR/opencode.json"
 if [ -f "$_original_opencode_config" ]; then
@@ -389,7 +389,7 @@ if [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ] &&
     export TODO_LOCAL_MCP_AVAILABLE
 fi
 
-if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "\${_workspace_base_real:-}" '
+if ! jq -s --arg workspace "$_workspace_real" --arg workspaceBase "${_workspace_base_real:-}" '
     def migrate_mcp_server:
       . as $server
       | (if ($server.timeout | type) == "number" then
