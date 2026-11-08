@@ -703,7 +703,7 @@ printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"typ
 MOCK
   chmod +x "$tmp/bin/opencode"
   echo "Do task" >"$tmp/prompt"; : >"$tmp/stdout"; : >"$tmp/stderr"
-  output="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+  output="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCODE_CONFIG="$global_config" \
     MANUL_DIR="$custom_manul_dir" MANUL_WORKSPACE="$custom_workspace_base" \
     MANUL_TASK_WORKSPACE_ROOT="$active_workspace" MANUL_TASK_WORKDIR="$primary_checkout" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id scope --prompt "$tmp/prompt" \
@@ -1381,7 +1381,7 @@ printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-overlay","part":{"t
 MOCK
   chmod +x "$tmp/bin/opencode"
   printf '%s\n' "Use Fiteo only if available" >"$tmp/prompt"
-  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCODE_CONFIG="$global_config" \
     MOCK_OVERLAY_CHECK="$tmp/overlay-checked" MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id optional-mcp --prompt "$tmp/prompt" \
       --workspace "$workspace" --agent coder --attempt 1 --timeout 30 --session-id "" \
@@ -1422,7 +1422,7 @@ printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-todo-overlay","part
 MOCK
   chmod +x "$tmp/bin/opencode"
   echo "Use local Todo" >"$tmp/prompt"
-  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCODE_CONFIG="$global_config" \
     TODO_MCP_CLIENT="$tmp/shared/todo-mcp-client.py" TODO_LOCAL_MCP_URL_HELPER="$tmp/shared/todo-local-mcp-url.sh" \
     MOCK_OVERLAY_CHECK="$tmp/overlay-checked" MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id todo-local --prompt "$tmp/prompt" \
