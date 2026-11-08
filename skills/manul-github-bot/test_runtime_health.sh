@@ -162,6 +162,9 @@ LEGACY_PLUGIN
 printf '%s\n' 'operator-owned tool' > "$PERM_ROOT/opencode/tools/operator_tool.ts"
 
 # The installer must never invoke npm or provision packages.
+# Simulate the package installed by the old Manul installer.
+mkdir -p "$PERM_CANON/node_modules/@opencode/plugin"
+printf '%s\n' '{"name":"@opencode/plugin","version":"2.2.5"}' > "$PERM_CANON/node_modules/@opencode/plugin/package.json"
 cat > "$PERM_ROOT/bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$NPM_INVOKED_FILE"
@@ -207,10 +210,10 @@ else
   fail "Installer modified an unrelated operator-owned OpenCode tool"
 fi
 
-if [ ! -s "$PERM_ROOT/npm-invoked" ] && [ ! -e "$PERM_CANON/node_modules" ]; then
-  ok "Installer never invokes npm or installs an OpenCode package"
+if [ ! -s "$PERM_ROOT/npm-invoked" ] && [ ! -e "$PERM_CANON/node_modules/@opencode/plugin" ]; then
+  ok "Installer removes only the legacy Manul plugin package without invoking npm"
 else
-  fail "Installer unexpectedly invoked npm or created node_modules"
+  fail "Installer invoked npm or left the obsolete Manul plugin package"
 fi
 
 if [ -L "$PERM_RUN/jsonc-to-json.py" ] && [ -r "$PERM_RUN/jsonc-to-json.py" ]; then
