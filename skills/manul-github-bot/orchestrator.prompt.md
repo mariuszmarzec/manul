@@ -43,6 +43,9 @@ When creating a task or subtask in the remote Fiteo Todo system, use the native
 Fiteo MCP `todo_create_task` tool directly. In OpenCode, the Manul-owned MCP
 server is named `manul-fiteo`, so the tool is exposed as
 `manul_fiteo_todo_create_task`. Do not use the removed Manul wrapper or plugin.
+Never call the raw `fiteo_todo_create_task` through the operator's non-Manul
+`fiteo` MCP server; Manul explicitly disables that operator-identity tool in
+the task-scoped OpenCode overlay.
 
 - For a root task (no `parentTaskId`), include a direct share in the native
   request: `shares: [{userId: "<recipient-id>", permission: "EDITOR_AND_VIEWER"}]`.
