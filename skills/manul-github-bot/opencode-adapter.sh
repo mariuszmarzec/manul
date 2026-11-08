@@ -330,17 +330,18 @@ export TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
 # names. If any existing file is malformed, skip optional injection rather
 # than risk shadowing an MCP entry whose name could not be inspected.
 _OVERLAY_JSON_FILE="$OPENCODE_TASK_CONFIG_DIR/opencode-manul-overlay.json"
+_OPENCODE_SCAN_ROOT="${_workdir_real:-$_workspace_real}"
 if ! python3 - "$_OVERLAY_JSON_FILE" "$_workspace_real" "$_workspace_base_real" \
     "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${TODO_LOCAL_MCP_URL:-}" \
-    "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$HOME" "${OPT_WORKSPACE}" \
-    "${OPENCODE_CONFIG_CONTENT:-}" <<'PY_MANUL_OVERLAY'
+    "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$HOME" "${XDG_CONFIG_HOME:-$HOME/.config}" \
+    "$_OPENCODE_SCAN_ROOT" "${OPENCODE_CONFIG_CONTENT:-}" <<'PY_MANUL_OVERLAY'
 import json
 import os
 import re
 import sys
 from pathlib import Path
 
-output, workspace, workspace_base, fiteo_url, fiteo_pat, todo_url, custom_config, custom_dir, home, worktree, inline_content = sys.argv[1:]
+output, workspace, workspace_base, fiteo_url, fiteo_pat, todo_url, custom_config, custom_dir, home, xdg_home, project_root, inline_content = sys.argv[1:]
 
 def parse_jsonc(text):
     # Remove line/block comments while preserving strings and newlines.
@@ -434,16 +435,18 @@ def deep_merge(left, right):
     return right
 
 paths = [
+    Path(xdg_home) / "opencode/opencode.json",
+    Path(xdg_home) / "opencode/opencode.jsonc",
     Path(home) / ".config/opencode/opencode.json",
     Path(home) / ".config/opencode/opencode.jsonc",
     Path("/etc/opencode/opencode.json"),
     Path("/etc/opencode/opencode.jsonc"),
     Path("/Library/Application Support/opencode/opencode.json"),
     Path("/Library/Application Support/opencode/opencode.jsonc"),
-    Path(worktree) / "opencode.json",
-    Path(worktree) / "opencode.jsonc",
-    Path(worktree) / ".opencode/opencode.json",
-    Path(worktree) / ".opencode/opencode.jsonc",
+    Path(project_root) / "opencode.json",
+    Path(project_root) / "opencode.jsonc",
+    Path(project_root) / ".opencode/opencode.json",
+    Path(project_root) / ".opencode/opencode.jsonc",
 ]
 if custom_config:
     paths.append(Path(custom_config))
