@@ -332,7 +332,7 @@ export TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
 _OVERLAY_JSON_FILE="$OPENCODE_TASK_CONFIG_DIR/opencode-manul-overlay.json"
 _OPENCODE_SCAN_ROOT="${_workdir_real:-$_workspace_real}"
 _OVERLAY_ERROR_FILE="$OPENCODE_TASK_CONFIG_DIR/overlay.stderr"
-if ! python3 - "$_OVERLAY_JSON_FILE" "$_workspace_real" "$_workspace_base_real" \
+if ! env -u PYTHONHOME -u PYTHONPATH python3 - "$_OVERLAY_JSON_FILE" "$_workspace_real" "$_workspace_base_real" \
     "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${TODO_LOCAL_MCP_URL:-}" \
     "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$HOME" "${XDG_CONFIG_HOME:-$HOME/.config}" \
     "$_OPENCODE_SCAN_ROOT" "${OPENCODE_CONFIG_CONTENT:-}" 2>"$_OVERLAY_ERROR_FILE" <<'PY_MANUL_OVERLAY'
