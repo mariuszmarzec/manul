@@ -44,8 +44,11 @@ CHECKOUT="$TEST_DIR/checkout"
 RUNTIME="$TEST_DIR/runtime"
 INSTALL_LOG="$TEST_DIR/installer.log"
 
-git init -q --bare --initial-branch=master "$ORIGIN"
-git init -q --initial-branch=master "$SEED"
+# Git 2.25 predates --initial-branch; set the unborn branch explicitly.
+git init -q --bare "$ORIGIN"
+git --git-dir="$ORIGIN" symbolic-ref HEAD refs/heads/master
+git init -q "$SEED"
+git -C "$SEED" symbolic-ref HEAD refs/heads/master
 git -C "$SEED" config user.name "Manul Update Test"
 git -C "$SEED" config user.email "manul-update-test@example.invalid"
 mkdir -p "$SEED/skills/manul-github-bot"
