@@ -19,8 +19,19 @@ set -u
 MANUL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$MANUL_SCRIPT_DIR/manul-paths.sh"
 source "$MANUL_SCRIPT_DIR/process-runner.sh"
-source "$MANUL_SCRIPT_DIR/todo-local-mcp-url.sh"
 unset TODO_LOCAL_MCP_TOKEN
+AICODE_SOURCE_DIR="${AICODE_SOURCE_DIR:-$HOME/.globalskills/aicode}"
+TODO_LOCAL_MCP_CLIENT="${TODO_MCP_CLIENT:-$AICODE_SOURCE_DIR/todo-mcp-client.py}"
+TODO_LOCAL_MCP_URL_HELPER="$AICODE_SOURCE_DIR/todo-local-mcp-url.sh"
+TODO_LOCAL_MCP_HELPERS_AVAILABLE=false
+if [ -r "$TODO_LOCAL_MCP_CLIENT" ] && [ -r "$TODO_LOCAL_MCP_URL_HELPER" ]; then
+    # Shared Todo MCP transport and endpoint discovery are owned by globalskills/aicode.
+    # shellcheck source=~/.globalskills/aicode/todo-local-mcp-url.sh
+    source "$TODO_LOCAL_MCP_URL_HELPER"
+    TODO_MCP_CLIENT="$TODO_LOCAL_MCP_CLIENT"
+    export TODO_MCP_CLIENT AICODE_SOURCE_DIR
+    TODO_LOCAL_MCP_HELPERS_AVAILABLE=true
+fi
 
 OPT_TASK_ID=""
 OPT_PROMPT=""
@@ -207,109 +218,30 @@ PY
 }
 
 
-# Keep provider/global config immutable. OpenCode's global tool directory is
-# shared by aicode and interactive sessions, so Manul's Fiteo helper must be
-# visible only from this task workspace. The runtime installer removes any
-# obsolete global registration; this temporary project-local link is cleaned
-# on every adapter exit.
+# Keep the operator's OpenCode config immutable. Manul creates only a
+# task-scoped V2 overlay and never injects plugins or mutates workspace config.
 OPENCODE_TASK_CONFIG_DIR=""
-OPENCODE_MANUL_TOOL_SOURCE=""
-OPENCODE_MANUL_TOOL_TARGET=""
-OPENCODE_MANUL_TOOL_CREATED=false
-OPENCODE_PROJECT_PLUGINS_DIR=""
-OPENCODE_PROJECT_PLUGINS_DIR_CREATED=false
-OPENCODE_PROJECT_CONFIG_DIR=""
-OPENCODE_PROJECT_CONFIG_DIR_CREATED=false
 
 cleanup_opencode_task_config() {
-    if [ "$OPENCODE_MANUL_TOOL_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_MANUL_TOOL_TARGET:-}" ] &&
-       [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        _cleanup_tool_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
-        if [ -n "${OPENCODE_MANUL_TOOL_SOURCE:-}" ] &&
-           [ "$_cleanup_tool_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-            rm -f -- "$OPENCODE_MANUL_TOOL_TARGET"
-        fi
-    fi
-    if [ "$OPENCODE_PROJECT_PLUGINS_DIR_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_PROJECT_PLUGINS_DIR:-}" ] &&
-       [ -d "$OPENCODE_PROJECT_PLUGINS_DIR" ] && [ ! -L "$OPENCODE_PROJECT_PLUGINS_DIR" ]; then
-        rmdir -- "$OPENCODE_PROJECT_PLUGINS_DIR" 2>/dev/null || true
-    fi
-    if [ "$OPENCODE_PROJECT_CONFIG_DIR_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_PROJECT_CONFIG_DIR:-}" ] &&
-       [ -d "$OPENCODE_PROJECT_CONFIG_DIR" ] && [ ! -L "$OPENCODE_PROJECT_CONFIG_DIR" ]; then
-        rmdir -- "$OPENCODE_PROJECT_CONFIG_DIR" 2>/dev/null || true
-    fi
-    if [ -n "${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
+    if [ -n "\${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
         rm -rf -- "$OPENCODE_TASK_CONFIG_DIR"
         OPENCODE_TASK_CONFIG_DIR=""
     fi
 }
-
-prepare_opencode_manul_tool() {
-    local project_config plugins_dir existing_real
-    OPENCODE_MANUL_TOOL_SOURCE="$(realpath -e -- "$MANUL_SCRIPT_DIR/manul_fiteo_create_task.ts" 2>/dev/null || true)"
-    if [ -z "$OPENCODE_MANUL_TOOL_SOURCE" ] || [ ! -f "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-        log "Manul Fiteo V2 plugin source is missing from the canonical runtime"
-        return 1
-    fi
-
-    project_config="$OPT_WORKSPACE/.opencode"
-    plugins_dir="$project_config/plugins"
-    OPENCODE_PROJECT_CONFIG_DIR="$project_config"
-    OPENCODE_PROJECT_PLUGINS_DIR="$plugins_dir"
-    OPENCODE_MANUL_TOOL_TARGET="$plugins_dir/manul_fiteo_create_task.ts"
-
-    # Do not follow project-controlled symlinks or overwrite existing config.
-    if [ -L "$project_config" ] || { [ -e "$project_config" ] && [ ! -d "$project_config" ]; }; then
-        log "refusing to inject Manul tool: workspace .opencode is not a real directory"
-        return 1
-    fi
-    if [ ! -d "$project_config" ]; then
-        if ! mkdir -- "$project_config"; then return 1; fi
-        OPENCODE_PROJECT_CONFIG_DIR_CREATED=true
-    fi
-
-    if [ -L "$plugins_dir" ] || { [ -e "$plugins_dir" ] && [ ! -d "$plugins_dir" ]; }; then
-        log "refusing to inject Manul tool: workspace .opencode/plugins is not a real directory"
-        return 1
-    fi
-    if [ ! -d "$plugins_dir" ]; then
-        if ! mkdir -- "$plugins_dir"; then return 1; fi
-        OPENCODE_PROJECT_PLUGINS_DIR_CREATED=true
-    fi
-
-    if [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        existing_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
-        if [ "$existing_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-            # This is a stale link from an interrupted previous Manul attempt,
-            # or an already prepared link owned by this exact runtime. Adopt it
-            # so the EXIT trap removes it after the current invocation.
-            OPENCODE_MANUL_TOOL_CREATED=true
-            log "adopted existing Manul Fiteo V2 plugin link for this task invocation"
-            return 0
-        fi
-        log "refusing to overwrite an existing workspace V2 plugin symlink"
-        return 1
-    fi
-    if [ -e "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        log "refusing to overwrite an existing workspace V2 plugin"
-        return 1
-    fi
-    if ! ln -s "$OPENCODE_MANUL_TOOL_SOURCE" "$OPENCODE_MANUL_TOOL_TARGET"; then
-        log "failed to create task-local Manul Fiteo V2 plugin link"
-        return 1
-    fi
-    OPENCODE_MANUL_TOOL_CREATED=true
-    log "registered Manul Fiteo V2 plugin only in the active task workspace"
-}
-
 trap cleanup_opencode_task_config EXIT HUP INT TERM
 
 # Respect a configured provider path, but also cover OpenCode's canonical
 # default when OPENCODE_CONFIG is not exported by the unattended launcher.
-_OPENCODE_BASE_CONFIG="${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"
+_OPENCODE_BASE_CONFIG="${OPENCODE_CONFIG:-}"
+if [ -z "$_OPENCODE_BASE_CONFIG" ]; then
+    if [ -f "$HOME/.config/opencode/opencode.json" ]; then
+        _OPENCODE_BASE_CONFIG="$HOME/.config/opencode/opencode.json"
+    elif [ -f "$HOME/.config/opencode/opencode.jsonc" ]; then
+        _OPENCODE_BASE_CONFIG="$HOME/.config/opencode/opencode.jsonc"
+    else
+        _OPENCODE_BASE_CONFIG="$HOME/.config/opencode/opencode.json"
+    fi
+fi
 _TASK_WORKSPACE_ROOT_INPUT="${MANUL_TASK_WORKSPACE_ROOT:-}"
 _TASK_WORKDIR_INPUT="${MANUL_TASK_WORKDIR:-}"
 _workspace_real=""
@@ -361,33 +293,6 @@ if [ -z "${_workspace_base_real:-}" ]; then
     _workspace_base_real="$(realpath -m -- "$MANUL_WORKSPACE")"
 fi
 
-if ! prepare_opencode_manul_tool; then
-    printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Unable to prepare task-scoped Manul Fiteo V2 plugin without overwriting workspace configuration","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"manul_plugin_scope","agent_started":false}}\n' "$OPT_TASK_ID"
-    exit 78
-fi
-
-# Caracal is a required capability for Manul's OpenCode runtime. Never start
-# a task with a half-configured MCP definition: OpenCode resolves env placeholders
-# in the adapter's child process, not from an interactive OpenCode UI session.
-# Fallback to the single Caracal provider (~/.caracal/env.sh) for credentials
-# when the daemon has not already provided them. The provider loads the token
-# from secrets.yaml and resolves the live loopback URL via caracal-rag check.
-# Manul-specific context (MANUL_TASK_WORKSPACE_ROOT, etc.) is preserved.
-# shellcheck source=~/.caracal/env.sh
-if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
-   [[ "${CARACAL_MCP_URL:-}" =~ ^http://127\.0\.0\.1:0/ ]]; then
-    # Try the Caracal provider. Use CARACAL_RESOLVE_LIVE=1 to force a fresh
-    # healthcheck so a long-running daemon cannot pin a stale port.
-    if CARACAL_RESOLVE_LIVE=1 . "$HOME/.caracal/env.sh" 2>/dev/null; then
-        log "resolved Caracal MCP from ~/.caracal/env.sh"
-    else
-        log "required Caracal MCP URL/token is missing or disconnected"
-        printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"caracal_mcp_config","agent_started":false}}\n' "$OPT_TASK_ID"
-        exit 78
-    fi
-fi
-export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
-
 # The daemon can outlive an aicode launch. Refresh Fiteo credentials from the
 # latest runtime file for every task, while leaving unrelated inherited values
 # untouched. The endpoint and PAT are stored atomically by manul-env.sh.
@@ -408,21 +313,29 @@ if [ -f "$_FITEO_RUNTIME_ENV_FILE" ]; then
     fi
 fi
 
+MANUL_FITEO_MCP_AVAILABLE=0
+if [ -n "${FITEO_BASE_URL:-}" ] && [ -n "${FITEO_MANUL_PAT:-}" ]; then
+    MANUL_FITEO_MCP_AVAILABLE=1
+else
+    log "dedicated Manul Fiteo credentials unavailable; optional Fiteo MCP will not be added"
+fi
+export MANUL_FITEO_MCP_AVAILABLE
+
 TODO_LOCAL_MCP_AVAILABLE=0
-TODO_LOCAL_MCP_CONNECTED=0
 unset TODO_LOCAL_MCP_URL
-if command -v python3 >/dev/null 2>&1; then
+if [ "$TODO_LOCAL_MCP_HELPERS_AVAILABLE" = "true" ]; then
     _todo_local_resolved_url="$(todo_local_mcp_resolve_url "")" || _todo_local_resolved_url=""
     if [ -n "$_todo_local_resolved_url" ]; then
         TODO_LOCAL_MCP_URL="$_todo_local_resolved_url"
         TODO_LOCAL_MCP_AVAILABLE=1
-        TODO_LOCAL_MCP_CONNECTED=1
-        log "Todo local MCP initialize/tools/list handshake succeeded at $TODO_LOCAL_MCP_URL; adding it to the task-scoped OpenCode config"
+        log "shared Todo Local MCP handshake succeeded at $TODO_LOCAL_MCP_URL; adding optional task-scoped server"
     else
-        log "Todo local MCP is unavailable on the current host; continuing without this optional MCP"
+        log "Todo Local MCP unavailable; continuing without this optional MCP"
     fi
+else
+    log "shared globalskills/aicode Todo MCP helpers unavailable; Todo Local MCP remains disabled"
 fi
-export TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
+export TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE
 
 if [ -n "$_workspace_real" ]; then
     export MANUL_TASK_WORKSPACE_ROOT="$_workspace_real"
