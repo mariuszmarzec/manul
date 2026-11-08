@@ -297,6 +297,31 @@ MOCK
     && [ ! -e "$tmp/runtime/logs/tasks/task-oc-explicit-role.attempt-1.openclaw.prompt" ] \
     && ok "OpenClaw removes temporary role prompt files after execution" \
     || fail "OpenClaw leaked temporary role prompt files"
+
+  # The role name remains an allowed Manul role, but its optional definition
+  # file is absent. OpenClaw must use its configured main agent and original
+  # task prompt rather than failing the task.
+  rm -f "$tmp/home/.agents/agents/coder.md"
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw" \
+    MOCK_ARGS_FILE="$tmp/missing-args" MOCK_MESSAGE_FILE="$tmp/missing-message" \
+    AGENT_RUNTIME=openclaw MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/openclaw-adapter.sh" \
+      --task-id oc-missing-role --prompt "$tmp/prompt" --workspace "$tmp" \
+      --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/missing-stdout" --stderr-file "$tmp/missing-stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenClaw falls back when an optional canonical role file is missing"
+  grep -q -- '--agent main' "$tmp/missing-args" \
+    && ok "Missing OpenClaw role uses main" \
+    || fail "Missing OpenClaw role did not use main"
+  grep -Fq 'Original Manul task prompt' "$tmp/missing-message" \
+    && ok "Missing OpenClaw role preserves the original task prompt" \
+    || fail "Missing OpenClaw role lost the original prompt"
+  ! grep -Fq 'OPENCLAW_CANONICAL_CODER_INSTRUCTIONS' "$tmp/missing-message" \
+    && ok "Missing OpenClaw role does not synthesize role instructions" \
+    || fail "Missing OpenClaw role unexpectedly injected instructions"
+  grep -q 'canonical role coder is unavailable' "$tmp/missing-stderr" \
+    && ok "Missing OpenClaw role is reported as a non-blocking warning" \
+    || fail "Missing OpenClaw role warning was not emitted"
 }
 
 # ---------------------------------------------------------------------------
@@ -353,6 +378,58 @@ MOCK
   [ ! -s "$tmp/opencode.proof" ] \
     && ok "Legacy roleRuntime cannot reroute an explicit role to OpenCode" \
     || fail "Explicit role was incorrectly routed through roleRuntime"
+}
+
+# ---------------------------------------------------------------------------
+# 3d. Missing Codex and Claude role files fall back to each CLI default
+# ---------------------------------------------------------------------------
+test_missing_role_files_use_backend_defaults() {
+  local tmp out
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/bin" "$tmp/home"
+  printf '%s\n' 'Original task prompt for missing role' >"$tmp/prompt"
+
+  cat >"$tmp/bin/codex" <<'MOCK_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"$MOCK_CODEX_ARGS"
+cat >"$MOCK_CODEX_PROMPT"
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-missing-role"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"TASK_DONE codex default"}}'
+MOCK_CODEX
+  cat >"$tmp/bin/claude" <<'MOCK_CLAUDE'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"$MOCK_CLAUDE_ARGS"
+cat >"$MOCK_CLAUDE_PROMPT"
+printf '%s\n' '{"type":"result","result":"TASK_DONE claude default","session_id":"session-missing-role"}'
+MOCK_CLAUDE
+  chmod +x "$tmp/bin/codex" "$tmp/bin/claude"
+
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" CODEX_BIN="$tmp/bin/codex" \
+    MOCK_CODEX_ARGS="$tmp/codex.args" MOCK_CODEX_PROMPT="$tmp/codex.prompt" \
+    AGENT_RUNTIME=codex MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/codex-adapter.sh" --task-id codex-missing-role \
+      --prompt "$tmp/prompt" --workspace "$tmp" --agent coder --attempt 1 \
+      --timeout 30 --session-id "" --stdout-file "$tmp/codex.stdout" \
+      --stderr-file "$tmp/codex.stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Codex falls back when an optional canonical role file is missing"
+  grep -Fxq 'Original task prompt for missing role' "$tmp/codex.prompt" \
+    && ok "Codex receives the original prompt without a missing role wrapper" \
+    || fail "Codex did not fall back to the original task prompt"
+
+  out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" CLAUDE_BIN="$tmp/bin/claude" \
+    MOCK_CLAUDE_ARGS="$tmp/claude.args" MOCK_CLAUDE_PROMPT="$tmp/claude.prompt" \
+    AGENT_RUNTIME=claude-code MANUL_DIR="$tmp/runtime" \
+    bash "$SCRIPT_DIR/claude-code-adapter.sh" --task-id claude-missing-role \
+      --prompt "$tmp/prompt" --workspace "$tmp" --agent coder --attempt 1 \
+      --timeout 30 --session-id "" --stdout-file "$tmp/claude.stdout" \
+      --stderr-file "$tmp/claude.stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "Claude Code falls back when an optional canonical role file is missing"
+  grep -Fxq 'Original task prompt for missing role' "$tmp/claude.prompt" \
+    && ok "Claude Code receives the original prompt without a missing role wrapper" \
+    || fail "Claude Code did not fall back to the original task prompt"
 }
 
 # ---------------------------------------------------------------------------
@@ -1601,6 +1678,7 @@ test_process_runner_idle_timeout
 test_openclaw_success
 test_openclaw_explicit_role
 test_agent_executor_openclaw_role_dispatch
+test_missing_role_files_use_backend_defaults
 test_agent_executor_opencode_preflight_only
 test_opencode_raw_stderr_diagnostic
 test_opencode_task_done_nonzero_exit_diagnostic
@@ -1627,7 +1705,7 @@ test_opencode_permission_blocked
 test_opencode_permission_recovery
 test_opencode_missing
 test_opencode_continuation
-test_opencode_caracal_mcp
+test_opencode_optional_mcp_overlay
 test_opencode_todo_local_mcp
 test_agent_executor_dispatch
 test_runtime_selection
