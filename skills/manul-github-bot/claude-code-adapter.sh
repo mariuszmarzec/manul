@@ -50,13 +50,17 @@ RAW_STDERR_FILE="$(manul_task_file_path "$LOG_DIR" "$OPT_TASK_ID" "attempt-$OPT_
 CURRENT_PROMPT_FILE="$(manul_task_file_path "$LOG_DIR" "$OPT_TASK_ID" "attempt-$OPT_ATTEMPT.claude-code.prompt")"
 ROLE_BODY_FILE="$(manul_task_file_path "$LOG_DIR" "$OPT_TASK_ID" "attempt-$OPT_ATTEMPT.claude-code.role")"
 trap 'rm -f -- "$ROLE_BODY_FILE"' EXIT HUP INT TERM
-if [ -n "$OPT_AGENT" ]; then
-  ROLE_DIR="$MANUL_AGENT_DEFINITIONS_DIR"; [ -n "$ROLE_DIR" ] || ROLE_DIR="$HOME/.agents/agents"
+ROLE_FILE=""
+ROLE_DIR="${MANUL_AGENT_DEFINITIONS_DIR:-$HOME/.agents/agents}"
+if [ -n "$OPT_AGENT" ] && [ -r "$ROLE_DIR/$OPT_AGENT.md" ]; then
   ROLE_FILE="$ROLE_DIR/$OPT_AGENT.md"
-  [ -r "$ROLE_FILE" ] || fail 66 "Canonical role definition not found for '$OPT_AGENT' at $ROLE_FILE"
+fi
+if [ -n "$ROLE_FILE" ]; then
   awk 'NR == 1 && $0 == "---" { front=1; next } front && $0 == "---" { front=0; next } !front { print }' "$ROLE_FILE" > "$ROLE_BODY_FILE"
   { printf 'Use canonical Manul role %s; preserve the lifecycle protocol in the task prompt.\n\n' "$OPT_AGENT"; cat "$ROLE_BODY_FILE"; printf '\n\n--- Original Manul task prompt ---\n'; cat "$OPT_PROMPT"; } > "$CURRENT_PROMPT_FILE" || fail 1 "Could not prepare role prompt"
-else cp -- "$OPT_PROMPT" "$CURRENT_PROMPT_FILE" || fail 1 "Could not stage task prompt"; fi
+else
+  cp -- "$OPT_PROMPT" "$CURRENT_PROMPT_FILE" || fail 1 "Could not stage task prompt"
+fi
 : > "$RAW_STDOUT_FILE"; : > "$RAW_STDERR_FILE"
 ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"; ProcessRunner_TmpStderr="$RAW_STDERR_FILE"
 printf '[%s] claude-code-adapter: task=%s attempt=%s session=%s role=%s binary=%s permission_mode=acceptEdits\n' "$(date -Is)" "$OPT_TASK_ID" "$OPT_ATTEMPT" "${OPT_SESSION_ID:-new}" "${OPT_AGENT:-automatic}" "$CLAUDE_BIN" >> "$OPT_STDERR_FILE"
