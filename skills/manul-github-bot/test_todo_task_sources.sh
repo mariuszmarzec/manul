@@ -565,7 +565,7 @@ assert_rc "explicit repository outside the global list is rejected" "1" "$resolu
 assert_contains "global allowlist rejection is reported without requiring catalog membership" "$(cat "$TEST_DIR/not-allowlisted.log")" "excluded by the global .repositories list"
 
 resolution_rc=0
-todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":99,"description":"/manul answer a general question"}' 2>"$TEST_DIR/no-catalog-alias.log" >/dev/null || resolution_rc=$?
+HOME="$MISSING_CATALOG_HOME" todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":99,"description":"/manul answer a general question"}' 2>"$TEST_DIR/no-catalog-alias.log" >/dev/null || resolution_rc=$?
 assert_rc "missing catalog disables alias routing without blocking report-only tasks" "3" "$resolution_rc"
 assert_contains "missing catalog explains that only alias routing is disabled" "$(cat "$TEST_DIR/no-catalog-alias.log")" "alias routing is disabled"
 export TODO_TASK_REPOSITORY_CATALOG="$SAVED_TODO_TASK_REPOSITORY_CATALOG"
