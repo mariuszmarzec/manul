@@ -200,6 +200,47 @@ assert_not_contains "mapped skill context ignores an alternate skills root" "$sk
 
 export TODO_TASK_REPOSITORY_CATALOG="$TEST_DIR/project-repositories.json"
 
+# Manul consumes the shared MCP transport/discovery interface from aicode.
+# CI gives the adapters a small fake shared component; the real helper/client
+# are covered by globalskills/aicode CI and are not duplicated in this repository.
+AICODE_SOURCE_DIR="$TEST_DIR/aicode"
+mkdir -p "$AICODE_SOURCE_DIR"
+: > "$AICODE_SOURCE_DIR/todo-mcp-client.py"
+cat > "$AICODE_SOURCE_DIR/todo-local-mcp-url.sh" <<'HELPER'
+todo_local_mcp_url_is_supported() {
+  [[ "$1" =~ ^http://(localhost|127\\.0\\.0\\.1)(:[0-9]+)?/mcp$ ]]
+}
+
+todo_local_mcp_probe() {
+  local url="$1" rc=0
+  python3 "$TODO_MCP_CLIENT" --url "$url" --probe --timeout 4 >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ]
+}
+
+todo_local_mcp_resolve_url() {
+  local preferred="$1" direct="http://127.0.0.1:8765/mcp" bridge="http://127.0.0.1:8766/mcp"
+  local direct_status bridge_status
+  direct_status="$(printenv TODO_LOCAL_MCP_DIRECT_STATUS 2>/dev/null || printf '200')"
+  bridge_status="$(printenv TODO_LOCAL_MCP_BRIDGE_STATUS 2>/dev/null || printf '000')"
+  if [ -n "$preferred" ] && [ "$preferred" != "$direct" ] && [ "$preferred" != "$bridge" ]; then
+    todo_local_mcp_url_is_supported "$preferred" && todo_local_mcp_probe "$preferred" || return 1
+    printf '%s' "$preferred"
+    return 0
+  fi
+  if [ "$direct_status" = "200" ]; then
+    printf '%s' "$direct"
+    return 0
+  fi
+  if [ "$bridge_status" = "200" ]; then
+    printf '%s' "$bridge"
+    return 0
+  fi
+  return 1
+}
+HELPER
+TODO_MCP_CLIENT="$AICODE_SOURCE_DIR/todo-mcp-client.py"
+export AICODE_SOURCE_DIR TODO_MCP_CLIENT
+
 source "$SCRIPT_DIR/task-source-todo-local.sh"
 source "$SCRIPT_DIR/task-source-todo-remote.sh"
 source "$SCRIPT_DIR/manul-env.sh"
@@ -875,19 +916,6 @@ unset TODO_MCP_DROP_CHILD
 assert_rc "remote child missing from parent read-back fails delivery" "1" "$remote_unreadable_rc"
 assert_eq "unreadable remote child does not complete the root" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
 assert_eq "unreadable remote child is not falsely marked complete" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
-
-echo
-if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_mcp_client.py"; then
-  ok "Streamable HTTP MCP client tests passed"
-else
-  fail "Streamable HTTP MCP client tests failed"
-fi
-
-if "$PYTHON_BIN" "$SCRIPT_DIR/test_todo_remote_create_task.py"; then
-  ok "Remote Todo share-enforcement tests passed"
-else
-  fail "Remote Todo share-enforcement tests failed"
-fi
 
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
