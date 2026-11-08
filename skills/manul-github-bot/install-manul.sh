@@ -106,13 +106,8 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-if ! command -v openclaw >/dev/null 2>&1 && ! command -v opencode >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1 && ! command -v claude >/dev/null 2>&1 && \
-   [ ! -x "${OPENCLAW_BIN:-}" ] && [ ! -x "${OPENCODE_BIN:-}" ] && \
-   [ ! -x "${CODEX_BIN:-}" ] && [ ! -x "${CLAUDE_BIN:-}" ]; then
-    echo "ERROR: No agent runtime found (need openclaw, opencode, codex, or claude, or a valid *_BIN override)" >&2
-    echo "Install at least one of: openclaw, opencode, codex, claude" >&2
-    exit 1
-fi
+echo "Prerequisites OK: bash git gh jq sqlite3 curl crontab python3"
+echo
 echo "Prerequisites OK: bash git jq sqlite3 curl crontab + at least one supported agent runtime"
 echo
 
@@ -148,6 +143,21 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
 fi
 
+SELECTED_AGENT_RUNTIME="$(jq -r '.automation.agentRuntime // "openclaw"' "$RUNTIME_DIR/config.json")"
+case "$SELECTED_AGENT_RUNTIME" in
+    openclaw) RUNTIME_COMMAND="openclaw"; RUNTIME_OVERRIDE="${OPENCLAW_BIN:-}" ;;
+    opencode) RUNTIME_COMMAND="opencode"; RUNTIME_OVERRIDE="${OPENCODE_BIN:-}" ;;
+    codex) RUNTIME_COMMAND="codex"; RUNTIME_OVERRIDE="${CODEX_BIN:-}" ;;
+    claude-code) RUNTIME_COMMAND="claude"; RUNTIME_OVERRIDE="${CLAUDE_BIN:-}" ;;
+    *)
+        fail "Unsupported automation.agentRuntime '$SELECTED_AGENT_RUNTIME' (expected openclaw, opencode, codex, or claude-code)"
+        ;;
+esac
+if ! command -v "$RUNTIME_COMMAND" >/dev/null 2>&1 && [ ! -x "$RUNTIME_OVERRIDE" ]; then
+    fail "Selected agent runtime '$SELECTED_AGENT_RUNTIME' is not installed (missing $RUNTIME_COMMAND or its *_BIN override)"
+fi
+echo "Selected agent runtime is available: $SELECTED_AGENT_RUNTIME"
+
 # Collapse duplicate repository lists without widening access. The migration
 # validates the canonical list before writing and keeps a recoverable backup.
 if ! bash "$CANONICAL_DIR/migrate-repository-config.sh" "$RUNTIME_DIR/config.json"; then
@@ -175,12 +185,12 @@ if jq -e '((.automation? // {}) | if type == "object" then has("roleRuntime") el
     echo "  Removed obsolete automation.roleRuntime; all tasks use automation.agentRuntime"
 fi
 
-# The Todo MCP task-source adapters use the Python standard library client.
-# Keep Python optional for installations that do not enable either Todo source.
-if jq -e 'any(.taskSources[]?; (.enabled != false) and (.type == "todo_local_mcp" or .type == "todo_remote_mcp"))' "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
-    command -v python3 >/dev/null 2>&1 || fail "An enabled Todo MCP task source requires python3"
-fi
+# Python is a core runtime dependency beyond Todo MCP: the daemon uses it
+# for lifecycle SQLite/JSON helpers and OpenCode uses it for safe stderr redaction.
+command -v python3 >/dev/null 2>&1 || fail "Manul runtime requires python3"
 
+# Validate only the backend selected by the operator. An unrelated installed
+# backend must not make an incomplete installation look ready.
 # 4b. Persist provider-specific environment needed by unattended processes.
 #     Only an explicit allowlist is copied from the installer environment.
 #     Existing ~/.manul/.env content is preserved.
