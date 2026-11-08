@@ -1,5 +1,13 @@
 # Manul Architecture
 
+## Optional integration ownership
+
+`globalskills/aicode` owns the shared Streamable HTTP Todo MCP client and local Todo endpoint discovery. Manul's Todo adapters consume those shared files when present; the absence of globalskills disables Todo source polling but does not block the daemon or GitHub task sources. The project alias/skills catalog and canonical role files are optional context.
+
+Caracal MCP belongs to the operator/aicode environment, not the Manul runtime. Manul must not source Caracal environment files, persist Caracal credentials, add a Caracal server, or preflight its availability.
+
+Fiteo task creation uses the existing Fiteo MCP tool directly. No task-creation wrapper service/plugin is part of the Manul runtime. OpenCode operator configuration is read-only; each task receives a temporary V2 overlay with task workspace permissions and optional, collision-free namespaced Manul MCP servers.
+
 ## Purpose
 
 Manul is a GitHub task orchestrator. GitHub comments create tasks; Manul persists task state, prepares isolated repository workspaces, invokes an agent runtime, verifies the result, and delivers the result through GitHub.
