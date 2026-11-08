@@ -24,10 +24,12 @@ The runtime isolation refactor has landed. The current implementation:
 - Adapters are independent backends behind a single `ProcessRunner.run()`
   process boundary; they must not spawn subprocesses directly and must not
   depend on each other. OpenCode receives canonical roles through its native
-  `--agent` flag; Codex and Claude Code receive the matching canonical role
-  instructions from the canonical agent directory `~/.agents/agents/`,
-  prepended to the task prompt.
-  Never silently route role names to OpenClaw's config-agent selector.
+  `--agent` flag only when a matching native agent file exists. OpenClaw,
+  Codex, and Claude Code receive canonical role instructions from the
+  optional `~/.agents/agents/` directory when present. Missing definitions
+  fall back to OpenClaw `main`, or the respective CLI's default agent; they
+  never block task execution. Never silently route role names to OpenClaw's
+  config-agent selector.
 - Has no fallback to `~/.openclaw/manul` and no `OPENCLAW_MANUL_DIR` alias.
 
 Do not reintroduce `~/.openclaw/manul` ownership, compatibility shims, or
