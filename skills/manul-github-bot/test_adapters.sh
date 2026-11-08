@@ -1535,7 +1535,6 @@ jq -e '
   and .tools["fiteo_todo_create_task"] == false
   and (.mcp.servers["caracal-rag"] == null)
   and (.mcp.servers["fiteo"] == null)
-  and (.tools["fiteo_todo_create_task"] == null)
 ' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
 : >"$MOCK_OVERLAY_CHECK"
 cat >/dev/null
