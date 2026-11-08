@@ -548,10 +548,27 @@ todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":96,"description":"/manul Fet
 assert_rc "task without a project reference signals report-only fallback" "3" "$resolution_rc"
 assert_contains "unmatched task explains why routing was not selected" "$(cat "$TEST_DIR/unmatched.log")" "no project alias matched"
 
+# An explicit GitHub URL does not require a catalog entry, but the
+# top-level .repositories list remains the access allowlist.
+MISSING_CATALOG_HOME="$TEST_DIR/no-catalog-home"
+mkdir -p "$MISSING_CATALOG_HOME"
+SAVED_TODO_TASK_REPOSITORY_CATALOG="$TODO_TASK_REPOSITORY_CATALOG"
+unset TODO_TASK_REPOSITORY_CATALOG
+explicit_no_catalog_source='{"repositories":["owner/unlisted-but-allowed"]}'
+explicit_no_catalog="$(HOME="$MISSING_CATALOG_HOME" todo_task_resolve_repository "$explicit_no_catalog_source" '{"id":97,"description":"/manul Work on https://github.com/owner/unlisted-but-allowed"}' 2>"$TEST_DIR/no-catalog-explicit.log")"
+assert_eq "explicit allowlisted GitHub URL works without the project catalog" "owner/unlisted-but-allowed" "$(jq -r '.repository' <<<"$explicit_no_catalog")"
+assert_eq "explicit no-catalog routing keeps its provenance" "explicit_github_url" "$(jq -r '.method' <<<"$explicit_no_catalog")"
+
 resolution_rc=0
-todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":97,"description":"/manul Work on https://github.com/other-owner/private-repo"}' 2>"$TEST_DIR/uncatalogued.log" >/dev/null || resolution_rc=$?
-assert_rc "explicit repository outside the curated catalog is rejected" "1" "$resolution_rc"
-assert_contains "uncatalogued repository is reported" "$(cat "$TEST_DIR/uncatalogued.log")" "not in the curated project catalog"
+todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":98,"description":"/manul Work on https://github.com/other-owner/private-repo"}' 2>"$TEST_DIR/not-allowlisted.log" >/dev/null || resolution_rc=$?
+assert_rc "explicit repository outside the global list is rejected" "1" "$resolution_rc"
+assert_contains "global allowlist rejection is reported without requiring catalog membership" "$(cat "$TEST_DIR/not-allowlisted.log")" "excluded by the global .repositories list"
+
+resolution_rc=0
+todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":99,"description":"/manul answer a general question"}' 2>"$TEST_DIR/no-catalog-alias.log" >/dev/null || resolution_rc=$?
+assert_rc "missing catalog disables alias routing without blocking report-only tasks" "3" "$resolution_rc"
+assert_contains "missing catalog explains that only alias routing is disabled" "$(cat "$TEST_DIR/no-catalog-alias.log")" "alias routing is disabled"
+export TODO_TASK_REPOSITORY_CATALOG="$SAVED_TODO_TASK_REPOSITORY_CATALOG"
 
 echo "=== Local Todo source ==="
 export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
@@ -915,7 +932,21 @@ assert_eq "unreadable remote child does not complete the root" "true" "$(jq -r '
 assert_eq "unreadable remote child is not falsely marked complete" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
 
 echo
-# Task-source calls use the shared client path exported by aicode.
+# The transport and endpoint resolver are owned by globalskills/aicode.
 [ -r "$TODO_MCP_CLIENT" ] && ok "Todo source consumes shared MCP client path" || fail "Shared Todo MCP client path missing"
+[ -r "$TODO_LOCAL_MCP_URL_HELPER" ] && ok "Local Todo source consumes shared endpoint helper path" || fail "Shared Todo endpoint helper path missing"
+
+# Without the shared helper exports, the poller skips optional Todo sources
+# successfully instead of preventing GitHub/Jira providers from polling.
+source "$SCRIPT_DIR/task-source.sh"
+SAVED_TODO_MCP_CLIENT="$TODO_MCP_CLIENT"
+SAVED_TODO_LOCAL_MCP_URL_HELPER="$TODO_LOCAL_MCP_URL_HELPER"
+unset TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
+local_skip_output="$(task_source_poll '{"type":"todo_local_mcp","enabled":true}' 2>&1)"
+assert_contains "missing shared helper skips local Todo source without error" "$local_skip_output" "skipping optional local Todo source"
+remote_skip_output="$(task_source_poll '{"type":"todo_remote_mcp","enabled":true}' 2>&1)"
+assert_contains "missing shared client skips remote Todo source without error" "$remote_skip_output" "skipping optional remote Todo source"
+TODO_MCP_CLIENT="$SAVED_TODO_MCP_CLIENT"
+TODO_LOCAL_MCP_URL_HELPER="$SAVED_TODO_LOCAL_MCP_URL_HELPER"
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
