@@ -58,8 +58,6 @@ if [[ "${1:-}" == "--verify-env-isolation" ]]; then
 fi
 
 # These local test endpoints are handled by the fake OpenCode binaries below.
-export CARACAL_MCP_URL="http://127.0.0.1:3400/mcp"
-export CARACAL_ACCESS_TOKEN="test-caracal-token"
 PASS=0
 FAIL=0
 
