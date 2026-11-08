@@ -120,10 +120,10 @@ fi
 
 SELECTED_RUNTIME="$(jq -r '.automation.agentRuntime // "openclaw"' "$RUNTIME_DIR/config.json")"
 case "$SELECTED_RUNTIME" in
-    openclaw) RUNTIME_COMMAND="openclaw"; RUNTIME_OVERRIDE="\${OPENCLAW_BIN:-}" ;;
-    opencode) RUNTIME_COMMAND="opencode"; RUNTIME_OVERRIDE="\${OPENCODE_BIN:-}" ;;
-    codex) RUNTIME_COMMAND="codex"; RUNTIME_OVERRIDE="\${CODEX_BIN:-}" ;;
-    claude-code) RUNTIME_COMMAND="claude"; RUNTIME_OVERRIDE="\${CLAUDE_BIN:-}" ;;
+    openclaw) RUNTIME_COMMAND="openclaw"; RUNTIME_OVERRIDE="${OPENCLAW_BIN:-}" ;;
+    opencode) RUNTIME_COMMAND="opencode"; RUNTIME_OVERRIDE="${OPENCODE_BIN:-}" ;;
+    codex) RUNTIME_COMMAND="codex"; RUNTIME_OVERRIDE="${CODEX_BIN:-}" ;;
+    claude-code) RUNTIME_COMMAND="claude"; RUNTIME_OVERRIDE="${CLAUDE_BIN:-}" ;;
     *) fail "Unsupported automation.agentRuntime '$SELECTED_RUNTIME'" ;;
 esac
 if ! command -v "$RUNTIME_COMMAND" >/dev/null 2>&1 && [ ! -x "$RUNTIME_OVERRIDE" ]; then
