@@ -107,10 +107,10 @@ if [ -n "$OPT_AGENT" ] && [ "$OPT_AGENT" != "main" ]; then
     ROLE_DIR="${MANUL_AGENT_DEFINITIONS_DIR:-$HOME/.agents/agents}"
     ROLE_FILE="$ROLE_DIR/$OPT_AGENT.md"
     if [ ! -r "$ROLE_FILE" ]; then
-        jq -cn --arg taskId "$OPT_TASK_ID" --arg role "$OPT_AGENT" --arg path "$ROLE_FILE" \
-            '{status:"FAILED",task_id:$taskId,exit_code:66,summary:("Canonical role definition not found for " + $role + " at " + $path),session_id:"",duration_s:0}'
-        exit 66
-    fi
+        echo "WARN: canonical role '$OPT_AGENT' is unavailable at $ROLE_FILE; falling back to OpenClaw main" >&2
+        OPT_AGENT=""
+        OPENCLAW_AGENT_ID="main"
+    else
 
     ROLE_BODY_FILE="$(manul_task_file_path "$MANUL_TASK_LOG_DIR" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.openclaw.role")"
     ROLE_PROMPT_FILE="$(manul_task_file_path "$MANUL_TASK_LOG_DIR" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.openclaw.prompt")"
@@ -130,6 +130,7 @@ if [ -n "$OPT_AGENT" ] && [ "$OPT_AGENT" != "main" ]; then
     fi
     EXECUTION_PROMPT="$ROLE_PROMPT_FILE"
     OPENCLAW_AGENT_ID="main"
+    fi
 fi
 
 # --- Session key derivation ---
