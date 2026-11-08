@@ -178,7 +178,7 @@ All tasks -> AGENT_RUNTIME -> OpenClaw / OpenCode / Codex / Claude Code
 Role selection -> adapter input, never a second runtime selector
 ```
 
-This means a plain `/manul run <task>` uses the configured backend (OpenClaw by default), and `/manul run --agent coder <task>` uses that same backend with the canonical coder instructions. OpenCode uses its native `--agent` option. OpenClaw, Codex, and Claude Code prepend the role definition from `~/.agents/agents/<role>.md` to the original prompt; OpenClaw invokes its configured `main` entry point rather than interpreting `coder` as an OpenClaw config-agent ID. This is direct CLI execution through the selected adapter, not an ACP session spawned by OpenClaw.
+This means a plain `/manul run <task>` uses the configured backend (OpenClaw by default), and `/manul run --agent coder <task>` uses that same backend with canonical coder instructions when available. OpenCode receives `--agent coder` only when the native agent definition exists in the workspace or operator OpenCode agent directory; otherwise it uses the configured default agent. OpenClaw, Codex, and Claude Code prepend the optional role definition from `~/.agents/agents/<role>.md` to the original prompt. If that file is absent, OpenClaw uses `main`, while Codex and Claude Code use their normal CLI defaults. Missing global agent definitions never block a task. This is direct CLI execution through the selected adapter, not an ACP session spawned by OpenClaw.
 
 Use `/manul --auto run <task>` to run one task directly through OpenCode's
 native `opencode run --auto` option. Manul persists this per-task choice in
@@ -257,8 +257,8 @@ accepts the configured HTTP(S) MCP URL and uses Manul's dedicated PAT through
 `FITEO_MANUL_PAT`. HTTPS is strongly recommended outside a trusted private
 network. Never use the operator's `FITEO_PAT` for Manul's Fiteo connection.
 
-When creating tasks through Fiteo, call the existing `fiteo_todo_create_task`
-MCP tool directly. For a root task, include a direct `EDITOR_AND_VIEWER` share
+When creating tasks through the namespaced Manul Fiteo MCP server, call its
+native `manul_fiteo_todo_create_task` tool directly. For a root task, include a direct `EDITOR_AND_VIEWER` share
 for the configured `FITEO_MANUL_SHARE_USER_ID`. For a subtask, pass the
 verified `parentTaskId` and do not add a duplicate direct share: Fiteo inherits
 access from the shared parent. Manul does not install a TypeScript wrapper
@@ -537,21 +537,17 @@ The installer currently:
 - deploys runtime symlinks, including `agent-session-state.sh`;
 - initializes configuration when absent;
 - prepares the operator `.env` for unattended processes;
-- configures required provider-owned OpenCode permissions when OpenCode is installed;
+- validates the selected OpenCode JSON/JSONC configuration without modifying the operator's file (only when OpenCode is the selected backend);
 - prepares/validates the DB;
 - installs the watchdog cron;
 - installs the zsh shell integration.
 
-For OpenCode, the installer/repair path updates the effective provider config
-selected by `OPENCODE_CONFIG` (when configured) and preserves unrelated settings.
-The supported unattended environment persists `OPENCODE_CONFIG` in
-`~/.manul/.env`, so the daemon/watchdog and installer use the same file. Rules
-include `/tmp/**` for task scratch space, the dedicated
-`/tmp/manul-diagnostics/**` directory for local diagnostic artifacts,
-read/search-only access to `~/.manul/logs/**`, and the narrowly scoped Gradle
-module cache. File editing of the log directory is explicitly denied. No broad
-permission bypass such as `--auto` is enabled, and the provider config remains
-outside `~/.manul`.
+For OpenCode, the installer/repair path validates the effective provider config
+selected by `OPENCODE_CONFIG` (when configured) using a JSONC-aware parser.
+It never rewrites the operator's file. Each task gets a temporary OpenCode V2
+overlay that preserves operator settings and MCP servers while applying the
+active workspace boundary. The overlay is deleted on adapter exit. No global
+permission rules or tools are installed by Manul.
 
 The log-read permission is for explicitly authorized **local operator diagnostics**.
 It does not authorize ordinary Manul worker tasks to inspect runtime state: the
@@ -575,10 +571,9 @@ already owned by the operator. Optional MCP outages do not block execution.
 The overlay applies the task-workspace permission boundary and is removed on
 adapter exit. No global permissions, plugins, or tools are installed or
 rewritten by Manul.
-The ACPX plugin must already be installed and enabled. The launcher fails if
-it cannot configure the `opencode` ACP target or if Caracal is not connected.
-Selecting an OpenCode model provider alone is not ACP delegation; this setup
-specifically configures the ACPX `opencode` harness.
+Host-specific OpenCode ACP/ACPX setup is owned by the operator's aicode
+launcher, not by the Manul runtime. Manul does not install npm packages or
+plugins and does not require Caracal to be running.
 
 For an existing installation, run `manul --update`. It fetches only
 `origin/master`, refuses local changes or a non-fast-forward checkout, and runs
@@ -649,11 +644,11 @@ Use task recovery only for manual intervention; normal stale recovery belongs to
 ### Explicit role does not execute
 
 Check that the role is present in `agents[]` in `~/.manul/config.json`, then
-the configured `automation.agentRuntime`. OpenCode uses its native
-`--agent <role>` option; OpenClaw, Codex, and Claude Code receive the canonical
-role instructions from `~/.agents/agents/<role>.md` in the prompt. OpenClaw
-uses its `main` entry point. If the selected backend has no matching role definition, Manul leaves the role
-unforced and the backend uses its own configured default agent.
+check the selected `automation.agentRuntime`. Role files are optional context:
+OpenCode receives `--agent <role>` only if its native agent file exists;
+OpenClaw, Codex, and Claude Code use `~/.agents/agents/<role>.md` when present.
+Otherwise, OpenCode uses its configured default, OpenClaw uses `main`, and
+Codex/Claude Code use their CLI defaults. Missing role files are not an error.
 
 ### OpenClaw execution failure
 
