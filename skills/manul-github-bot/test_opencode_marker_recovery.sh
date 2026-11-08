@@ -11,26 +11,27 @@ tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 WORKSPACE_BASE="$tmp/workspaces"
 TASK_WORKSPACE="$WORKSPACE_BASE/ws-marker-docs"
-mkdir -p "$tmp/bin" "$TASK_WORKSPACE"
+TEST_HOME="$tmp/home"
+mkdir -p "$tmp/bin" "$TASK_WORKSPACE" "$TEST_HOME"
 cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  printf '%s\\n' 'caracal-rag connected'
+  printf '%s\n' 'caracal-rag connected'
   exit 0
 fi
-printf '%s\\n' '{"type":"text","timestamp":1000,"sessionID":"ses_marker-docs","part":{"type":"text","text":"TASK_DONE task completed"}}'
-printf '%s\\n' '{"type":"tool_use","timestamp":1100,"sessionID":"ses_marker-docs","part":{"type":"tool-use","state":{"status":"completed","input":{"documentation":"Use TASK_NEEDS_USER_BEGIN then TASK_NEEDS_USER_END to ask for input."}}}}'
-printf '%s\\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_marker-docs","part":{"type":"step-finish","reason":"stop"}}'
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_marker-docs","part":{"type":"text","text":"TASK_DONE task completed"}}'
+printf '%s\n' '{"type":"tool_use","timestamp":1100,"sessionID":"ses_marker-docs","part":{"type":"tool-use","state":{"status":"completed","input":{"documentation":"Use TASK_NEEDS_USER_BEGIN then TASK_NEEDS_USER_END to ask for input."}}}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_marker-docs","part":{"type":"step-finish","reason":"stop"}}'
 exit 0
 MOCK
 chmod +x "$tmp/bin/opencode"
-printf '%s\\n' 'Do the task' >"$tmp/prompt"
+printf '%s\n' 'Do the task' >"$tmp/prompt"
 
 out="$(PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
   CARACAL_MCP_URL="http://127.0.0.1:3500/mcp" CARACAL_ACCESS_TOKEN="test-caracal-token" \
   AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
   MANUL_WORKSPACE="$WORKSPACE_BASE" MANUL_TASK_WORKSPACE_ROOT="$TASK_WORKSPACE" \
-  HOME="${HOME:-/tmp}" \
+  HOME="$TEST_HOME" OPENCODE_CONFIG="$TEST_HOME/.config/opencode/opencode.json" \
   bash "$SCRIPT_DIR/opencode-adapter.sh" \
     --task-id marker-docs --prompt "$tmp/prompt" --workspace "$TASK_WORKSPACE" \
     --attempt 1 --timeout 30 --session-id "" \
