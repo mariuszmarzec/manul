@@ -434,7 +434,7 @@ MOCK_CLAUDE
   cat >"$tmp/bin/openclaw" <<'MOCK_OPENCLAW'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\\n' "$*" > "$MOCK_OPENCLAW_ARGS"
+printf '%s\n' "$*" > "$MOCK_OPENCLAW_ARGS"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--message-file" ]; then
     cat "$2" > "$MOCK_OPENCLAW_PROMPT"
@@ -442,7 +442,7 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-printf '%s\\n' 'TASK_DONE openclaw default'
+printf '%s\n' 'TASK_DONE openclaw default'
 MOCK_OPENCLAW
   chmod +x "$tmp/bin/openclaw"
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCLAW_BIN="$tmp/bin/openclaw" \
@@ -464,12 +464,12 @@ MOCK_OPENCLAW
 #!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agent" ]; then
-  printf '%s\\n' "$*" > "$MOCK_OPENCODE_AGENT_CHECK"
+  printf '%s\n' "$*" > "$MOCK_OPENCODE_AGENT_CHECK"
   exit 1
 fi
-printf '%s\\n' "$*" > "$MOCK_OPENCODE_ARGS"
+printf '%s\n' "$*" > "$MOCK_OPENCODE_ARGS"
 cat > "$MOCK_OPENCODE_PROMPT"
-printf '%s\\n' '{"type":"text","timestamp":1,"sessionID":"ses-opencode-missing-role","part":{"type":"text","text":"TASK_DONE opencode default"}}'
+printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-opencode-missing-role","part":{"type":"text","text":"TASK_DONE opencode default"}}'
 MOCK_OPENCODE
   chmod +x "$tmp/bin/opencode"
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
@@ -1592,10 +1592,10 @@ jq -e '
   and (.permissions | type == "array")
 ' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
 cat >/dev/null
-printf '%s\\n' '{"type":"text","timestamp":1,"sessionID":"ses-project-mcp-collision","part":{"type":"text","text":"TASK_DONE project MCP preserved"}}'
+printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-project-mcp-collision","part":{"type":"text","text":"TASK_DONE project MCP preserved"}}'
 MOCK
   chmod +x "$tmp/bin/opencode"
-  printf '%s\\n' 'Use Fiteo only if available' >"$tmp/prompt"
+  printf '%s\n' 'Use Fiteo only if available' >"$tmp/prompt"
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     OPENCODE_CONFIG="$global_config" \
     MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" \
