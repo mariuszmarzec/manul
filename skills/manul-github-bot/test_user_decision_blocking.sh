@@ -146,6 +146,19 @@ EOF
 evaluate_task_completion "owner/repo" "1" "issue:conflict-failed" "issue:conflict-failed" "1" "0" "$STDOUT_FILE" "$DB" "" "" "" "" "" "main" "main"
 assert_eq "decision block plus TASK_FAILED is not user-blocked" "false" "$NEEDS_USER_INPUT"
 
+echo "=== dispatch honours user-input and workspace state ==="
+NEEDS_USER_INPUT="true"
+assert_eq "user decision is recognized by dispatcher" "true" "$(if task_needs_user_input; then printf true; else printf false; fi)"
+NEEDS_USER_INPUT="false"
+assert_eq "ordinary task is not treated as user-blocked" "false" "$(if task_needs_user_input; then printf true; else printf false; fi)"
+unset NEEDS_USER_INPUT
+
+WORKSPACE_ID=""
+assert_eq "missing workspace is not released" "false" "$(if task_has_workspace; then printf true; else printf false; fi)"
+WORKSPACE_ID="$MANUL_DIR/workspace"
+assert_eq "assigned workspace is released after blocking" "true" "$(if task_has_workspace; then printf true; else printf false; fi)"
+unset WORKSPACE_ID
+
 echo "=== running -> blocked_user ==="
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,prompt,status,attempts,claimToken,heartbeatAt,leaseExpiresAt,workerPid) VALUES('task-1','owner/repo',1,'https://github.com/owner/repo/issues/1','original prompt','running',1,'token-1',datetime('now'),datetime('now','+900 seconds'),1234);"
 mark_task_blocked_user "task-1" "task-1" "token-1"

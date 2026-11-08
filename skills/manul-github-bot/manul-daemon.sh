@@ -3173,6 +3173,16 @@ verify_result_comment_pr_url() {
 # revalidation logic is defined exactly once.
 source "$DAEMON_SCRIPT_DIR/task-source-revalidate.sh"
 
+# Keep the dispatch decision in a function so shell expansion is covered by
+# the regression test as well as by the production worker.
+task_needs_user_input() {
+  [ "${NEEDS_USER_INPUT:-false}" = "true" ]
+}
+
+task_has_workspace() {
+  [ -n "${WORKSPACE_ID:-}" ]
+}
+
 # Mark a running task as blocked on explicit user input.
 # This is not a failure and is not retryable. A later /manul continue resumes
 # this exact task.
@@ -4988,9 +4998,9 @@ PROMPT_APPEND
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
     # explicit /manul continue response.
-    if [ "\${NEEDS_USER_INPUT:-false}" = "true" ]; then
+    if task_needs_user_input; then
       if mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$USER_QUESTION"; then
-        if [ -n "\${WORKSPACE_ID:-}" ]; then
+        if task_has_workspace; then
           workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || log "WARN: failed to release workspace after user-blocked task $COMMENT_ID"
         fi
         if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
