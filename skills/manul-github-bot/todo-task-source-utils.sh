@@ -42,22 +42,10 @@ todo_task_repository_catalog_path() {
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
-  local catalog_json matches_json match_json entry_json repositories_json canonical_repository skills_json
-
-  catalog_file="$(todo_task_repository_catalog_path)"
-  [ -r "$catalog_file" ] || {
-    echo "repository catalog is unavailable: $catalog_file" >&2
-    return 2
-  }
-  catalog_json="$(cat "$catalog_file")" || return 2
-  jq -e '.repositories | type == "array"' <<<"$catalog_json" >/dev/null 2>&1 || {
-    echo "repository catalog has no repositories array" >&2
-    return 2
-  }
+  local catalog_json='{"repositories":[]}' matches_json match_json entry_json repositories_json canonical_repository skills_json
+  local catalog_available=false
 
   description="$(jq -r '.description // ""' <<<"$task_json")"
-  # The leading /manul command is a trigger, not a repository alias.
-  # Strip it before matching catalog aliases so plain questions stay report-only.
   description="$(todo_strip_manul_trigger "$description")"
   explicit_matches="$(
     grep -Eo 'https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' <<<"$description" \
@@ -76,6 +64,17 @@ todo_task_resolve_repository() {
     method="explicit_github_url"
     matched_alias=""
   else
+    catalog_file="$(todo_task_repository_catalog_path)"
+    if [ ! -r "$catalog_file" ]; then
+      echo "project catalog is unavailable and no explicit GitHub repository was supplied; treating the task as report-only" >&2
+      return 3
+    fi
+    catalog_json="$(cat "$catalog_file")" || return 2
+    jq -e '.repositories | type == "array"' <<<"$catalog_json" >/dev/null 2>&1 || {
+      echo "repository catalog has no repositories array" >&2
+      return 2
+    }
+    catalog_available=true
     matches_json="$(jq -c --arg description "$description" '
       def norm:
         ascii_downcase
@@ -88,11 +87,7 @@ todo_task_resolve_repository() {
           | ($alias | norm) as $normalized_alias
           | select($normalized_alias != "")
           | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
-          | {
-              repository: $repo.name,
-              alias: $alias,
-              length: ($normalized_alias | length)
-            }
+          | {repository:$repo.name,alias:$alias,length:($normalized_alias|length)}
         ]
       | if length == 0 then []
         else (map(.length) | max) as $max_length
@@ -103,8 +98,6 @@ todo_task_resolve_repository() {
     candidate_count="$(jq -r 'length' <<<"$matches_json")"
     if [ "$candidate_count" -eq 0 ]; then
       echo "no project alias matched the Todo task description" >&2
-      # Exit code 3 tells Todo adapters there is no repository route, so the
-      # task can safely run in report-only mode. Routing errors stay distinct.
       return 3
     fi
     if [ "$candidate_count" -gt 1 ]; then
@@ -124,23 +117,25 @@ todo_task_resolve_repository() {
     return 2
   }
 
-  entry_json="$(jq -c --arg repo "$repository" '
-    [.repositories[] | select((.name | ascii_downcase) == ($repo | ascii_downcase))]
-    | first // empty
-  ' <<<"$catalog_json")" || return 2
-  [ -n "$entry_json" ] || {
-    echo "repository $repository is not in the curated project catalog" >&2
-    return 1
-  }
-  canonical_repository="$(jq -r '.name' <<<"$entry_json")"
-
   repositories_json="$(todo_mcp_source_repositories "$source_json")" || return 2
-  if ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$repositories_json" >/dev/null 2>&1; then
-    echo "repository $canonical_repository is excluded by the global .repositories list" >&2
+  if ! jq -e --arg repo "$repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$repositories_json" >/dev/null 2>&1; then
+    echo "repository $repository is excluded by the global .repositories list" >&2
     return 1
   fi
 
-  skills_json="$(jq -c '.skills // [] | if type == "array" then map(select(type == "string")) else [] end' <<<"$entry_json")"
+  canonical_repository="$repository"
+  skills_json='[]'
+  if [ "$catalog_available" = "true" ]; then
+    entry_json="$(jq -c --arg repo "$repository" '
+      [.repositories[] | select((.name | ascii_downcase) == ($repo | ascii_downcase))]
+      | first // empty
+    ' <<<"$catalog_json")" || return 2
+    if [ -n "$entry_json" ]; then
+      canonical_repository="$(jq -r '.name' <<<"$entry_json")"
+      skills_json="$(jq -c '.skills // [] | if type == "array" then map(select(type == "string")) else [] end' <<<"$entry_json")"
+    fi
+  fi
+
   jq -cn \
     --arg repository "$canonical_repository" \
     --arg method "$method" \
@@ -167,6 +162,31 @@ todo_task_resolved_skill_context() {
   done < <(jq -r '.skills[]? // empty' <<<"$resolution_json")
 }
 
+todo_mcp_client_path() {
+  if [ -n "${TODO_MCP_CLIENT:-}" ]; then
+    [ -r "$TODO_MCP_CLIENT" ] || return 1
+    printf '%s\n' "$TODO_MCP_CLIENT"
+    return 0
+  fi
+
+  local candidate
+  for candidate in \
+    "${AICODE_SOURCE_DIR:-}/todo-mcp-client.py" \
+    "$HOME/.globalskills/aicode/todo-mcp-client.py"; do
+    [ -n "$candidate" ] || continue
+    if [ -r "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+todo_mcp_client_available() {
+  local client
+  client="$(todo_mcp_client_path 2>/dev/null)" && [ -n "$client" ]
+}
+
 todo_mcp_source_call() {
   local source_json="$1" source_type="$2" tool="$3" arguments="$4"
   local url token_env
@@ -187,8 +207,12 @@ todo_mcp_source_call() {
     echo "todo-mcp: unsupported source type: $source_type" >&2
     return 2
   fi
-  python3 "$TODO_TASK_SOURCE_DIR/todo-mcp-client.py" \
-    --url "$url" "${token_args[@]}" --tool "$tool" --arguments "$arguments"
+  local client
+  client="$(todo_mcp_client_path)" || {
+    echo "todo-mcp: shared globalskills/aicode Todo MCP client is unavailable" >&2
+    return 2
+  }
+  python3 "$client" --url "$url" "${token_args[@]}" --tool "$tool" --arguments "$arguments"
 }
 
 todo_mcp_source_list_tasks() {
