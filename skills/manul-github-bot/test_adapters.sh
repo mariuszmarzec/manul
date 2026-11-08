@@ -686,8 +686,8 @@ JSON
   before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
-# Universal Caracal MCP fixture for OpenCode adapter tests.
-if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+set -euo pipefail
+if [ "${1:-}" = "run" ]; then
   jq -e '
     .mcp.timeout.catalog == 5000
     and .mcp.timeout.execution == 15000
@@ -701,21 +701,6 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
     echo "task-local V2 MCP migration did not preserve legacy disabled/timeout state" >&2
     exit 65
   }
-  if [ "${MOCK_CARACAL_MCP_STATE:-connected}" = "connected" ]; then
-    printf '%s\n' 'caracal-rag connected'
-    exit 0
-  fi
-  printf '%s\n' 'caracal-rag failed'
-  exit 1
-fi
-set -euo pipefail
-if [ "${1:-}" = "run" ]; then
-  # Inspect the actual config used by this run, not a debug command that the
-  # production adapter never invokes. OpenCode evaluates patterns in order;
-  # the task-specific allow must follow the broader sibling-workspace deny.
-  # macOS resolves /var through /private/var. Compare canonical filesystem
-  # paths because the production adapter intentionally resolves symlinks before
-  # granting an external-directory allow.
   active_real="$(realpath -e "$ACTIVE_WORKSPACE")"
   sibling_real="$(realpath -e "$SIBLING_WORKSPACE")"
   workspace_base_real="$(realpath -e "$MANUL_WORKSPACE")"
@@ -1739,7 +1724,7 @@ test_openclaw_failure
 test_openclaw_missing
 test_openclaw_timeout
 test_opencode_success
-test_opencode_manul_tool_collision
+test_opencode_project_plugin_preservation
 test_opencode_no_progress_timeout
 test_opencode_active_tool_jsonl_progress
 test_opencode_active_step_jsonl_progress
