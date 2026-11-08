@@ -17,7 +17,7 @@ Supported commands parsed from a `/manul` command are:
 | `/manul status` | query conversation status |
 | `/manul close` | close a conversation |
 
-Every task uses automation.agentRuntime (default openclaw), whether or not a canonical role is explicit. OpenCode receives a role through its native --agent <role> option. OpenClaw, Codex, and Claude Code receive the canonical role definition from ~/.agents/agents/<role>.md, with YAML frontmatter stripped and the role instructions prepended to the task prompt. OpenClaw continues to use its configured main entry point rather than treating a canonical role as an OpenClaw config-agent ID. Agent definitions remain canonical; Manul must not copy them into another source directory. Unknown/unconfigured roles fail closed.
+Every task uses automation.agentRuntime (default openclaw), whether or not a canonical role is explicit. OpenCode receives a role through its native --agent <role> option only when that native agent exists in the operator/workspace OpenCode agent directories; otherwise it leaves agent selection to OpenCode's configured default. OpenClaw, Codex, and Claude Code receive canonical role instructions from ~/.agents/agents/<role>.md when that optional file exists, with YAML frontmatter stripped and instructions prepended to the task prompt. If it is absent, OpenClaw uses main and Codex/Claude Code use their CLI defaults. Agent definitions remain canonical; Manul must not copy them into another source directory. Missing optional role definitions never block execution.
 
 Routine ambiguity should be resolved by the agent. User input is requested only for a materially important unresolved decision.
 
@@ -28,6 +28,18 @@ A user-decision request is valid only when the agent emits exactly one:
 block, with non-empty content between the markers and no `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` marker in the same execution output. Malformed or partial blocks are treated as execution failures, not as `blocked_user`.
 
 The decision content should summarize what the agent checked, explain why the remaining uncertainty materially affects correctness or outcome, and present the concrete options or decision required. The agent may recommend an option, but the user's decision remains authoritative. Once the decision point is reached, no further irreversible repository changes are allowed in that execution.
+
+## 1a. Optional shared integrations
+
+The globalskills project catalog, installed skills, and canonical agent files are optional context, not Manul runtime prerequisites. An explicit GitHub URL can route a Todo task without the project catalog, subject to the global `.repositories` allowlist. If no catalog and no explicit repository are available, an informational Todo task may run report-only. Missing mapped skill files are skipped.
+
+The Streamable HTTP Todo MCP client and local endpoint-discovery helper are shared components owned by `globalskills/aicode`. Manul consumes them from `~/.globalskills/aicode`; when unavailable, Todo source polling is skipped without blocking GitHub Issues or other Manul work. Manul must not maintain a duplicate client or endpoint-discovery implementation.
+
+Caracal is operator/aicode-owned. Manul must not load its environment file, persist its credentials, register its MCP server, or require a Caracal preflight. An operator-configured Caracal server remains available through OpenCode's normal config loading; its absence is non-blocking.
+
+Manul must not install npm packages or inject a custom task-creation plugin. Fiteo task creation uses the existing Fiteo MCP tool directly: root tasks carry the configured `EDITOR_AND_VIEWER` share, and subtasks use `parentTaskId` without a duplicate direct share.
+
+OpenCode operator JSON/JSONC configuration is read-only. Manul creates a temporary task-scoped V2 overlay, preserves existing MCP names/settings, and adds only collision-free namespaced optional servers. It never deletes or shadows operator-owned MCP entries or mutates global permissions.
 
 ## 2. Task state contract
 
