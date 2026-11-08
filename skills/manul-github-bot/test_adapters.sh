@@ -820,9 +820,24 @@ test_opencode_task_scoped_config() {
   // Operator-owned JSONC: Manul must leave this file byte-identical.
   "model": "test/provider",
   "mcp": { "servers": { "operator-server": { "type": "remote", "url": "https://example.invalid/mcp", }, }, },
+  "permissions": [
+    { "action": "external_directory", "resource": "/operator/protected/*", "effect": "deny" },
+  ],
+  // Legacy permission object must be migrated into the temporary V2 overlay.
+  "permission": { "bash": "ask" },
 }
 JSONC
+  mkdir -p "$primary_checkout/.opencode"
+  cat >"$primary_checkout/.opencode/opencode.jsonc" <<'PROJECT_JSONC'
+{
+  // Project-level rule must also survive the temporary Manul overlay.
+  "permissions": [
+    { "action": "edit", "resource": "generated/**", "effect": "deny", },
+  ],
+}
+PROJECT_JSONC
   before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
+  project_before_hash="$(sha256sum "$primary_checkout/.opencode/opencode.jsonc" | awk '{print $1}')"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -835,6 +850,9 @@ jq -e --arg base "$MANUL_WORKSPACE" --arg task "$MANUL_TASK_WORKSPACE_ROOT" '
   | (idx("external_directory";$task;"allow")) as $root
   | (idx("external_directory";($task|rtrimstr("/") + "/*");"allow")) as $children
   | ($deny>=0) and ($root>$deny) and ($children>$root)
+  and any(.permissions[]; .action=="external_directory" and .resource=="/operator/protected/*" and .effect=="deny")
+  and any(.permissions[]; .action=="shell" and .resource=="*" and .effect=="ask")
+  and any(.permissions[]; .action=="edit" and .resource=="generated/**" and .effect=="deny")
 ' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
 printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
 MOCK
@@ -849,6 +867,8 @@ MOCK
   assert_json_status "$output" "COMPLETED" "OpenCode runs with a task-scoped inline overlay"
   [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] \
     && ok "operator JSONC remains byte-identical" || fail "operator JSONC changed"
+  [ "$(sha256sum "$primary_checkout/.opencode/opencode.jsonc" | awk '{print $1}')" = "$project_before_hash" ] \
+    && ok "project OpenCode JSONC remains byte-identical" || fail "project OpenCode JSONC changed"
   if find "$tmp" -maxdepth 1 -type d -name 'manul-opencode-config.*' | grep -q .; then
     fail "temporary overlay directory leaked"
   else
