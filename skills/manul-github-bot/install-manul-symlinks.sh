@@ -212,19 +212,29 @@ if [ -n "\${OPENCODE_CONFIG_DIR:-}" ]; then
 fi
 for opencode_config_dir in "\${OPENCODE_CONFIG_CANDIDATES[@]}"; do
     legacy_tool="$opencode_config_dir/tools/manul_fiteo_create_task.ts"
+    remove_legacy_manul_tool=false
     if [ -L "$legacy_tool" ]; then
         legacy_target="$(readlink "$legacy_tool" 2>/dev/null || true)"
         case "$legacy_target" in
             "$RUNTIME_DIR/manul_fiteo_create_task.ts"|"$CANONICAL_DIR/manul_fiteo_create_task.ts")
-                if $DRY_RUN; then
-                    echo "[dry-run] Would remove obsolete Manul plugin symlink: $legacy_tool"
-                else
-                    rm -f -- "$legacy_tool"
-                    echo "Removed obsolete Manul plugin symlink: $legacy_tool"
-                fi
+                remove_legacy_manul_tool=true
                 ;;
-            *) echo "Preserving unrelated OpenCode tool symlink: $legacy_tool" ;;
         esac
+    elif [ -f "$legacy_tool" ] &&
+         grep -Fq 'id: "manul.fiteo-create-task"' "$legacy_tool" &&
+         grep -Fq 'name: "manul_fiteo_create_task"' "$legacy_tool"; then
+        # A regular-file legacy copy is removed only when it carries both
+        # stable Manul-specific identifiers. Same-named operator tools survive.
+        remove_legacy_manul_tool=true
+    fi
+
+    if [ "$remove_legacy_manul_tool" = "true" ]; then
+        if $DRY_RUN; then
+            echo "[dry-run] Would remove obsolete Manul plugin registration: $legacy_tool"
+        else
+            rm -f -- "$legacy_tool"
+            echo "Removed obsolete Manul plugin registration: $legacy_tool"
+        fi
     fi
 done
 
