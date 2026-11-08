@@ -1456,6 +1456,10 @@ test_opencode_continuation() {
   printf '%s\n' '{"automation":{"opencodeMaxStepLimitContinuations":0}}' >"$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agent" ]; then
+  printf '%s\n' 'coder'
+  exit 0
+fi
 printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
 cat > "$MOCK_STDIN_FILE"
 has_session=false
