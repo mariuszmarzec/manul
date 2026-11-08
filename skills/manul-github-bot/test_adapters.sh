@@ -1532,6 +1532,7 @@ jq -e '
   and .mcp.servers["manul-fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
   and .mcp.servers["manul-fiteo"].headers.Authorization == "Bearer {env:FITEO_MANUL_PAT}"
   and .tools["manul_fiteo_*"] == true
+  and .tools["fiteo_todo_create_task"] == false
   and (.mcp.servers["caracal-rag"] == null)
   and (.mcp.servers["fiteo"] == null)
   and (.tools["fiteo_todo_create_task"] == null)
@@ -1588,7 +1589,8 @@ ENV
 set -euo pipefail
 jq -e '
   (.mcp.servers["manul-fiteo"] == null)
-  and (.tools["manul_fiteo_*"] == null)
+  and (.tools["manul_fiteo_*"] == false)
+  and (.tools["fiteo_todo_create_task"] == false)
   and (.permissions | type == "array")
 ' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
 cat >/dev/null
