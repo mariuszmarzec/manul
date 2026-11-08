@@ -453,18 +453,49 @@ if custom_config:
 if custom_dir:
     paths.extend([Path(custom_dir) / "opencode.json", Path(custom_dir) / "opencode.jsonc"])
 
+def canonical_action(action):
+    return {"bash": "shell", "task": "subagent", "write": "edit", "patch": "edit"}.get(action, action)
+
+def collect_permission_rules(obj):
+    rules = []
+    legacy = obj.get("permission")
+    if isinstance(legacy, dict):
+        for action, value in legacy.items():
+            action = canonical_action(action)
+            if isinstance(value, str):
+                rules.append({"action": action, "resource": "*", "effect": value})
+            elif isinstance(value, dict):
+                for resource, effect in value.items():
+                    if isinstance(effect, str):
+                        rules.append({"action": action, "resource": resource, "effect": effect})
+    native = obj.get("permissions")
+    if isinstance(native, list):
+        for rule in native:
+            if isinstance(rule, dict) and all(key in rule for key in ("action", "resource", "effect")):
+                rules.append(rule)
+    return rules
+
 names = set()
+operator_permissions = []
 scan_ok = True
+managed_paths = {
+    Path("/etc/opencode/opencode.json"),
+    Path("/etc/opencode/opencode.jsonc"),
+    Path("/Library/Application Support/opencode/opencode.json"),
+    Path("/Library/Application Support/opencode/opencode.jsonc"),
+}
 for path in dict.fromkeys(paths):
     if not path.is_file():
         continue
     try:
         obj = parse_jsonc(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
         scan_ok = False
+        print(f"could not inspect OpenCode config {path}: {exc}", file=sys.stderr)
         continue
     if not isinstance(obj, dict):
         scan_ok = False
+        print(f"OpenCode config {path} is not a JSON object", file=sys.stderr)
         continue
     mcp = obj.get("mcp") or {}
     if isinstance(mcp, dict):
@@ -474,6 +505,10 @@ for path in dict.fromkeys(paths):
         # Older Manul/OpenCode configs may still use named entries directly
         # under mcp. Treat them as occupied too.
         names.update(k for k, v in mcp.items() if k not in {"servers", "timeout"} and isinstance(v, dict))
+    # Managed settings are applied by OpenCode after inline config and must
+    # retain their higher priority. Do not copy/replace their permission rules.
+    if path not in managed_paths:
+        operator_permissions.extend(collect_permission_rules(obj))
 
 existing_inline = {}
 if inline_content:
@@ -484,14 +519,20 @@ if inline_content:
             mcp = parsed.get("mcp") or {}
             if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
                 names.update(mcp["servers"].keys())
+            operator_permissions.extend(collect_permission_rules(parsed))
     except Exception as exc:
         print(f"invalid inherited OPENCODE_CONFIG_CONTENT: {exc}", file=sys.stderr)
         raise SystemExit(2)
 
+# If a local config layer cannot be parsed, fail rather than replacing an
+# operator permission array we could not preserve.
+if not scan_ok:
+    raise SystemExit(2)
+
 # Keep stable, Manul-specific names. Any collision means the operator owns the
 # existing entry; never replace it with Manul's credentials or endpoint.
 servers = {}
-permissions = [
+permissions = operator_permissions + [
     {"action": "external_directory", "resource": workspace_base.rstrip("/") + "/*", "effect": "deny"},
     {"action": "external_directory", "resource": workspace, "effect": "allow"},
     {"action": "external_directory", "resource": workspace.rstrip("/") + "/*", "effect": "allow"},
