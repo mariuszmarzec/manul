@@ -4,10 +4,21 @@ set -uo pipefail
 
 TODO_LOCAL_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_LOCAL_SOURCE_DIR/todo-task-source-utils.sh"
-source "$TODO_LOCAL_SOURCE_DIR/todo-local-mcp-url.sh"
+todo_source_local_load_endpoint_helper() {
+  local helper="${TODO_LOCAL_MCP_URL_HELPER:-}"
+  if [ -z "$helper" ] || [ ! -r "$helper" ]; then
+    echo "task-source: shared Todo endpoint helper is unavailable; local Todo source is optional" >&2
+    return 2
+  fi
+  if ! declare -F todo_local_mcp_resolve_url >/dev/null 2>&1; then
+    source "$helper" || return 2
+  fi
+  declare -F todo_local_mcp_resolve_url >/dev/null 2>&1
+}
 
 todo_source_local_config() {
   local source_json="$1" url configured_url resolved_url
+  todo_source_local_load_endpoint_helper || return 2
   configured_url="$(jq -r '.url // empty' <<<"$source_json")" || return 2
 
   # Preserve explicitly configured custom loopback ports. The two standard
@@ -35,7 +46,7 @@ todo_source_local_config() {
 }
 task_source_todo_local_poll() {
   local source_json tasks_json task_json normalized resolution task_id
-  source_json="$(todo_source_local_config "$1")"
+  source_json="$(todo_source_local_config "$1")" || return $?
 
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" todo_local_mcp)" || return $?
   while IFS= read -r task_json; do
@@ -71,12 +82,12 @@ task_source_todo_local_poll() {
 
 task_source_todo_local_revalidate() {
   local source_json="$1" source_id="$2"
-  source_json="$(todo_source_local_config "$source_json")"
+  source_json="$(todo_source_local_config "$source_json")" || return $?
   todo_task_still_current "$source_json" todo_local_mcp "$source_id"
 }
 
 task_source_todo_local_complete() {
   local source_json="$1" source_id="$2"
-  source_json="$(todo_source_local_config "$source_json")"
+  source_json="$(todo_source_local_config "$source_json")" || return $?
   todo_task_mark_done "$source_json" todo_local_mcp "$source_id"
 }

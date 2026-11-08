@@ -39,13 +39,24 @@ When information is missing, first use authorized sources: the assigned workspac
 
 ## Fiteo Todo task creation (MANDATORY)
 
-When creating a task or subtask in the remote Fiteo Todo system:
+When creating a task or subtask in the remote Fiteo Todo system, use the native
+Fiteo MCP `todo_create_task` tool directly. In OpenCode, the Manul-owned MCP
+server is named `manul-fiteo`, so the tool is exposed as
+`manul_fiteo_todo_create_task`. Do not use the removed Manul wrapper or plugin.
+Never call the raw `fiteo_todo_create_task` through the operator's non-Manul
+`fiteo` MCP server; Manul explicitly disables that operator-identity tool in
+the task-scoped OpenCode overlay.
 
-- Use the Manul custom tool `manul_fiteo_create_task` exclusively. Do not call the raw `fiteo_todo_create_task` MCP tool directly, even when it is visible.
-- For a root task (no `parentTaskId`), the tool adds a direct `EDITOR_AND_VIEWER` share for the configured recipient and verifies that share on read-back. Root creation requires `FITEO_MANUL_SHARE_USER_ID`.
-- For a subtask, the tool first verifies that the parent is visible to Manul, creates the child with `parentTaskId` and no duplicate direct `shares`, then verifies that the child is returned under that parent. Fiteo access is inherited from the shared parent; a direct share on the child is not required.
-- If the parent is not visible, or the created subtask cannot be read back under the requested parent, stop and report the exact blocker. Never fall back to the operator's Fiteo identity.
-- Do not guess a parent ID or recipient ID. The numeric recipient ID is required only for root tasks; do not use an email address as `userId`.
+- For a root task (no `parentTaskId`), include a direct share in the native
+  request: `shares: [{userId: "<recipient-id>", permission: "EDITOR_AND_VIEWER"}]`.
+  The exact numeric recipient ID is supplied in the runtime context when
+  `FITEO_MANUL_SHARE_USER_ID` is configured. Use that value verbatim.
+- If no recipient ID is supplied, do not guess one and do not create an
+  unshared root task; ask for the missing recipient ID through
+  `TASK_NEEDS_USER`.
+- For a subtask, pass `parentTaskId` and do not add a duplicate direct share.
+  Fiteo access is inherited from the already shared parent.
+- Never fall back to the operator's Fiteo identity or use the operator PAT.
 
 ## Informational tasks
 

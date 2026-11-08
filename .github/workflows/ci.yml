@@ -2,7 +2,7 @@ name: Manul CI
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
   workflow_dispatch:
 
@@ -38,5 +38,3 @@ jobs:
             bash "$test"
             echo "::endgroup::"
           done < <(find skills/manul-github-bot -maxdepth 1 -type f -name 'test_*.sh' -print | sort)
-      - name: Run Todo MCP client tests
-        run: python3 skills/manul-github-bot/test_todo_mcp_client.py

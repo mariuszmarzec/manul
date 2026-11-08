@@ -143,39 +143,37 @@ PERM_CANON="$PERM_ROOT/canonical"
 PERM_RUN="$PERM_ROOT/runtime"
 PERM_HOME="$PERM_ROOT/home"
 mkdir -p "$PERM_CANON" "$PERM_ROOT/bin" "$PERM_HOME/.config/opencode/tools" "$PERM_ROOT/xdg/opencode/tools" "$PERM_ROOT/opencode/tools"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "$PERM_CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$PERM_CANON/" 2>/dev/null || true
 chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
 chmod 644 "$PERM_CANON/manul-queue-reset.sh"
 
-# Simulate both forms produced by the old installer: a global symlink and a
-# byte-identical copy in an explicitly configured OpenCode config directory.
+# Simulate artifacts created by the old installer. Only the exact old
+# runtime/global symlinks and the known Manul-owned plugin package may be removed.
+ln -s "$PERM_CANON/manul_fiteo_create_task.ts" "$PERM_RUN/manul_fiteo_create_task.ts"
 ln -s "$PERM_RUN/manul_fiteo_create_task.ts" "$PERM_HOME/.config/opencode/tools/manul_fiteo_create_task.ts"
+ln -s "$PERM_CANON/todo-local-mcp-url.sh" "$PERM_RUN/todo-local-mcp-url.sh"
+ln -s "$PERM_CANON/todo-mcp-client.py" "$PERM_RUN/todo-mcp-client.py"
+ln -s "$PERM_CANON/todo-remote-create-task.py" "$PERM_RUN/todo-remote-create-task.py"
 ln -s "$PERM_RUN/manul_fiteo_create_task.ts" "$PERM_ROOT/xdg/opencode/tools/manul_fiteo_create_task.ts"
-cp "$PERM_CANON/manul_fiteo_create_task.ts" "$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
+printf '%s\n' 'operator-owned legacy tool name' > "$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
 printf '%s\n' 'operator-owned tool' > "$PERM_ROOT/opencode/tools/operator_tool.ts"
+mkdir -p "$PERM_CANON/node_modules/@opencode/plugin" "$PERM_CANON/node_modules/operator-package"
+printf '%s\n' '{"name":"@opencode/plugin","version":"2.2.5"}' > "$PERM_CANON/node_modules/@opencode/plugin/package.json"
+printf '%s\n' '{"name":"operator-package"}' > "$PERM_CANON/node_modules/operator-package/package.json"
 
-# Keep the runtime test independent of the network while exercising the
-# installer's exact npm invocation and expected package location.
+# The installer must never invoke npm or provision Node packages.
 cat > "$PERM_ROOT/bin/npm" <<'MOCK_NPM'
 #!/usr/bin/env bash
-set -euo pipefail
-prefix=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --prefix) prefix="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-[ -n "$prefix" ] || exit 2
-mkdir -p "$prefix/node_modules/@opencode/plugin"
-printf '%s\n' '{"name":"@opencode/plugin","version":"2.2.5"}' > "$prefix/node_modules/@opencode/plugin/package.json"
+printf '%s\n' called > "${MOCK_NPM_CALLED_FILE:?}"
+exit 99
 MOCK_NPM
 chmod +x "$PERM_ROOT/bin/npm"
 
 set +e
 PATH="$PERM_ROOT/bin:$PATH" HOME="$PERM_HOME" XDG_CONFIG_HOME="$PERM_ROOT/xdg" \
   OPENCODE_CONFIG_DIR="$PERM_ROOT/opencode" MANUL_RUNTIME_DIR="$PERM_RUN" MANUL_CANONICAL_DIR="$PERM_CANON" \
+  MOCK_NPM_CALLED_FILE="$PERM_ROOT/npm-called" \
   "$SCRIPT_DIR/install-manul-symlinks.sh" >/tmp/manul-perm-installer.out 2>&1
 PERM_RC=$?
 set -e
@@ -197,11 +195,34 @@ PERM_OPENCODE_TOOL_CUSTOM="$PERM_ROOT/opencode/tools/manul_fiteo_create_task.ts"
 if [ "$PERM_RC" -eq 0 ] &&
    [ ! -e "$PERM_OPENCODE_TOOL_GLOBAL" ] && [ ! -L "$PERM_OPENCODE_TOOL_GLOBAL" ] &&
    [ ! -e "$PERM_OPENCODE_TOOL_XDG" ] && [ ! -L "$PERM_OPENCODE_TOOL_XDG" ] &&
-   [ ! -e "$PERM_OPENCODE_TOOL_CUSTOM" ] && [ ! -L "$PERM_OPENCODE_TOOL_CUSTOM" ]; then
-  ok "Installer removes legacy Manul registrations from default, XDG, and custom OpenCode tool dirs"
+   [ -f "$PERM_OPENCODE_TOOL_CUSTOM" ] && [ "$(cat "$PERM_OPENCODE_TOOL_CUSTOM")" = "operator-owned legacy tool name" ]; then
+  ok "Installer removes only Manul symlinks and preserves regular operator-owned files"
 else
-  fail "Installer left a legacy Manul tool registered globally (rc=$PERM_RC)"
+  fail "Installer left a legacy Manul symlink or changed an operator-owned file (rc=$PERM_RC)"
 fi
+
+if [ "$PERM_RC" -eq 0 ] &&
+   [ ! -e "$PERM_RUN/manul_fiteo_create_task.ts" ] && [ ! -L "$PERM_RUN/manul_fiteo_create_task.ts" ]; then
+  ok "Installer removes the obsolete Manul runtime plugin symlink"
+else
+  fail "Installer left the obsolete Manul runtime plugin symlink"
+fi
+
+if [ "$PERM_RC" -eq 0 ] &&
+   [ ! -e "$PERM_CANON/node_modules/@opencode/plugin" ] &&
+   [ -f "$PERM_CANON/node_modules/operator-package/package.json" ]; then
+  ok "Installer removes only the retired @opencode/plugin package and preserves unrelated Node modules"
+else
+  fail "Installer removed unrelated Node modules or retained the retired plugin package"
+fi
+
+for obsolete_helper in todo-local-mcp-url.sh todo-mcp-client.py todo-remote-create-task.py; do
+  if [ ! -L "$PERM_RUN/$obsolete_helper" ] && [ ! -e "$PERM_RUN/$obsolete_helper" ]; then
+    ok "Installer removes obsolete Manul helper symlink: $obsolete_helper"
+  else
+    fail "Installer retained obsolete Manul helper symlink: $obsolete_helper"
+  fi
+done
 
 if [ -f "$PERM_ROOT/opencode/tools/operator_tool.ts" ] &&
    [ "$(cat "$PERM_ROOT/opencode/tools/operator_tool.ts")" = "operator-owned tool" ]; then
@@ -210,11 +231,10 @@ else
   fail "Installer modified an unrelated operator-owned OpenCode tool"
 fi
 
-if [ -f "$PERM_CANON/node_modules/@opencode/plugin/package.json" ] &&
-   grep -Fq '"version":"2.2.5"' "$PERM_CANON/node_modules/@opencode/plugin/package.json"; then
-  ok "Installer provisions @opencode/plugin beside the canonical Manul tool"
+if [ ! -e "$PERM_ROOT/npm-called" ]; then
+  ok "Installer does not invoke npm or download dependencies"
 else
-  fail "Installer did not provision the OpenCode V2 plugin dependency"
+  fail "Installer unexpectedly invoked npm"
 fi
 
 if [ -L "$PERM_RUN/agent-task-runner.sh" ] && [ -x "$PERM_RUN/agent-task-runner.sh" ]; then
@@ -265,27 +285,28 @@ fi
 
 # The installer accepts any supported agent runtime and fails only when
 # none of OpenClaw, OpenCode, Codex CLI, or Claude Code is available.
-if grep -q 'for cmd in bash git gh jq sqlite3 curl crontab' "$SCRIPT_DIR/install-manul.sh"; then
-  ok "Installer requires core tools (bash git gh jq sqlite3 curl crontab)"
+if grep -q 'for cmd in bash git gh jq sqlite3 curl crontab python3' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer requires core tools (bash git gh jq sqlite3 curl crontab python3)"
 else
   fail "Installer core-tool check is missing"
 fi
 
 # The installer must detect all supported CLI runtimes rather than requiring
 # OpenClaw specifically.
-if grep -q 'command -v opencode' "$SCRIPT_DIR/install-manul.sh" \
-   && grep -q 'command -v codex' "$SCRIPT_DIR/install-manul.sh" \
-   && grep -q 'command -v claude' "$SCRIPT_DIR/install-manul.sh" \
-   && grep -q 'openclaw, opencode, codex, or claude' "$SCRIPT_DIR/install-manul.sh"; then
-  ok "Installer accepts OpenClaw, OpenCode, Codex CLI, and Claude Code"
+if grep -q 'opencode) RUNTIME_COMMAND="opencode"' "$SCRIPT_DIR/install-manul.sh" \
+   && grep -q 'codex) RUNTIME_COMMAND="codex"' "$SCRIPT_DIR/install-manul.sh" \
+   && grep -q 'claude-code) RUNTIME_COMMAND="claude"' "$SCRIPT_DIR/install-manul.sh" \
+   && grep -q 'openclaw) RUNTIME_COMMAND="openclaw"' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer validates the selected OpenClaw, OpenCode, Codex, or Claude Code runtime"
 else
-  fail "Installer still hard-requires OpenClaw"
+  fail "Installer does not validate each selected backend runtime"
 fi
 
-if grep -q 'No agent runtime found' "$SCRIPT_DIR/install-manul.sh"; then
-  ok "Installer fails closed when neither runtime is present"
+if grep -q 'Selected agent runtime' "$SCRIPT_DIR/install-manul.sh" \
+   && grep -q 'Unsupported automation.agentRuntime' "$SCRIPT_DIR/install-manul.sh"; then
+  ok "Installer fails clearly for an unavailable or unsupported selected runtime"
 else
-  fail "Installer does not fail when no runtime is present"
+  fail "Installer does not report selected runtime failures clearly"
 fi
 
 SCRIPT_COUNT=$(awk '/^SCRIPTS=\(/,/^\)/' \
@@ -301,7 +322,7 @@ fi
 # task-source adapters (added in 9415b99), every poll cycle dies with
 # `task_source_configured_sources: command not found` and the generic
 # provider path silently degrades to legacy GitHub Issues only.
-for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh task-source-todo-local.sh task-source-todo-remote.sh todo-task-source-utils.sh todo-mcp-client.py; do
+for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh task-source-todo-local.sh task-source-todo-remote.sh todo-task-source-utils.sh; do
   if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
        | grep -q "\"$_ts\""; then
     ok "Installer declares $_ts"
@@ -309,9 +330,9 @@ for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh
     fail "Installer does not declare $_ts (generic task-source adapter missing from runtime)"
   fi
 done
-grep -q 'enabled Todo MCP task source requires python3' "$SCRIPT_DIR/install-manul.sh" \
-  && ok "Installer requires python3 only when a Todo MCP source is enabled" \
-  || fail "Installer does not validate python3 for enabled Todo MCP sources"
+grep -q 'for cmd in bash git gh jq sqlite3 curl crontab python3' "$SCRIPT_DIR/install-manul.sh" \
+  && ok "Installer validates Python required by core runtime paths" \
+  || fail "Installer does not validate the core Python runtime dependency"
 
 # Runtime session-state helper must be deployed alongside the execution controller.
 if awk '/^SCRIPTS=\(/,/^\)/' "$SCRIPT_DIR/install-manul-symlinks.sh" \
@@ -337,7 +358,7 @@ CANON="$SELFHEAL_ROOT/canonical"
 RUN1="$SELFHEAL_ROOT/runtime1"
 RUN2="$SELFHEAL_ROOT/runtime2"
 mkdir -p "$CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "$CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
@@ -429,7 +450,7 @@ CLI_ROOT="$(mktemp -d /tmp/manul-cli-XXXXXX)"
 CANON="$CLI_ROOT/canonical"
 RUN="$CLI_ROOT/runtime"
 mkdir -p "$CANON"
-cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.ts "$CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
 [ -f "$SCRIPT_DIR/state/manul.db" ] && cp "$SCRIPT_DIR/state/manul.db" "$CANON/" 2>/dev/null || true
 
 # Deploy a real runtime so the CLI can actually run

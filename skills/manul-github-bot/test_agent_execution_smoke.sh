@@ -220,10 +220,6 @@ OPENCODE_PROOF_FILE="$TEST_ROOT/opencode-proof"
 cat >"$FAKE_BIN/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
-  printf '%s\n' 'caracal-rag connected'
-  exit 0
-fi
 printf 'called\n' >>"$OPENCODE_PROOF_FILE"
 printf 'args=%s\n' "$*" >>"$OPENCODE_PROOF_FILE"
 printf '%s\n' '{"type":"text","part":{"text":"TASK_DONE opencode-role-routing"}}'
@@ -232,8 +228,6 @@ chmod +x "$FAKE_BIN/opencode"
 export OPENCODE_PROOF_FILE
 export AGENT_RUNTIME=opencode
 export OPENCODE_BIN="$FAKE_BIN/opencode"
-export CARACAL_MCP_URL="http://127.0.0.1:3500/mcp"
-export CARACAL_ACCESS_TOKEN="test-caracal-token"
 
 OPENCODE_CTX_FILE="$MANUL_DIR/state/tasks/opencode-role.ctx.json"
 OPENCODE_RESULT_FILE="$MANUL_DIR/state/tasks/opencode-role.executor-result"
