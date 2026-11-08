@@ -4208,6 +4208,15 @@ PROMPT_EOF
     # Append multiline task context (literal, no shell expansion)
     printf '%s\n' "$TASK_CONTEXT" >> "$TASK_PROMPT_FILE"
 
+    # The numeric Manul Fiteo share recipient is non-secret runtime context.
+    # Agents need it only to pass the native MCP shares[] argument; never guess.
+    if [[ "${FITEO_MANUL_SHARE_USER_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+      cat >> "$TASK_PROMPT_FILE" <<FITEO_RECIPIENT_CONTEXT
+Fiteo root-task share recipient user ID: "${FITEO_MANUL_SHARE_USER_ID}"
+Use this exact value in shares[].userId with permission EDITOR_AND_VIEWER.
+FITEO_RECIPIENT_CONTEXT
+    fi
+
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_EOF'
 ## Command Intent Guidance
 Before taking any action, determine whether this task is:
