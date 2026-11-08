@@ -207,102 +207,16 @@ PY
 }
 
 
-# Keep provider/global config immutable. OpenCode's global tool directory is
-# shared by aicode and interactive sessions, so Manul's Fiteo helper must be
-# visible only from this task workspace. The runtime installer removes any
-# obsolete global registration; this temporary project-local link is cleaned
-# on every adapter exit.
+# OpenCode MCP servers and tools are operator-owned. Manul never installs a
+# project/global custom plugin, changes the operator's MCP definitions, or
+# requires any optional provider such as Caracal.
 OPENCODE_TASK_CONFIG_DIR=""
-OPENCODE_MANUL_TOOL_SOURCE=""
-OPENCODE_MANUL_TOOL_TARGET=""
-OPENCODE_MANUL_TOOL_CREATED=false
-OPENCODE_PROJECT_PLUGINS_DIR=""
-OPENCODE_PROJECT_PLUGINS_DIR_CREATED=false
-OPENCODE_PROJECT_CONFIG_DIR=""
-OPENCODE_PROJECT_CONFIG_DIR_CREATED=false
 
 cleanup_opencode_task_config() {
-    if [ "$OPENCODE_MANUL_TOOL_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_MANUL_TOOL_TARGET:-}" ] &&
-       [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        _cleanup_tool_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
-        if [ -n "${OPENCODE_MANUL_TOOL_SOURCE:-}" ] &&
-           [ "$_cleanup_tool_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-            rm -f -- "$OPENCODE_MANUL_TOOL_TARGET"
-        fi
-    fi
-    if [ "$OPENCODE_PROJECT_PLUGINS_DIR_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_PROJECT_PLUGINS_DIR:-}" ] &&
-       [ -d "$OPENCODE_PROJECT_PLUGINS_DIR" ] && [ ! -L "$OPENCODE_PROJECT_PLUGINS_DIR" ]; then
-        rmdir -- "$OPENCODE_PROJECT_PLUGINS_DIR" 2>/dev/null || true
-    fi
-    if [ "$OPENCODE_PROJECT_CONFIG_DIR_CREATED" = "true" ] &&
-       [ -n "${OPENCODE_PROJECT_CONFIG_DIR:-}" ] &&
-       [ -d "$OPENCODE_PROJECT_CONFIG_DIR" ] && [ ! -L "$OPENCODE_PROJECT_CONFIG_DIR" ]; then
-        rmdir -- "$OPENCODE_PROJECT_CONFIG_DIR" 2>/dev/null || true
-    fi
     if [ -n "${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
         rm -rf -- "$OPENCODE_TASK_CONFIG_DIR"
         OPENCODE_TASK_CONFIG_DIR=""
     fi
-}
-
-prepare_opencode_manul_tool() {
-    local project_config plugins_dir existing_real
-    OPENCODE_MANUL_TOOL_SOURCE="$(realpath -e -- "$MANUL_SCRIPT_DIR/manul_fiteo_create_task.ts" 2>/dev/null || true)"
-    if [ -z "$OPENCODE_MANUL_TOOL_SOURCE" ] || [ ! -f "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-        log "Manul Fiteo V2 plugin source is missing from the canonical runtime"
-        return 1
-    fi
-
-    project_config="$OPT_WORKSPACE/.opencode"
-    plugins_dir="$project_config/plugins"
-    OPENCODE_PROJECT_CONFIG_DIR="$project_config"
-    OPENCODE_PROJECT_PLUGINS_DIR="$plugins_dir"
-    OPENCODE_MANUL_TOOL_TARGET="$plugins_dir/manul_fiteo_create_task.ts"
-
-    # Do not follow project-controlled symlinks or overwrite existing config.
-    if [ -L "$project_config" ] || { [ -e "$project_config" ] && [ ! -d "$project_config" ]; }; then
-        log "refusing to inject Manul tool: workspace .opencode is not a real directory"
-        return 1
-    fi
-    if [ ! -d "$project_config" ]; then
-        if ! mkdir -- "$project_config"; then return 1; fi
-        OPENCODE_PROJECT_CONFIG_DIR_CREATED=true
-    fi
-
-    if [ -L "$plugins_dir" ] || { [ -e "$plugins_dir" ] && [ ! -d "$plugins_dir" ]; }; then
-        log "refusing to inject Manul tool: workspace .opencode/plugins is not a real directory"
-        return 1
-    fi
-    if [ ! -d "$plugins_dir" ]; then
-        if ! mkdir -- "$plugins_dir"; then return 1; fi
-        OPENCODE_PROJECT_PLUGINS_DIR_CREATED=true
-    fi
-
-    if [ -L "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        existing_real="$(realpath -e -- "$OPENCODE_MANUL_TOOL_TARGET" 2>/dev/null || true)"
-        if [ "$existing_real" = "$OPENCODE_MANUL_TOOL_SOURCE" ]; then
-            # This is a stale link from an interrupted previous Manul attempt,
-            # or an already prepared link owned by this exact runtime. Adopt it
-            # so the EXIT trap removes it after the current invocation.
-            OPENCODE_MANUL_TOOL_CREATED=true
-            log "adopted existing Manul Fiteo V2 plugin link for this task invocation"
-            return 0
-        fi
-        log "refusing to overwrite an existing workspace V2 plugin symlink"
-        return 1
-    fi
-    if [ -e "$OPENCODE_MANUL_TOOL_TARGET" ]; then
-        log "refusing to overwrite an existing workspace V2 plugin"
-        return 1
-    fi
-    if ! ln -s "$OPENCODE_MANUL_TOOL_SOURCE" "$OPENCODE_MANUL_TOOL_TARGET"; then
-        log "failed to create task-local Manul Fiteo V2 plugin link"
-        return 1
-    fi
-    OPENCODE_MANUL_TOOL_CREATED=true
-    log "registered Manul Fiteo V2 plugin only in the active task workspace"
 }
 
 trap cleanup_opencode_task_config EXIT HUP INT TERM
@@ -366,47 +280,13 @@ if ! prepare_opencode_manul_tool; then
     exit 78
 fi
 
-# Caracal is a required capability for Manul's OpenCode runtime. Never start
-# a task with a half-configured MCP definition: OpenCode resolves env placeholders
-# in the adapter's child process, not from an interactive OpenCode UI session.
-# Fallback to the single Caracal provider (~/.caracal/env.sh) for credentials
-# when the daemon has not already provided them. The provider loads the token
-# from secrets.yaml and resolves the live loopback URL via caracal-rag check.
-# Manul-specific context (MANUL_TASK_WORKSPACE_ROOT, etc.) is preserved.
-# shellcheck source=~/.caracal/env.sh
-if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
-   [[ "${CARACAL_MCP_URL:-}" =~ ^http://127\.0\.0\.1:0/ ]]; then
-    # Try the Caracal provider. Use CARACAL_RESOLVE_LIVE=1 to force a fresh
-    # healthcheck so a long-running daemon cannot pin a stale port.
-    if CARACAL_RESOLVE_LIVE=1 . "$HOME/.caracal/env.sh" 2>/dev/null; then
-        log "resolved Caracal MCP from ~/.caracal/env.sh"
-    else
-        log "required Caracal MCP URL/token is missing or disconnected"
-        printf '{"status":"FAILED","task_id":"%s","exit_code":78,"summary":"Required Caracal MCP is not configured for this Manul execution","session_id":"","duration_s":0,"failure_code":"PRE_EXECUTION_FAILURE","diagnostics":{"stage":"caracal_mcp_config","agent_started":false}}\n' "$OPT_TASK_ID"
-        exit 78
-    fi
-fi
-export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+# Caracal and other optional MCP servers are configured by the operator
+# in OpenCode itself. Manul does not source their env files, inject them into
+# task config, or require them to be connected before starting a task.
 
-# The daemon can outlive an aicode launch. Refresh Fiteo credentials from the
-# latest runtime file for every task, while leaving unrelated inherited values
-# untouched. The endpoint and PAT are stored atomically by manul-env.sh.
-_FITEO_RUNTIME_ENV_FILE="$MANUL_DIR/.env"
-if [ -f "$_FITEO_RUNTIME_ENV_FILE" ]; then
-    _fiteo_runtime_values="$(bash -c 'set -e; . "$1" >/dev/null 2>&1; printf "%s|%s|%s" "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${FITEO_MANUL_SHARE_USER_ID:-}"' _ "$_FITEO_RUNTIME_ENV_FILE" 2>/dev/null)" || _fiteo_runtime_values=""
-    IFS="|" read -r _fiteo_runtime_base_url _fiteo_runtime_pat _fiteo_runtime_share_user_id <<< "$_fiteo_runtime_values"
-    if [ -n "$_fiteo_runtime_base_url" ] && [ -n "$_fiteo_runtime_pat" ]; then
-        FITEO_BASE_URL="$_fiteo_runtime_base_url"
-        FITEO_MANUL_PAT="$_fiteo_runtime_pat"
-        export FITEO_BASE_URL FITEO_MANUL_PAT
-        if [[ "$_fiteo_runtime_share_user_id" =~ ^[1-9][0-9]*$ ]]; then
-            FITEO_MANUL_SHARE_USER_ID="$_fiteo_runtime_share_user_id"
-            export FITEO_MANUL_SHARE_USER_ID
-        fi
-    else
-        unset FITEO_BASE_URL FITEO_MANUL_PAT 2>/dev/null || true
-    fi
-fi
+# The Fiteo MCP server and its credentials are operator-owned OpenCode
+# configuration. Never shadow it with Manul PATs or inject an alternative
+# server definition into this task. Task creation uses the native MCP tool.
 
 TODO_LOCAL_MCP_AVAILABLE=0
 TODO_LOCAL_MCP_CONNECTED=0
