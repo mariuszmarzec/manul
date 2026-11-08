@@ -42,18 +42,7 @@ todo_task_repository_catalog_path() {
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
-  local catalog_json matches_json match_json entry_json repositories_json canonical_repository skills_json
-
-  catalog_file="$(todo_task_repository_catalog_path)"
-  [ -r "$catalog_file" ] || {
-    echo "repository catalog is unavailable: $catalog_file" >&2
-    return 2
-  }
-  catalog_json="$(cat "$catalog_file")" || return 2
-  jq -e '.repositories | type == "array"' <<<"$catalog_json" >/dev/null 2>&1 || {
-    echo "repository catalog has no repositories array" >&2
-    return 2
-  }
+  local catalog_json="" catalog_valid=false matches_json match_json entry_json="" repositories_json canonical_repository skills_json="[]"
 
   description="$(jq -r '.description // ""' <<<"$task_json")"
   # The leading /manul command is a trigger, not a repository alias.
@@ -66,6 +55,18 @@ todo_task_resolve_repository() {
   )"
   candidate_count="$(printf '%s\n' "$explicit_matches" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
 
+  # The catalog is an optional alias/skills index. Explicit GitHub URLs do
+  # not depend on it; aliases do.
+  catalog_file="$(todo_task_repository_catalog_path)"
+  if [ -r "$catalog_file" ]; then
+    catalog_json="$(cat "$catalog_file" 2>/dev/null || true)"
+    if jq -e '.repositories | type == "array"' <<<"$catalog_json" >/dev/null 2>&1; then
+      catalog_valid=true
+    else
+      catalog_json=""
+    fi
+  fi
+
   if [ "$candidate_count" -gt 1 ]; then
     echo "Todo task mentions multiple GitHub repositories; routing is ambiguous" >&2
     return 1
@@ -76,6 +77,10 @@ todo_task_resolve_repository() {
     method="explicit_github_url"
     matched_alias=""
   else
+    if [ "$catalog_valid" != "true" ]; then
+      echo "project catalog is unavailable; alias routing is disabled and this task will be report-only" >&2
+      return 3
+    fi
     matches_json="$(jq -c --arg description "$description" '
       def norm:
         ascii_downcase
@@ -124,15 +129,14 @@ todo_task_resolve_repository() {
     return 2
   }
 
-  entry_json="$(jq -c --arg repo "$repository" '
-    [.repositories[] | select((.name | ascii_downcase) == ($repo | ascii_downcase))]
-    | first // empty
-  ' <<<"$catalog_json")" || return 2
-  [ -n "$entry_json" ] || {
-    echo "repository $repository is not in the curated project catalog" >&2
-    return 1
-  }
-  canonical_repository="$(jq -r '.name' <<<"$entry_json")"
+  if [ "$catalog_valid" = "true" ]; then
+    entry_json="$(jq -c --arg repo "$repository" '
+      [.repositories[] | select((.name | ascii_downcase) == ($repo | ascii_downcase))]
+      | first // empty
+    ' <<<"$catalog_json")" || return 2
+  fi
+  canonical_repository="$(jq -r '.name // empty' <<<"${entry_json:-{}}")"
+  [ -n "$canonical_repository" ] || canonical_repository="$repository"
 
   repositories_json="$(todo_mcp_source_repositories "$source_json")" || return 2
   if ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$repositories_json" >/dev/null 2>&1; then
@@ -140,7 +144,9 @@ todo_task_resolve_repository() {
     return 1
   fi
 
-  skills_json="$(jq -c '.skills // [] | if type == "array" then map(select(type == "string")) else [] end' <<<"$entry_json")"
+  if [ -n "$entry_json" ]; then
+    skills_json="$(jq -c '.skills // [] | if type == "array" then map(select(type == "string")) else [] end' <<<"$entry_json")" || skills_json="[]"
+  fi
   jq -cn \
     --arg repository "$canonical_repository" \
     --arg method "$method" \
@@ -187,7 +193,12 @@ todo_mcp_source_call() {
     echo "todo-mcp: unsupported source type: $source_type" >&2
     return 2
   fi
-  python3 "$TODO_TASK_SOURCE_DIR/todo-mcp-client.py" \
+  local client="${TODO_MCP_CLIENT:-}"
+  if [ -z "$client" ] || [ ! -r "$client" ] || ! command -v python3 >/dev/null 2>&1; then
+    echo "todo-mcp: shared Todo MCP client is unavailable; Todo sources are optional" >&2
+    return 2
+  fi
+  python3 "$client" \
     --url "$url" "${token_args[@]}" --tool "$tool" --arguments "$arguments"
 }
 
