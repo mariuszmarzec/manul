@@ -191,8 +191,7 @@ else
   fail "Bootstrap overwrote or failed to append provider configuration"
 fi
 
-# Caracal is not a Manul dependency. Existing unknown legacy keys are
-# preserved as operator data, but bootstrap must not create or refresh them.
+# Legacy Caracal variables are neither loaded nor retained by Manul.
 LEGACY_CARACAL="$TMP/legacy-caracal"
 mkdir -p "$LEGACY_CARACAL"
 cat > "$LEGACY_CARACAL/.env" <<'EOF'
@@ -201,14 +200,23 @@ CARACAL_MCP_URL=http://127.0.0.1:1234/legacy
 CARACAL_ACCESS_TOKEN=legacy-token
 EOF
 chmod 600 "$LEGACY_CARACAL/.env"
-unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN 2>/dev/null || true
+(
+  unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$LEGACY_CARACAL"
+  if [ -z "${CARACAL_MCP_URL:-}" ] && [ -z "${CARACAL_ACCESS_TOKEN:-}" ]; then
+    ok "Manul does not load legacy Caracal environment values"
+  else
+    fail "Manul loaded legacy Caracal environment values"
+  fi
+)
 LEGACY_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$LEGACY_CARACAL")"
-if grep -q '^CARACAL_MCP_URL=http://127.0.0.1:1234/legacy$' "$LEGACY_ENV_FILE" &&
-   grep -q '^CARACAL_ACCESS_TOKEN=legacy-token$' "$LEGACY_ENV_FILE"; then
-  ok "Bootstrap does not own or refresh legacy Caracal environment keys"
+if ! grep -qE '^[[:space:]]*(export[[:space:]]+)?(CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$LEGACY_ENV_FILE"; then
+  ok "Bootstrap removes obsolete Caracal endpoint and token values"
 else
-  fail "Bootstrap changed legacy unknown operator environment keys"
+  fail "Bootstrap retained obsolete Caracal credentials"
 fi
+
 
 # Fiteo MCP credentials are refreshed as one pair even when no Todo remote
 # task source is configured, preventing a long-lived daemon from keeping a
