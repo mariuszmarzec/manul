@@ -434,24 +434,34 @@ def deep_merge(left, right):
         return left + right
     return right
 
+global_config_dir = Path(xdg_home) / "opencode"
 paths = [
-    Path(xdg_home) / "opencode/opencode.json",
-    Path(xdg_home) / "opencode/opencode.jsonc",
+    global_config_dir / "config.json",
+    global_config_dir / "opencode.json",
+    global_config_dir / "opencode.jsonc",
+    Path(home) / ".config/opencode/config.json",
     Path(home) / ".config/opencode/opencode.json",
     Path(home) / ".config/opencode/opencode.jsonc",
-    Path("/etc/opencode/opencode.json"),
-    Path("/etc/opencode/opencode.jsonc"),
-    Path("/Library/Application Support/opencode/opencode.json"),
-    Path("/Library/Application Support/opencode/opencode.jsonc"),
+]
+if custom_config:
+    paths.append(Path(custom_config))
+paths.extend([
     Path(project_root) / "opencode.json",
     Path(project_root) / "opencode.jsonc",
     Path(project_root) / ".opencode/opencode.json",
     Path(project_root) / ".opencode/opencode.jsonc",
-]
-if custom_config:
-    paths.append(Path(custom_config))
+    Path(home) / ".opencode/opencode.json",
+    Path(home) / ".opencode/opencode.jsonc",
+])
 if custom_dir:
     paths.extend([Path(custom_dir) / "opencode.json", Path(custom_dir) / "opencode.jsonc"])
+managed_paths = {
+    Path("/etc/opencode/opencode.json"),
+    Path("/etc/opencode/opencode.jsonc"),
+    Path("/Library/Application Support/opencode/opencode.json"),
+    Path("/Library/Application Support/opencode/opencode.jsonc"),
+}
+paths.extend(sorted(managed_paths))
 
 def canonical_action(action):
     return {"bash": "shell", "task": "subagent", "write": "edit", "patch": "edit"}.get(action, action)
@@ -478,6 +488,7 @@ def collect_permission_rules(obj):
 names = set()
 operator_permissions = []
 scan_ok = True
+managed_permission_policy = False
 managed_paths = {
     Path("/etc/opencode/opencode.json"),
     Path("/etc/opencode/opencode.jsonc"),
@@ -506,8 +517,12 @@ for path in dict.fromkeys(paths):
         # under mcp. Treat them as occupied too.
         names.update(k for k, v in mcp.items() if k not in {"servers", "timeout"} and isinstance(v, dict))
     # Managed settings are applied by OpenCode after inline config and must
-    # retain their higher priority. Do not copy/replace their permission rules.
-    if path not in managed_paths:
+    # retain their higher priority. They may intentionally deny task access;
+    # do not override or silently discard an administrator permission policy.
+    if path in managed_paths:
+        if "permissions" in obj or "permission" in obj:
+            managed_permission_policy = True
+    else:
         operator_permissions.extend(collect_permission_rules(obj))
 
 existing_inline = {}
@@ -527,6 +542,9 @@ if inline_content:
 # If a local config layer cannot be parsed, fail rather than replacing an
 # operator permission array we could not preserve.
 if not scan_ok:
+    raise SystemExit(2)
+if managed_permission_policy:
+    print("managed OpenCode permission policy is present; refusing to override administrator rules with a task overlay", file=sys.stderr)
     raise SystemExit(2)
 
 # Keep stable, Manul-specific names. Any collision means the operator owns the
