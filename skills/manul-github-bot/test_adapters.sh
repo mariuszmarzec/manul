@@ -1539,7 +1539,7 @@ test_opencode_optional_mcp_overlay() {
   home="$tmp/home"
   workspace="$home/.manul/workspace/ws-opencode-optional"
   mkdir -p "$tmp/bin" "$home/.config/opencode/agents" "$home/.manul" "$workspace"
-  printf '%s\\n' 'description: optional task agent' > "$home/.config/opencode/agents/coder.md"
+  printf '%s\n' 'description: optional task agent' > "$home/.config/opencode/agents/coder.md"
   cat >"$home/.config/opencode/opencode.jsonc" <<'JSONC'
 {
   // Operator-owned MCP definitions must survive the temporary overlay.
@@ -1573,12 +1573,12 @@ fi
 cp "${OPENCODE_CONFIG:?effective task config missing}" "${MOCK_OVERLAY_FILE:?}"
 : > "${MOCK_TASK_STARTED_FILE:?}"
 cat >/dev/null
-printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_optional_overlay","part":{"type":"step-start"}}'
-printf '%s\\n' '{"type":"text","timestamp":1100,"sessionID":"ses_optional_overlay","part":{"type":"text","text":"TASK_DONE optional MCP works"}}'
-printf '%s\\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_optional_overlay","part":{"type":"step-finish"}}'
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_optional_overlay","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_optional_overlay","part":{"type":"text","text":"TASK_DONE optional MCP works"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_optional_overlay","part":{"type":"step-finish"}}'
 MOCK
   chmod +x "$tmp/bin/opencode"
-  printf '%s\\n' "Use optional Fiteo MCP when configured" >"$tmp/prompt"
+  printf '%s\n' "Use optional Fiteo MCP when configured" >"$tmp/prompt"
 
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     OPENCODE_CONFIG="$home/.config/opencode/opencode.jsonc" \
@@ -1610,7 +1610,10 @@ MOCK
   ' "$tmp/overlay.json" >/dev/null \
     && ok "Overlay preserves operator MCP and adds only the optional namespaced Fiteo server" \
     || fail "Task overlay lost or overwrote MCP configuration"
-}# 10c. Shared Todo MCP helpers are optional and namespaced when reachable.
+}
+
+# ---------------------------------------------------------------------------
+# 10c. Shared Todo MCP helpers are optional and namespaced when reachable.
 test_opencode_todo_local_mcp() {
   local tmp home workspace out rc
   tmp="$(mktemp -d)"
@@ -1633,7 +1636,6 @@ test_opencode_todo_local_mcp() {
   }
 }
 JSON
-  cp "$SCRIPT_DIR/../.." "$tmp/repository" 2>/dev/null || true
   : >"$home/.globalskills/aicode/todo-mcp-client.py"
   cat >"$home/.globalskills/aicode/todo-local-mcp-url.sh" <<'HELPER'
 todo_local_mcp_resolve_url() {
@@ -1671,12 +1673,12 @@ fi
 cp "${OPENCODE_CONFIG:?effective task config missing}" "${MOCK_OVERLAY_FILE:?}"
 : > "${MOCK_TASK_STARTED_FILE:?}"
 cat >/dev/null
-printf '%s\\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_todo_overlay","part":{"type":"step-start"}}'
-printf '%s\\n' '{"type":"text","timestamp":1100,"sessionID":"ses_todo_overlay","part":{"type":"text","text":"TASK_DONE optional Todo MCP"}}'
-printf '%s\\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_todo_overlay","part":{"type":"step-finish"}}'
+printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_todo_overlay","part":{"type":"step-start"}}'
+printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_todo_overlay","part":{"type":"text","text":"TASK_DONE optional Todo MCP"}}'
+printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_todo_overlay","part":{"type":"step-finish"}}'
 MOCK
   chmod +x "$tmp/bin/python3" "$tmp/bin/opencode"
-  printf '%s\\n' "Use Todo local MCP when available" >"$tmp/prompt"
+  printf '%s\n' "Use Todo local MCP when available" >"$tmp/prompt"
 
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" MOCK_REAL_PYTHON3="$real_python3" OPENCODE_BIN="$tmp/bin/opencode" \
     MOCK_TODO_PROBE_STATUS=200 MOCK_OVERLAY_FILE="$tmp/connected-overlay.json" \
