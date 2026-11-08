@@ -336,6 +336,7 @@ if ! env -u PYTHONHOME -u PYTHONPATH python3 - "$_OVERLAY_JSON_FILE" "$_workspac
     "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${TODO_LOCAL_MCP_URL:-}" \
     "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$HOME" "${XDG_CONFIG_HOME:-$HOME/.config}" \
     "$_OPENCODE_SCAN_ROOT" "${OPENCODE_CONFIG_CONTENT:-}" 2>"$_OVERLAY_ERROR_FILE" <<'PY_MANUL_OVERLAY'
+import fnmatch
 import json
 import os
 import re
@@ -453,16 +454,21 @@ paths.extend([
     Path(project_root) / ".opencode/opencode.jsonc",
     Path(home) / ".opencode/opencode.json",
     Path(home) / ".opencode/opencode.jsonc",
+    Path(home) / "Library/Application Support/opencode/config.json",
+    Path(home) / "Library/Application Support/opencode/opencode.json",
+    Path(home) / "Library/Application Support/opencode/opencode.jsonc",
 ])
 if custom_dir:
-    paths.extend([Path(custom_dir) / "opencode.json", Path(custom_dir) / "opencode.jsonc"])
+    paths.extend([Path(custom_dir) / "config.json", Path(custom_dir) / "opencode.json", Path(custom_dir) / "opencode.jsonc"])
 managed_paths = {
+    Path("/etc/opencode/config.json"),
     Path("/etc/opencode/opencode.json"),
     Path("/etc/opencode/opencode.jsonc"),
+    Path("/Library/Application Support/opencode/config.json"),
     Path("/Library/Application Support/opencode/opencode.json"),
     Path("/Library/Application Support/opencode/opencode.jsonc"),
 }
-paths.extend(sorted(managed_paths))
+paths.extend(managed_paths)
 
 def canonical_action(action):
     return {"bash": "shell", "task": "subagent", "write": "edit", "patch": "edit"}.get(action, action)
@@ -491,15 +497,10 @@ def collect_permission_rules(obj):
     return rules
 
 names = set()
+tool_rule_patterns = set()
 operator_permissions = []
 scan_ok = True
 managed_permission_policy = False
-managed_paths = {
-    Path("/etc/opencode/opencode.json"),
-    Path("/etc/opencode/opencode.jsonc"),
-    Path("/Library/Application Support/opencode/opencode.json"),
-    Path("/Library/Application Support/opencode/opencode.jsonc"),
-}
 for path in dict.fromkeys(paths):
     if not path.is_file():
         continue
@@ -513,6 +514,13 @@ for path in dict.fromkeys(paths):
         scan_ok = False
         print(f"OpenCode config {path} is not a JSON object", file=sys.stderr)
         continue
+    # Existing tool selectors are operator policy too. The overlay may add
+    # its wildcard only when no existing rule already matches that concrete
+    # tool name; this preserves both explicit allows and explicit denials.
+    tools_obj = obj.get("tools")
+    if isinstance(tools_obj, dict):
+        tool_rule_patterns.update(k for k, v in tools_obj.items() if isinstance(k, str))
+
     mcp = obj.get("mcp") or {}
     if isinstance(mcp, dict):
         servers = mcp.get("servers")
@@ -536,6 +544,9 @@ if inline_content:
         parsed = parse_jsonc(inline_content)
         if isinstance(parsed, dict):
             existing_inline = parsed
+            tools_obj = parsed.get("tools")
+            if isinstance(tools_obj, dict):
+                tool_rule_patterns.update(k for k, v in tools_obj.items() if isinstance(k, str))
             mcp = parsed.get("mcp") or {}
             if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
                 names.update(mcp["servers"].keys())
@@ -564,6 +575,16 @@ tools = {}
 if fiteo_url and fiteo_pat:
     if "manul-fiteo" in names:
         print("operator MCP 'manul-fiteo' already exists; leaving it untouched", file=sys.stderr)
+    elif any(fnmatch.fnmatchcase("manul_fiteo_todo_create_task", pattern) for pattern in tool_rule_patterns):
+        print("an operator tool rule already matches the Manul Fiteo tool; preserving it without adding an override", file=sys.stderr)
+        servers["manul-fiteo"] = {
+            "type": "remote",
+            "url": "{env:FITEO_BASE_URL}/mcp",
+            "oauth": False,
+            "disabled": False,
+            "headers": {"Authorization": "Bearer {env:FITEO_MANUL_PAT}"},
+        }
+        permissions.append({"action": "manul_fiteo_*", "resource": "*", "effect": "allow"})
     elif scan_ok:
         servers["manul-fiteo"] = {
             "type": "remote",
@@ -579,6 +600,15 @@ if fiteo_url and fiteo_pat:
 if todo_url:
     if "manul-todo-local" in names:
         print("operator MCP 'manul-todo-local' already exists; leaving it untouched", file=sys.stderr)
+    elif any(fnmatch.fnmatchcase("manul_todo_local_todo_list_tasks", pattern) for pattern in tool_rule_patterns):
+        print("an operator tool rule already matches the Manul local Todo tools; preserving it without adding an override", file=sys.stderr)
+        servers["manul-todo-local"] = {
+            "type": "remote",
+            "url": todo_url,
+            "oauth": False,
+            "disabled": False,
+        }
+        permissions.append({"action": "manul_todo_local_*", "resource": "*", "effect": "allow"})
     elif scan_ok:
         servers["manul-todo-local"] = {
             "type": "remote",
