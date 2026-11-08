@@ -146,25 +146,6 @@ EOF
     echo "  Removed legacy local Todo MCP credential from Manul runtime environment" >&2
   fi
 
-  # Refresh URL and token together in one atomic file replacement. Task runners
-  # never observe a mixed old/new credential pair if a launcher is refreshing
-  # Caracal while the long-lived daemon is active.
-  if [ -n "${CARACAL_MCP_URL:-}" ] && [ -n "${CARACAL_ACCESS_TOKEN:-}" ]; then
-    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
-    if ! awk '
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/
-    ' "$env_file" > "$refreshed_file"; then
-      rm -f -- "$refreshed_file"
-      return 1
-    fi
-    printf 'CARACAL_MCP_URL=%q\nCARACAL_ACCESS_TOKEN=%q\n' \
-      "$CARACAL_MCP_URL" "$CARACAL_ACCESS_TOKEN" >> "$refreshed_file"
-    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
-    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
-    echo "  Refreshed Caracal MCP endpoint/token for unattended Manul processes" >&2
-  fi
-
   # Manul uses a dedicated Fiteo identity. Never persist or fall back to the
   # operator's FITEO_PAT: remote Todo reads and the task-scoped MCP use only the
   # PAT belonging to the Manul account.
