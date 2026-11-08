@@ -4,7 +4,19 @@ set -uo pipefail
 
 TODO_LOCAL_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_LOCAL_SOURCE_DIR/todo-task-source-utils.sh"
-source "$TODO_LOCAL_SOURCE_DIR/todo-local-mcp-url.sh"
+
+TODO_AICODE_DIR="${AICODE_SOURCE_DIR:-$HOME/.globalskills/aicode}"
+TODO_LOCAL_URL_HELPER="$TODO_AICODE_DIR/todo-local-mcp-url.sh"
+TODO_LOCAL_URL_HELPER_AVAILABLE=false
+if [ -r "$TODO_LOCAL_URL_HELPER" ]; then
+  # Shared endpoint discovery is owned by globalskills/aicode.
+  # shellcheck source=~/.globalskills/aicode/todo-local-mcp-url.sh
+  source "$TODO_LOCAL_URL_HELPER"
+  TODO_LOCAL_URL_HELPER_AVAILABLE=true
+else
+  todo_local_mcp_url_is_supported() { return 1; }
+  todo_local_mcp_resolve_url() { return 1; }
+fi
 
 todo_source_local_config() {
   local source_json="$1" url configured_url resolved_url
@@ -35,6 +47,10 @@ todo_source_local_config() {
 }
 task_source_todo_local_poll() {
   local source_json tasks_json task_json normalized resolution task_id
+  if ! todo_mcp_client_available || [ "$TODO_LOCAL_URL_HELPER_AVAILABLE" != "true" ]; then
+    echo "task-source: Todo Local source is disabled because globalskills/aicode Todo MCP helpers are unavailable" >&2
+    return 0
+  fi
   source_json="$(todo_source_local_config "$1")"
 
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" todo_local_mcp)" || return $?
