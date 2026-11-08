@@ -90,12 +90,8 @@ SCRIPTS=(
     "task-source-github-issues.sh"
     "task-source-jira-tasks.sh"
     "task-source-todo-local.sh"
-    "todo-local-mcp-url.sh"
     "task-source-todo-remote.sh"
     "todo-task-source-utils.sh"
-    "todo-mcp-client.py"
-    "todo-remote-create-task.py"
-    "manul_fiteo_create_task.ts"
     "start-manul-automation.sh"
     "task-recovery.sh"
     "manul-queue-reset.sh"
@@ -203,43 +199,10 @@ for script in "${SCRIPTS[@]}"; do
     CHANGED=$((CHANGED + 1))
 done
 
-# The Manul V2 plugin imports @opencode/plugin. Keep that dependency beside
-# its canonical source so module resolution still works when OpenCode follows
-# the task-local symlink back to this file. node_modules is ignored by Git.
-OPENCODE_PLUGIN_VERSION="${MANUL_OPENCODE_PLUGIN_VERSION:-2.2.5}"
-OPENCODE_PLUGIN_PACKAGE="$CANONICAL_DIR/node_modules/@opencode/plugin/package.json"
-OPENCODE_PLUGIN_INSTALLED=false
-if [ -f "$OPENCODE_PLUGIN_PACKAGE" ] && command -v node >/dev/null 2>&1 &&
-   node -e 'const p=require(process.argv[1]); process.exit(p.version === process.argv[2] ? 0 : 1)' \
-     "$OPENCODE_PLUGIN_PACKAGE" "$OPENCODE_PLUGIN_VERSION" >/dev/null 2>&1; then
-    OPENCODE_PLUGIN_INSTALLED=true
-fi
-if $OPENCODE_PLUGIN_INSTALLED; then
-    echo "OK OpenCode V2 plugin dependency: @opencode/plugin@$OPENCODE_PLUGIN_VERSION"
-elif $DRY_RUN; then
-    echo "[dry-run] Would install @opencode/plugin@$OPENCODE_PLUGIN_VERSION beside the canonical Manul plugin"
-elif command -v npm >/dev/null 2>&1; then
-    echo "Installing OpenCode V2 plugin dependency: @opencode/plugin@$OPENCODE_PLUGIN_VERSION"
-    if npm install --prefix "$CANONICAL_DIR" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
-        "@opencode/plugin@$OPENCODE_PLUGIN_VERSION"; then
-        CHANGED=$((CHANGED + 1))
-    else
-        echo "ERROR: failed to install @opencode/plugin@$OPENCODE_PLUGIN_VERSION beside the canonical Manul plugin" >&2
-        DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
-    fi
-else
-    echo "ERROR: npm is required to install @opencode/plugin@$OPENCODE_PLUGIN_VERSION for Manul's OpenCode V2 plugin" >&2
-    DEPLOY_FAILURES=$((DEPLOY_FAILURES + 1))
-fi
-
-# Older installers registered this Manul-only tool in OpenCode's global
-# tools directory. That makes every unrelated OpenCode session (including
-# aicode) import Manul code. Remove only a link resolving to our runtime tool
-# or a byte-identical legacy copy. Never touch a different operator-owned file.
-OPENCODE_TOOL_SOURCE="$RUNTIME_DIR/manul_fiteo_create_task.ts"
-OPENCODE_TOOL_SOURCE_REAL="$(realpath -e -- "$OPENCODE_TOOL_SOURCE" 2>/dev/null || true)"
-# The legacy installer always used ~/.config/opencode, even when
-# XDG_CONFIG_HOME was set. Also cover the current XDG and explicit custom paths.
+# Older installers registered a Manul-only OpenCode custom tool globally.
+# Remove only symlinks whose literal target is the old Manul runtime/canonical
+# path. Keep regular files and all unrelated symlinks: they may belong to the
+# operator, and the removed plugin source is no longer available for comparison.
 OPENCODE_CONFIG_CANDIDATES=("$HOME/.config/opencode")
 XDG_OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 if [ "$XDG_OPENCODE_CONFIG_DIR" != "$HOME/.config/opencode" ]; then
@@ -260,27 +223,22 @@ fi
 for opencode_config_dir in "${OPENCODE_CONFIG_CANDIDATES[@]}"; do
     legacy_tool="$opencode_config_dir/tools/manul_fiteo_create_task.ts"
     if [ -L "$legacy_tool" ]; then
-        legacy_tool_real="$(realpath -e -- "$legacy_tool" 2>/dev/null || true)"
-        if [ -n "$OPENCODE_TOOL_SOURCE_REAL" ] && [ "$legacy_tool_real" = "$OPENCODE_TOOL_SOURCE_REAL" ]; then
-            if $DRY_RUN; then
-                echo "[dry-run] Would remove obsolete global Manul tool registration: $legacy_tool"
-            else
-                rm -f -- "$legacy_tool"
-                echo "Removed obsolete global Manul tool registration: $legacy_tool"
-            fi
-        else
-            echo "Preserving unrelated OpenCode tool symlink: $legacy_tool"
-        fi
-    elif [ -f "$legacy_tool" ] && [ -f "$OPENCODE_TOOL_SOURCE" ] &&
-         cmp -s -- "$legacy_tool" "$OPENCODE_TOOL_SOURCE"; then
-        if $DRY_RUN; then
-            echo "[dry-run] Would remove byte-identical legacy Manul tool copy: $legacy_tool"
-        else
-            rm -f -- "$legacy_tool"
-            echo "Removed byte-identical legacy Manul tool copy: $legacy_tool"
-        fi
+        legacy_target="$(readlink -- "$legacy_tool" 2>/dev/null || true)"
+        case "$legacy_target" in
+            "$RUNTIME_DIR/manul_fiteo_create_task.ts"|"$CANONICAL_DIR/manul_fiteo_create_task.ts")
+                if $DRY_RUN; then
+                    echo "[dry-run] Would remove obsolete Manul-owned OpenCode tool symlink: $legacy_tool"
+                else
+                    rm -f -- "$legacy_tool"
+                    echo "Removed obsolete Manul-owned OpenCode tool symlink: $legacy_tool"
+                fi
+                ;;
+            *)
+                echo "Preserving unrelated OpenCode tool symlink: $legacy_tool"
+                ;;
+        esac
     elif [ -e "$legacy_tool" ]; then
-        echo "Preserving unrelated OpenCode custom tool: $legacy_tool"
+        echo "Preserving existing OpenCode custom tool file: $legacy_tool"
     fi
 done
 
