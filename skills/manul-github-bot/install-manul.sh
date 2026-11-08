@@ -90,13 +90,10 @@ echo
 #   jq        - config.json parsing throughout the runtime
 #   sqlite3   - manul.db (native ext4 I/O, concurrent access)
 #   curl      - HTTP used by manul-comments-remove.sh
-#   openclaw  - default agent runtime (OpenClawAdapter)
-#   opencode  - alternate agent runtime (OpenCodeAdapter)
-#   codex     - alternate agent runtime (CodexAdapter)
-#   claude    - alternate agent runtime (ClaudeCodeAdapter)
-# At least one agent runtime must be present; config selects the default.
+#   python3   - lifecycle SQLite/JSON helpers and OpenCode stderr redaction
+# The configured automation.agentRuntime selects the one required agent binary.
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl crontab; do
+for cmd in bash git gh jq sqlite3 curl crontab python3; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -107,8 +104,6 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     exit 1
 fi
 echo "Prerequisites OK: bash git gh jq sqlite3 curl crontab python3"
-echo
-echo "Prerequisites OK: bash git jq sqlite3 curl crontab + at least one supported agent runtime"
 echo
 
 # 2. Ensure runtime directory
@@ -153,8 +148,16 @@ case "$SELECTED_AGENT_RUNTIME" in
         fail "Unsupported automation.agentRuntime '$SELECTED_AGENT_RUNTIME' (expected openclaw, opencode, codex, or claude-code)"
         ;;
 esac
-if ! command -v "$RUNTIME_COMMAND" >/dev/null 2>&1 && [ ! -x "$RUNTIME_OVERRIDE" ]; then
-    fail "Selected agent runtime '$SELECTED_AGENT_RUNTIME' is not installed (missing $RUNTIME_COMMAND or its *_BIN override)"
+RUNTIME_OVERRIDE_AVAILABLE=false
+if [ -n "$RUNTIME_OVERRIDE" ]; then
+    if [[ "$RUNTIME_OVERRIDE" == */* ]]; then
+        [ -x "$RUNTIME_OVERRIDE" ] && RUNTIME_OVERRIDE_AVAILABLE=true
+    elif command -v "$RUNTIME_OVERRIDE" >/dev/null 2>&1; then
+        RUNTIME_OVERRIDE_AVAILABLE=true
+    fi
+fi
+if ! command -v "$RUNTIME_COMMAND" >/dev/null 2>&1 && [ "$RUNTIME_OVERRIDE_AVAILABLE" != "true" ]; then
+    fail "Selected agent runtime '$SELECTED_AGENT_RUNTIME' is not installed (missing $RUNTIME_COMMAND or configured $SELECTED_AGENT_RUNTIME binary override)"
 fi
 echo "Selected agent runtime is available: $SELECTED_AGENT_RUNTIME"
 
@@ -184,10 +187,6 @@ if jq -e '((.automation? // {}) | if type == "object" then has("roleRuntime") el
     }
     echo "  Removed obsolete automation.roleRuntime; all tasks use automation.agentRuntime"
 fi
-
-# Python is a core runtime dependency beyond Todo MCP: the daemon uses it
-# for lifecycle SQLite/JSON helpers and OpenCode uses it for safe stderr redaction.
-command -v python3 >/dev/null 2>&1 || fail "Manul runtime requires python3"
 
 # Validate only the backend selected by the operator. An unrelated installed
 # backend must not make an incomplete installation look ready.
