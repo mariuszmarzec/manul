@@ -16,6 +16,12 @@ task_source_type_is_supported() {
 task_source_enabled() { jq -e '(.enabled != false)' <<<"$1" >/dev/null 2>&1; }
 task_source_name() { jq -r '.type // empty' <<<"$1"; }
 
+task_source_shared_todo_client_available() {
+  [ -n "${TODO_MCP_CLIENT:-}" ] &&
+    [ -r "$TODO_MCP_CLIENT" ] &&
+    command -v python3 >/dev/null 2>&1
+}
+
 task_source_poll() {
   local source_json="$1" type
   type="$(task_source_name "$source_json")"
@@ -27,9 +33,19 @@ task_source_poll() {
       source "$TASK_SOURCE_DIR/task-source-jira-tasks.sh"
       task_source_jira_tasks_poll "$source_json" ;;
     todo_local_mcp)
+      if ! task_source_shared_todo_client_available ||
+         [ -z "${TODO_LOCAL_MCP_URL_HELPER:-}" ] ||
+         [ ! -r "${TODO_LOCAL_MCP_URL_HELPER:-}" ]; then
+        echo "task-source: shared Todo MCP helpers are unavailable; skipping optional local Todo source" >&2
+        return 0
+      fi
       source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
       task_source_todo_local_poll "$source_json" ;;
     todo_remote_mcp)
+      if ! task_source_shared_todo_client_available; then
+        echo "task-source: shared Todo MCP client is unavailable; skipping optional remote Todo source" >&2
+        return 0
+      fi
       source "$TASK_SOURCE_DIR/task-source-todo-remote.sh"
       task_source_todo_remote_poll "$source_json" ;;
     *)
