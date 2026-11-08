@@ -250,7 +250,7 @@ Manul still owns the claim-scoped SQLite pointer that tells a retry which runtim
 session to continue; it does not interpret or manipulate the runtime's session
 internals.
 
-OpenClaw, OpenCode, Codex CLI, and Claude Code adapters are implemented behind the same AgentExecutor boundary. Every task uses the configured AGENT_RUNTIME. OpenCode maps a canonical role to its native --agent option; OpenClaw, Codex, and Claude Code prepend the canonical role definition to the prompt because those CLIs do not share OpenCode's role contract. OpenClaw always uses its configured main entry point for canonical Manul roles; a role name is never misinterpreted as an OpenClaw config-agent ID.
+OpenClaw, OpenCode, Codex CLI, and Claude Code adapters are implemented behind the same AgentExecutor boundary. Every task uses the configured AGENT_RUNTIME. OpenCode maps a canonical role to its native --agent option only when a matching native agent definition exists; otherwise it uses its configured default. OpenClaw, Codex, and Claude Code prepend the optional canonical role definition to the prompt when the file exists. If it is absent, OpenClaw uses main and Codex/Claude Code use their CLI defaults. A missing global role never blocks a task; a role name is never misinterpreted as an OpenClaw config-agent ID.
 
 ## Ownership rule
 
