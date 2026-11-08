@@ -4,10 +4,21 @@ set -uo pipefail
 
 TODO_LOCAL_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_LOCAL_SOURCE_DIR/todo-task-source-utils.sh"
-source "$TODO_LOCAL_SOURCE_DIR/todo-local-mcp-url.sh"
+todo_source_local_load_endpoint_helper() {
+  local helper="${TODO_LOCAL_MCP_URL_HELPER:-}"
+  if [ -z "$helper" ] || [ ! -r "$helper" ]; then
+    echo "task-source: shared Todo endpoint helper is unavailable; local Todo source is optional" >&2
+    return 2
+  fi
+  if ! declare -F todo_local_mcp_resolve_url >/dev/null 2>&1; then
+    source "$helper" || return 2
+  fi
+  declare -F todo_local_mcp_resolve_url >/dev/null 2>&1
+}
 
 todo_source_local_config() {
   local source_json="$1" url configured_url resolved_url
+  todo_source_local_load_endpoint_helper || return 2
   configured_url="$(jq -r '.url // empty' <<<"$source_json")" || return 2
 
   # Preserve explicitly configured custom loopback ports. The two standard
