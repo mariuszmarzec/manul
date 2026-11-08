@@ -34,7 +34,7 @@ GitHub
        (automation.agentRuntime)
 ```
 
-The daemon is runtime-neutral: it reaches the runtime only through AgentExecutionController → AgentExecutor → exactly one backend adapter. The single automation.agentRuntime setting (default openclaw) selects that backend for every task, whether or not a canonical role is explicit. Role selection changes how the chosen adapter applies the role: OpenCode uses its native --agent <role> option, while OpenClaw, Codex, and Claude Code prepend canonical role instructions to the task prompt. OpenClaw uses its configured main entry point; it does not treat canonical role names as OpenClaw config-agent IDs.
+The daemon is runtime-neutral: it reaches the runtime only through AgentExecutionController → AgentExecutor → exactly one backend adapter. The single automation.agentRuntime setting (default openclaw) selects that backend for every task, whether or not a canonical role is explicit. Role selection changes how the chosen adapter applies the role: OpenCode uses its native --agent <role> option only when the native agent exists; otherwise it preserves default_agent or the built-in build agent. OpenClaw, Codex, and Claude Code prepend canonical role instructions when the role file is available, and otherwise use backend defaults. OpenClaw uses its configured main entry point; it does not treat canonical role names as OpenClaw config-agent IDs.
 
 ### Current source/runtime split
 
@@ -91,14 +91,25 @@ Task sources
 
 A pull request is never a root task source. A GitHub Issue or Jira task may have one or more PRs attached as implementation context. This distinction is persisted as `taskSourceType` + `taskSourceId` on queued tasks.
 
-Todo sources have two explicit execution variants. Repository-backed tasks use
-the configured project catalog and the normal checkout/branch/PR path.
-`/manul report` tasks (opted in per source with `allowReportOnly: true`) bypass
-repository locks and workspace-pool allocation, execute in a disposable scratch
-directory, and persist the final answer as a child Todo task. The adapter verifies
-that child by reading the task tree back before the daemon stores its local
-receipt and marks the root last. The source fingerprint excludes only that one
-valid, source-version-bound result child, so unrelated user edits remain visible.
+Todo sources have two execution variants. Repository-backed tasks use an
+explicit, allowlisted GitHub URL or an unambiguous alias from the optional
+project catalog and follow the normal checkout/branch/PR path. When there is no
+usable project reference, the task runs report-only without a configuration
+opt-in, bypasses repository locks and workspace-pool allocation, and persists
+the final answer as a child Todo task. The adapter verifies that child by
+reading the task tree back before the daemon stores its local receipt and marks
+the root last. The source fingerprint excludes only that one valid,
+source-version-bound result child, so unrelated user edits remain visible.
+
+The shared Todo MCP transport and local endpoint resolver are owned by
+globalskills/aicode and passed to Manul through exported environment paths.
+Manul does not carry duplicate client/resolver implementations; if the shared
+helper is absent, optional Todo source polling is skipped without preventing
+GitHub Issues or other source providers from running. Manul does not depend on
+Caracal, mutate OpenCode operator config, install Node/npm packages, or install
+the retired Fiteo task-creation plugin. OpenCode task settings are delivered via
+a temporary OPENCODE_CONFIG_CONTENT overlay while operator JSON/JSONC files
+remain untouched.
 
 The top-level `.repositories` array is authoritative both with and without explicit `.taskSources`. The installer removes legacy top-level `repositoryAllowlist` and nested `.taskSources[].repositories` duplicates without merging them into the global list.
 ## Task execution plane
