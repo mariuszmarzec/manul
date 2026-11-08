@@ -94,7 +94,7 @@ export OPENCLAW_BIN
 # Execute them through the same OpenClaw backend by injecting the selected role
 # definition into a task-local prompt and keeping OpenClaw's entry point on main.
 EXECUTION_PROMPT="$OPT_PROMPT"
-OPENCLAW_AGENT_ID="${OPT_AGENT:-main}"
+OPENCLAW_AGENT_ID="main"
 ROLE_BODY_FILE=""
 ROLE_PROMPT_FILE=""
 if [ -n "$OPT_AGENT" ] && [ "$OPT_AGENT" != "main" ]; then
@@ -107,11 +107,8 @@ if [ -n "$OPT_AGENT" ] && [ "$OPT_AGENT" != "main" ]; then
     ROLE_DIR="${MANUL_AGENT_DEFINITIONS_DIR:-$HOME/.agents/agents}"
     ROLE_FILE="$ROLE_DIR/$OPT_AGENT.md"
     if [ ! -r "$ROLE_FILE" ]; then
-        jq -cn --arg taskId "$OPT_TASK_ID" --arg role "$OPT_AGENT" --arg path "$ROLE_FILE" \
-            '{status:"FAILED",task_id:$taskId,exit_code:66,summary:("Canonical role definition not found for " + $role + " at " + $path),session_id:"",duration_s:0}'
-        exit 66
-    fi
-
+        printf '[%s] openclaw-adapter: WARN: canonical role %s is unavailable; using OpenClaw main agent defaults\n' "$(date -Is)" "$OPT_AGENT" >>"$OPT_STDERR_FILE"
+    else
     ROLE_BODY_FILE="$(manul_task_file_path "$MANUL_TASK_LOG_DIR" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.openclaw.role")"
     ROLE_PROMPT_FILE="$(manul_task_file_path "$MANUL_TASK_LOG_DIR" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.openclaw.prompt")"
     trap 'rm -f -- "$ROLE_BODY_FILE" "$ROLE_PROMPT_FILE"' EXIT HUP INT TERM
@@ -130,6 +127,7 @@ if [ -n "$OPT_AGENT" ] && [ "$OPT_AGENT" != "main" ]; then
     fi
     EXECUTION_PROMPT="$ROLE_PROMPT_FILE"
     OPENCLAW_AGENT_ID="main"
+    fi
 fi
 
 # --- Session key derivation ---
