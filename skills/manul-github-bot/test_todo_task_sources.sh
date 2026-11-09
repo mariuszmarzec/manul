@@ -154,7 +154,7 @@ TODO_LOCAL_MCP_URL_HELPER="$SHARED_TODO_DIR/todo-local-mcp-url.sh"
 : > "$TODO_MCP_CLIENT"
 cat > "$TODO_LOCAL_MCP_URL_HELPER" <<'SHARED_TODO_HELPER'
 todo_local_mcp_url_is_supported() {
-  [[ "$1" =~ ^http://(localhost|127\\.0\\.0\\.1|\\[::1\\]):[0-9]+/mcp$ ]]
+  [[ "$1" =~ ^http://(localhost|127\.0\.0\.1|\[::1\]):[0-9]+/mcp$ ]]
 }
 todo_local_mcp_is_wsl() {
   [ "${TODO_LOCAL_MCP_PLATFORM_OVERRIDE:-}" = "wsl" ]
