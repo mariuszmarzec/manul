@@ -844,7 +844,9 @@ set -euo pipefail
 [ "${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.jsonc" ] || {
   echo "OPENCODE_CONFIG was replaced" >&2; exit 65;
 }
-jq -e --arg base "$MANUL_WORKSPACE" --arg task "$MANUL_TASK_WORKSPACE_ROOT" '
+base_real="$(cd "$MANUL_WORKSPACE" && pwd -P)"
+task_real="$(cd "$MANUL_TASK_WORKSPACE_ROOT" && pwd -P)"
+jq -e --arg base "$base_real" --arg task "$task_real" '
   def idx($a;$r;$e): ([.permissions|to_entries[]|select(.value.action==$a and .value.resource==$r and .value.effect==$e)|.key]|last // -1);
   (idx("external_directory";($base|rtrimstr("/") + "/*");"deny")) as $deny
   | (idx("external_directory";$task;"allow")) as $root
