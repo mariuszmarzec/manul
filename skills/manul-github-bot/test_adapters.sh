@@ -867,6 +867,18 @@ MOCK
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id scope --prompt "$tmp/prompt" \
       --workspace "$active_workspace" --attempt 1 --timeout 10 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  if ! jq -e '.status == "COMPLETED"' <<<"$output" >/dev/null 2>&1; then
+    echo "task-scoped overlay adapter output: $output" >&2
+    for diagnostic in \
+      "$custom_manul_dir/logs/tasks/task-scope.attempt-1.opencode.stderr" \
+      "$custom_manul_dir/logs/tasks/task-scope.attempt-1.opencode.jsonl" \
+      "$tmp/stderr" "$tmp/stdout"; do
+      if [ -s "$diagnostic" ]; then
+        echo "--- $diagnostic ---" >&2
+        cat "$diagnostic" >&2
+      fi
+    done
+  fi
   assert_json_status "$output" "COMPLETED" "OpenCode runs with a task-scoped inline overlay"
   [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] \
     && ok "operator JSONC remains byte-identical" || fail "operator JSONC changed"
