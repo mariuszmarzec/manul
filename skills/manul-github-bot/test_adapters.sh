@@ -855,10 +855,7 @@ jq -e --arg base "$base_real" --arg task "$task_real" '
   and any(.permissions[]; .action=="external_directory" and .resource=="/operator/protected/*" and .effect=="deny")
   and any(.permissions[]; .action=="shell" and .resource=="*" and .effect=="ask")
   and any(.permissions[]; .action=="edit" and .resource=="generated/**" and .effect=="deny")
-' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null || {
-  printf 'task-scoped overlay assertion failed; generated config follows:\n%s\n' "$OPENCODE_CONFIG_CONTENT" >&2
-  exit 66
-}
+' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
 printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
 MOCK
   chmod +x "$tmp/bin/opencode"
@@ -869,18 +866,6 @@ MOCK
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id scope --prompt "$tmp/prompt" \
       --workspace "$active_workspace" --attempt 1 --timeout 10 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
-  if ! jq -e '.status == "COMPLETED"' <<<"$output" >/dev/null 2>&1; then
-    echo "task-scoped overlay adapter output: $output" >&2
-    for diagnostic in \
-      "$custom_manul_dir/logs/tasks/task-scope.attempt-1.opencode.stderr" \
-      "$custom_manul_dir/logs/tasks/task-scope.attempt-1.opencode.jsonl" \
-      "$tmp/stderr" "$tmp/stdout"; do
-      if [ -s "$diagnostic" ]; then
-        echo "--- $diagnostic ---" >&2
-        cat "$diagnostic" >&2
-      fi
-    done
-  fi
   assert_json_status "$output" "COMPLETED" "OpenCode runs with a task-scoped inline overlay"
   [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] \
     && ok "operator JSONC remains byte-identical" || fail "operator JSONC changed"
