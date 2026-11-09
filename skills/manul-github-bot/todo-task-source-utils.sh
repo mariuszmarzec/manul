@@ -135,7 +135,7 @@ todo_task_resolve_repository() {
       | first // empty
     ' <<<"$catalog_json")" || return 2
   fi
-  canonical_repository="$(jq -r '.name // empty' <<<"${entry_json:-{}}")"
+  canonical_repository="$(jq -r '.name // empty' <<<"${entry_json:-}")"
   [ -n "$canonical_repository" ] || canonical_repository="$repository"
 
   repositories_json="$(todo_mcp_source_repositories "$source_json")" || return 2
