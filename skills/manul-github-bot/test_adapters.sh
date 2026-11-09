@@ -853,7 +853,10 @@ jq -e --arg base "$MANUL_WORKSPACE" --arg task "$MANUL_TASK_WORKSPACE_ROOT" '
   and any(.permissions[]; .action=="external_directory" and .resource=="/operator/protected/*" and .effect=="deny")
   and any(.permissions[]; .action=="shell" and .resource=="*" and .effect=="ask")
   and any(.permissions[]; .action=="edit" and .resource=="generated/**" and .effect=="deny")
-' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
+' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null || {
+  printf 'task-scoped overlay assertion failed; generated config follows:\n%s\n' "$OPENCODE_CONFIG_CONTENT" >&2
+  exit 66
+}
 printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-scope","part":{"type":"text","text":"TASK_DONE scoped config"}}'
 MOCK
   chmod +x "$tmp/bin/opencode"
