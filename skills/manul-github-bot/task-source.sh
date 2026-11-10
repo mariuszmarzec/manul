@@ -16,10 +16,24 @@ task_source_type_is_supported() {
 task_source_enabled() { jq -e '(.enabled != false)' <<<"$1" >/dev/null 2>&1; }
 task_source_name() { jq -r '.type // empty' <<<"$1"; }
 
+task_source_todo_client_path() {
+  printf '%s\\n' "${TODO_MCP_CLIENT:-$TASK_SOURCE_DIR/todo-mcp-client.py}"
+}
+
+task_source_todo_local_helper_path() {
+  printf '%s\\n' "${TODO_LOCAL_MCP_URL_HELPER:-$TASK_SOURCE_DIR/todo-local-mcp-url.sh}"
+}
+
 task_source_shared_todo_client_available() {
-  [ -n "${TODO_MCP_CLIENT:-}" ] &&
-    [ -r "$TODO_MCP_CLIENT" ] &&
-    command -v python3 >/dev/null 2>&1
+  local client
+  client="$(task_source_todo_client_path)"
+  [ -r "$client" ] && command -v python3 >/dev/null 2>&1
+}
+
+task_source_local_helper_available() {
+  local helper
+  helper="$(task_source_todo_local_helper_path)"
+  [ -r "$helper" ]
 }
 
 task_source_poll() {
@@ -33,18 +47,16 @@ task_source_poll() {
       source "$TASK_SOURCE_DIR/task-source-jira-tasks.sh"
       task_source_jira_tasks_poll "$source_json" ;;
     todo_local_mcp)
-      if ! task_source_shared_todo_client_available ||
-         [ -z "${TODO_LOCAL_MCP_URL_HELPER:-}" ] ||
-         [ ! -r "${TODO_LOCAL_MCP_URL_HELPER:-}" ]; then
-        echo "task-source: shared Todo MCP helpers are unavailable; skipping optional local Todo source" >&2
-        return 0
+      if ! task_source_shared_todo_client_available || ! task_source_local_helper_available; then
+        echo "ERROR: task-source: standalone Todo MCP client or endpoint resolver is missing from $TASK_SOURCE_DIR" >&2
+        return 2
       fi
       source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
       task_source_todo_local_poll "$source_json" ;;
     todo_remote_mcp)
       if ! task_source_shared_todo_client_available; then
-        echo "task-source: shared Todo MCP client is unavailable; skipping optional remote Todo source" >&2
-        return 0
+        echo "ERROR: task-source: standalone Todo MCP client is missing or Python 3 is unavailable" >&2
+        return 2
       fi
       source "$TASK_SOURCE_DIR/task-source-todo-remote.sh"
       task_source_todo_remote_poll "$source_json" ;;
@@ -233,4 +245,122 @@ task_source_report_deliver() {
     *)
       return 2 ;;
   esac
+}
+
+
+# Startup diagnostics are deliberately non-fatal: the daemon remains useful for
+# other providers, but every enabled source must explain whether it can poll.
+# Local Todo preflight performs the same unauthenticated initialize/tools/list
+# handshake as the resolver; actual list_tasks errors are reported by poll.sh.
+task_source_preflight() {
+  local config="$1" log_file="${2:-/dev/stderr}"
+  local configured_sources source_json type status detail failures=0 enabled=0
+
+  _task_source_preflight_log() {
+    printf '[%s] %s\\n' "$(date -Is)" "$*" >>"$log_file" 2>/dev/null ||
+      printf '%s\\n' "$*" >&2
+  }
+
+  if [ ! -r "$config" ] || ! jq -e 'type == "object"' "$config" >/dev/null 2>&1; then
+    _task_source_preflight_log "ERROR: task-source preflight: config is missing, unreadable, or invalid ($config)"
+    return 0
+  fi
+
+  configured_sources="$(task_source_configured_sources "$config" 2>/dev/null)" || configured_sources=""
+  if [ -z "$configured_sources" ]; then
+    _task_source_preflight_log "WARN: task-source preflight: no enabled task sources are configured"
+    return 0
+  fi
+
+  while IFS= read -r source_json; do
+    [ -n "$source_json" ] || continue
+    enabled=$((enabled + 1))
+    type="$(task_source_name "$source_json")"
+    case "$type" in
+      todo_local_mcp)
+        local client helper resolved rc
+        client="$(task_source_todo_client_path)"
+        helper="$(task_source_todo_local_helper_path)"
+        if [ ! -r "$client" ]; then
+          _task_source_preflight_log "ERROR: task-source preflight: todo_local_mcp is enabled but client is missing/unreadable ($client)"
+          failures=$((failures + 1))
+          continue
+        fi
+        if [ ! -r "$helper" ]; then
+          _task_source_preflight_log "ERROR: task-source preflight: todo_local_mcp is enabled but endpoint resolver is missing/unreadable ($helper)"
+          failures=$((failures + 1))
+          continue
+        fi
+        if ! command -v python3 >/dev/null 2>&1; then
+          _task_source_preflight_log "ERROR: task-source preflight: todo_local_mcp requires python3 on PATH"
+          failures=$((failures + 1))
+          continue
+        fi
+        source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
+        resolved="$(todo_source_local_config "$source_json" 2>&1)" && rc=0 || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          status="$(jq -r '.url // "unknown"' <<<"$resolved" 2>/dev/null)"
+          _task_source_preflight_log "INFO: task-source preflight: todo_local_mcp ready; MCP initialize/tools/list handshake succeeded (endpoint=$status)"
+        else
+          detail="$(printf '%s' "$resolved" | tail -n 1 | cut -c1-240)"
+          _task_source_preflight_log "ERROR: task-source preflight: todo_local_mcp is enabled but unavailable (rc=$rc): ${detail:-endpoint handshake failed}"
+          failures=$((failures + 1))
+        fi
+        ;;
+      todo_remote_mcp)
+        local client remote_config rc token_env
+        client="$(task_source_todo_client_path)"
+        if [ ! -r "$client" ] || ! command -v python3 >/dev/null 2>&1; then
+          _task_source_preflight_log "ERROR: task-source preflight: todo_remote_mcp is enabled but the Todo MCP client or python3 is unavailable"
+          failures=$((failures + 1))
+          continue
+        fi
+        source "$TASK_SOURCE_DIR/task-source-todo-remote.sh"
+        remote_config="$(todo_source_remote_config "$source_json" 2>&1)" && rc=0 || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          detail="$(printf '%s' "$remote_config" | tail -n 1 | cut -c1-240)"
+          _task_source_preflight_log "ERROR: task-source preflight: todo_remote_mcp configuration is invalid (rc=$rc): ${detail:-configuration validation failed}"
+          failures=$((failures + 1))
+          continue
+        fi
+        token_env="$(jq -r '.tokenEnv // empty' <<<"$remote_config")"
+        if [ -z "$token_env" ] || [ -z "${!token_env:-}" ]; then
+          _task_source_preflight_log "ERROR: task-source preflight: todo_remote_mcp requires a non-empty token environment variable (${token_env:-missing tokenEnv})"
+          failures=$((failures + 1))
+        else
+          _task_source_preflight_log "INFO: task-source preflight: todo_remote_mcp configuration and credentials are available"
+        fi
+        ;;
+      github_issues)
+        if ! command -v gh >/dev/null 2>&1; then
+          _task_source_preflight_log "ERROR: task-source preflight: github_issues is enabled but gh CLI is missing from PATH"
+          failures=$((failures + 1))
+        elif [ "$(jq -r '.repositories | length' <<<"$source_json" 2>/dev/null || echo 0)" -eq 0 ]; then
+          _task_source_preflight_log "WARN: task-source preflight: github_issues is enabled but no repositories are configured"
+          failures=$((failures + 1))
+        else
+          _task_source_preflight_log "INFO: task-source preflight: github_issues ready"
+        fi
+        ;;
+      jira_tasks)
+        if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+          _task_source_preflight_log "ERROR: task-source preflight: jira_tasks is enabled but curl or python3 is missing"
+          failures=$((failures + 1))
+        else
+          _task_source_preflight_log "INFO: task-source preflight: jira_tasks runtime dependencies are available"
+        fi
+        ;;
+      *)
+        _task_source_preflight_log "ERROR: task-source preflight: unsupported enabled provider type '$type'"
+        failures=$((failures + 1))
+        ;;
+    esac
+  done <<<"$configured_sources"
+
+  if [ "$failures" -gt 0 ]; then
+    _task_source_preflight_log "WARN: task-source preflight completed with $failures problem(s) across $enabled enabled provider(s); daemon will continue and poller will retry"
+  else
+    _task_source_preflight_log "INFO: task-source preflight passed for $enabled enabled provider(s)"
+  fi
+  return 0
 }
