@@ -282,18 +282,23 @@ workspace_gc_remove_workspace() {
 
   # GC is a lease state: new workers only claim IDLE workspaces, so the
   # compare-and-set prevents a concurrent acquire from racing filesystem removal.
+  local active_task_guard=""
+  if workspace_gc_table_exists processed_comments &&
+     sqlite3 "$WORKSPACE_GC_DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|workspaceId|'; then
+    active_task_guard="
+      AND NOT EXISTS (
+        SELECT 1 FROM processed_comments pc
+        WHERE pc.workspaceId=workspaces.workspaceId
+          AND pc.status IN ('queued','running','blocked_user')
+      )"
+  fi
   changed="$(sqlite3 "$WORKSPACE_GC_DB" "
     BEGIN IMMEDIATE;
     UPDATE workspaces
     SET status='GC'
     WHERE workspaceId='$safe_id'
       AND status='IDLE'
-      AND ${workspace_gc_table_exists processed_comments && printf '1' || printf '0'}=1
-      AND NOT EXISTS (
-        SELECT 1 FROM processed_comments pc
-        WHERE pc.workspaceId=workspaces.workspaceId
-          AND pc.status IN ('queued','running','blocked_user')
-      );
+      $active_task_guard;
     SELECT changes();
     COMMIT;
   " 2>/dev/null | tail -n 1)" || return 1
@@ -408,7 +413,6 @@ workspace_gc_seed_untracked_caches() {
   while IFS= read -r -d '' candidate; do
     [ ! -L "$candidate" ] && [ -d "$candidate/.git" ] || continue
     name="$(basename -- "$candidate")"
-    [[ "$name" == ws-* || "$name" == report-only ]] && continue
     origin="$(git -C "$candidate" remote get-url origin 2>/dev/null || true)"
     [[ "$origin" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(\.git)?$ ]] || continue
     repository="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
