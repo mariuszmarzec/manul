@@ -13,6 +13,14 @@
 # canonical direct-child paths and re-check SQLite ownership before deletion.
 
 WORKSPACE_GC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$WORKSPACE_GC_SCRIPT_DIR/manul-platform.sh"
+manul_platform_prepare || {
+  echo "ERROR: workspace GC platform prerequisites are unavailable" >&2
+  if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 1; else exit 1; fi
+}
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  manul_platform_reexec_if_needed "$0" "$@" || exit 1
+fi
 source "$WORKSPACE_GC_SCRIPT_DIR/manul-paths.sh"
 
 WORKSPACE_GC_DB="${DB:-$MANUL_DB}"
