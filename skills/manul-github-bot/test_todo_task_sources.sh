@@ -1000,20 +1000,23 @@ assert_eq "unreadable remote child does not complete the root" "true" "$(jq -r '
 assert_eq "unreadable remote child is not falsely marked complete" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
 
 echo
-# The transport and endpoint resolver are owned by globalskills/aicode.
-[ -r "$TODO_MCP_CLIENT" ] && ok "Todo source consumes shared MCP client path" || fail "Shared Todo MCP client path missing"
-[ -r "$TODO_LOCAL_MCP_URL_HELPER" ] && ok "Local Todo source consumes shared endpoint helper path" || fail "Shared Todo endpoint helper path missing"
-
-# Without the shared helper exports, the poller skips optional Todo sources
-# successfully instead of preventing GitHub/Jira providers from polling.
+# Normal standalone operation must not need aicode to export helper paths.
 source "$SCRIPT_DIR/task-source.sh"
-SAVED_TODO_MCP_CLIENT="$TODO_MCP_CLIENT"
-SAVED_TODO_LOCAL_MCP_URL_HELPER="$TODO_LOCAL_MCP_URL_HELPER"
+SAVED_TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-}"
+SAVED_TODO_LOCAL_MCP_URL_HELPER="${TODO_LOCAL_MCP_URL_HELPER:-}"
 unset TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
-local_skip_output="$(task_source_poll '{"type":"todo_local_mcp","enabled":true}' 2>&1)"
-assert_contains "missing shared helper skips local Todo source without error" "$local_skip_output" "skipping optional local Todo source"
-remote_skip_output="$(task_source_poll '{"type":"todo_remote_mcp","enabled":true}' 2>&1)"
-assert_contains "missing shared client skips remote Todo source without error" "$remote_skip_output" "skipping optional remote Todo source"
+assert_eq "standalone poller resolves its bundled Todo MCP client by default" "$SCRIPT_DIR/todo-mcp-client.py" "$(task_source_todo_client_path)"
+assert_eq "standalone poller resolves its bundled endpoint resolver by default" "$SCRIPT_DIR/todo-local-mcp-url.sh" "$(task_source_todo_local_helper_path)"
+if task_source_shared_todo_client_available; then
+  ok "standalone poller finds the bundled MCP client without aicode"
+else
+  fail "standalone poller must find the bundled MCP client without aicode"
+fi
+if task_source_local_helper_available; then
+  ok "standalone poller finds the bundled endpoint resolver without aicode"
+else
+  fail "standalone poller must find the bundled endpoint resolver without aicode"
+fi
 TODO_MCP_CLIENT="$SAVED_TODO_MCP_CLIENT"
 TODO_LOCAL_MCP_URL_HELPER="$SAVED_TODO_LOCAL_MCP_URL_HELPER"
 echo "Results: $PASS passed, $FAIL failed"
