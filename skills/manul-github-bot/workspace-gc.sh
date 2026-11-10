@@ -509,7 +509,13 @@ workspace_gc_finalize_marked_workspaces() {
         workspace_gc_log "WARN refusing unsafe recovery of GC workspace path $workspace_id"
         continue
       fi
-      rm -rf -- "$path" || continue
+      # If the process stopped after claiming status=GC but before archiving,
+      # complete the archive now. Never interpret the marker alone as proof
+      # that the physical workspace was already preserved.
+      if ! workspace_preserve_recovery_snapshot "$workspace_id" "gc-interrupted" >/dev/null 2>&1; then
+        workspace_gc_log "WARN could not preserve interrupted GC workspace $workspace_id; retaining its row"
+        continue
+      fi
     fi
     safe_id="$(workspace_gc_sql_escape "$workspace_id")"
     sqlite3 "$WORKSPACE_GC_DB" "
