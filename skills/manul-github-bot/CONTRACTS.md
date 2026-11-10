@@ -594,14 +594,22 @@ and a PAT from an environment variable. HTTPS is required on untrusted/public
 networks because HTTP does not encrypt the bearer token in transit.
 Tokens never appear in normalized task JSON or configuration values.
 
-The shared Streamable HTTP Todo MCP client and local endpoint resolver are
-owned by `globalskills/aicode`, not by the standalone Manul repository.
-The `aicode` launcher exports their paths through `TODO_MCP_CLIENT` and
-`TODO_LOCAL_MCP_URL_HELPER`. Manul consumes only those exported paths; it
-does not search for a globalskills checkout or keep a copy of the transport.
-When the shared client is unavailable, polling skips the affected optional
-Todo source and continues with other providers. The shared client and its
-transport tests are owned by Globalskills CI.
+The Streamable HTTP Todo MCP client and local endpoint resolver are owned by
+the standalone Manul repository and installed into `~/.manul` with the other
+runtime scripts. The local adapter resolves both helpers relative to its own
+canonical source directory; environment overrides exist only for isolated
+fixtures and explicit operator customization. Neither Manul nor its poller
+requires a globalskills/aicode checkout. Native Linux and macOS connect to
+Todo Desktop's direct loopback endpoint; WSL may use the optional reverse
+bridge started by aicode. The client performs an unauthenticated MCP
+initialize/tools/list handshake for local Todo and uses no Todo bearer token.
+
+At daemon startup, Manul runs a non-fatal task-source preflight and records
+provider readiness or missing dependencies in `~/.manul/logs/daemon.log`.
+The poller records a distinct success or error for each enabled provider in
+`~/.manul/logs/poll.log`; a failed optional provider does not prevent healthy
+providers or the daemon from continuing. Missing standalone transport files
+are an explicit provider error, never a successful silent skip.
 
 Manul does not depend on Caracal and does not read Caracal endpoint/token
 secrets, inject a Caracal MCP entry, or run a Caracal connectivity preflight.

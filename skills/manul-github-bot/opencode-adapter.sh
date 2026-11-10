@@ -297,12 +297,12 @@ fi
 TODO_LOCAL_MCP_AVAILABLE=0
 TODO_LOCAL_MCP_CONNECTED=0
 unset TODO_LOCAL_MCP_URL
-# The shared endpoint resolver and Streamable HTTP client are owned by
-# globalskills/aicode. Manul consumes only the exported paths; it never
-# searches for or hardcodes another repository checkout.
-if [ -n "${TODO_LOCAL_MCP_URL_HELPER:-}" ] &&
-   [ -r "$TODO_LOCAL_MCP_URL_HELPER" ] &&
-   [ -n "${TODO_MCP_CLIENT:-}" ] &&
+# Standalone Manul owns the local Todo transport. Environment overrides remain
+# useful for isolated fixtures, but normal installs resolve both helpers from
+# Manul's own runtime directory and never require globalskills/aicode.
+TODO_LOCAL_MCP_URL_HELPER="${TODO_LOCAL_MCP_URL_HELPER:-$MANUL_DIR/todo-local-mcp-url.sh}"
+TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-$MANUL_DIR/todo-mcp-client.py}"
+if [ -r "$TODO_LOCAL_MCP_URL_HELPER" ] &&
    [ -r "$TODO_MCP_CLIENT" ] &&
    command -v python3 >/dev/null 2>&1; then
     if ! declare -F todo_local_mcp_resolve_url >/dev/null 2>&1; then
@@ -314,15 +314,15 @@ if [ -n "${TODO_LOCAL_MCP_URL_HELPER:-}" ] &&
             TODO_LOCAL_MCP_URL="$_todo_local_resolved_url"
             TODO_LOCAL_MCP_AVAILABLE=1
             TODO_LOCAL_MCP_CONNECTED=1
-            log "shared Todo local MCP handshake succeeded; adding optional Manul Todo MCP"
+            log "Manul local Todo MCP handshake succeeded; adding optional Manul Todo MCP"
         else
             log "Todo local MCP is unavailable; continuing without this optional MCP"
         fi
     else
-        log "shared Todo endpoint helper has no resolver; continuing without optional Todo MCP"
+        log "Manul Todo endpoint helper has no resolver; continuing without optional Todo MCP"
     fi
 else
-    log "shared Todo MCP helpers are unavailable; continuing without optional Todo MCP"
+    log "ERROR: Manul Todo MCP client/resolver is missing or Python 3 is unavailable; continuing without optional Todo MCP"
 fi
 export TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
 

@@ -5,11 +5,18 @@ set -uo pipefail
 TODO_LOCAL_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$TODO_LOCAL_SOURCE_DIR/todo-task-source-utils.sh"
 todo_source_local_load_endpoint_helper() {
-  local helper="${TODO_LOCAL_MCP_URL_HELPER:-}"
-  if [ -z "$helper" ] || [ ! -r "$helper" ]; then
-    echo "task-source: shared Todo endpoint helper is unavailable; local Todo source is optional" >&2
+  local helper="${TODO_LOCAL_MCP_URL_HELPER:-$TODO_LOCAL_SOURCE_DIR/todo-local-mcp-url.sh}"
+  local client="${TODO_MCP_CLIENT:-$TODO_LOCAL_SOURCE_DIR/todo-mcp-client.py}"
+  if [ ! -r "$helper" ]; then
+    echo "ERROR: task-source: bundled Todo endpoint resolver is missing or unreadable ($helper)" >&2
     return 2
   fi
+  if [ ! -r "$client" ] || ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: task-source: bundled Todo MCP client is missing or Python 3 is unavailable ($client)" >&2
+    return 2
+  fi
+  TODO_MCP_CLIENT="$client"
+  export TODO_MCP_CLIENT
   if ! declare -F todo_local_mcp_resolve_url >/dev/null 2>&1; then
     source "$helper" || return 2
   fi

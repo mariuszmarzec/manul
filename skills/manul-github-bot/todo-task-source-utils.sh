@@ -193,9 +193,9 @@ todo_mcp_source_call() {
     echo "todo-mcp: unsupported source type: $source_type" >&2
     return 2
   fi
-  local client="${TODO_MCP_CLIENT:-}"
-  if [ -z "$client" ] || [ ! -r "$client" ] || ! command -v python3 >/dev/null 2>&1; then
-    echo "todo-mcp: shared Todo MCP client is unavailable; Todo sources are optional" >&2
+  local client="${TODO_MCP_CLIENT:-$TODO_TASK_SOURCE_DIR/todo-mcp-client.py}"
+  if [ ! -r "$client" ] || ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: todo-mcp: standalone Todo MCP client is missing or Python 3 is unavailable ($client)" >&2
     return 2
   fi
   python3 "$client" \
@@ -473,8 +473,12 @@ todo_task_tree_is_done() {
 }
 
 todo_task_has_local_trigger() {
-  jq -r '.description // ""' <<<"$1" |
-    grep -qE '^[[:space:]]*/manul([[:space:]]|$)'
+  jq -e '
+    def triggered:
+      ((.description // "") | test("(^|\\n)[[:space:]]*/manul([[:space:]]|$)"))
+      or any(.subTasks[]?; triggered);
+    triggered
+  ' <<<"$1" >/dev/null 2>&1
 }
 
 # A remote task is only actionable when the command is present anywhere in

@@ -1426,6 +1426,15 @@ start() {
   # the safety net for any path that invokes manul-daemon.sh start directly.
   touch "$MANUL_DIR/.enabled"
 
+  # Report enabled-provider readiness before spawning the poller. This diagnostic
+  # is deliberately non-fatal: a missing optional source must be visible in
+  # daemon.log, while healthy providers and the dispatcher continue running.
+  if declare -F task_source_preflight >/dev/null 2>&1; then
+    task_source_preflight "$CONFIG" "$LOG"
+  else
+    log "ERROR: task-source preflight function is unavailable; provider readiness was not checked"
+  fi
+
   # The start lock acquired at function entry remains held until after the supervisor is forked.
 
   # Fork the daemon to run in background.
