@@ -74,7 +74,7 @@ AgentExecutor.execute() {
     case "$execution_kind" in
         repository|report_only) ;;
         *)
-            printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unsupported task execution kind","session_id":"","duration_s":0}\\n' "$task_id"
+            printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unsupported task execution kind","session_id":"","duration_s":0}\n' "$task_id"
             AgentExecutor_ExitCode=1
             return 1
             ;;

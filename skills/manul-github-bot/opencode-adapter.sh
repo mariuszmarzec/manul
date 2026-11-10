@@ -254,11 +254,11 @@ if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -n "$_OPENCODE_BASE_CONFIG" ]; then
            [ "$_report_only_root_real" != "$_report_only_root" ] ||
            [ "$_workspace_parent" != "$_report_only_root_real" ] ||
            [[ "$_workspace_name" != ws-* ]]; then
-            printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned report-only workspace is not a direct scratch directory under MANUL_WORKSPACE/report-only","session_id":"","duration_s":0}\\n' "$OPT_TASK_ID"
+            printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned report-only workspace is not a direct scratch directory under MANUL_WORKSPACE/report-only","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
             exit 66
         fi
     elif [ "$_workspace_parent" != "$_workspace_base_real" ] || [[ "$_workspace_name" != ws-* ]]; then
-        printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned workspace is not a direct lease under the configured MANUL_WORKSPACE","session_id":"","duration_s":0}\\n' "$OPT_TASK_ID"
+        printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned workspace is not a direct lease under the configured MANUL_WORKSPACE","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
         exit 66
     fi
     if [ -n "$_TASK_WORKDIR_INPUT" ]; then
