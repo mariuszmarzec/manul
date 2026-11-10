@@ -258,7 +258,7 @@ task_source_preflight() {
 
   _task_source_preflight_log() {
     printf '[%s] %s\n' "$(date -Is)" "$*" >>"$log_file" 2>/dev/null ||
-      printf '%s\\n' "$*" >&2
+      printf '%s\n' "$*" >&2
   }
 
   if [ ! -r "$config" ] || ! jq -e 'type == "object"' "$config" >/dev/null 2>&1; then
