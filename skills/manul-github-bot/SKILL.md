@@ -208,7 +208,7 @@ Current provider types:
 
 - `github_issues` — default, backed by GitHub repositories.
 - `jira_tasks` — Jira REST provider, disabled by default.
-- `todo_local_mcp` — separate Todo Desktop MCP source. It selects active root tasks whose description contains a line beginning with `/manul`.
+- `todo_local_mcp` — separate Todo Desktop MCP source. It selects active root tasks whose description or any nested subtask contains a line beginning with `/manul`; the complete parent tree is queued once. The Streamable HTTP client and endpoint resolver are bundled with Manul, so local polling does not require globalskills/aicode.
 - `todo_remote_mcp` — separate Fiteo backend MCP source. Its `url` accepts `{env:VARIABLE}` placeholders (for example `"{env:FITEO_BASE_URL}/mcp"`). Set `manulUserIdEnv` to the name of an environment variable containing the positive numeric ID of the Manul Fiteo account; legacy numeric `manulUserId` remains supported. Sharing with that account and `EDITOR_AND_VIEWER` grants visibility; execution additionally requires a `/manul` command in the root description or any nested subtask. A nested trigger queues the complete parent tree once.
 
 For either Todo provider, every ordinary `/manul <request>` is routed
@@ -579,12 +579,23 @@ never replaces an existing operator MCP entry. Optional MCP outages or missing
 Todo helpers do not block agent startup. The overlay adds the exact leased
 workspace permission boundary and is discarded after the task.
 
-The shared Streamable HTTP Todo MCP client and local endpoint resolver are
-owned by `globalskills/aicode`. The `aicode` launcher exports their paths;
-Manul consumes those exported paths without searching another checkout. If
-the helpers are unavailable, Todo sources are skipped while GitHub Issues and
-other configured sources continue to work. The task-creation wrapper and
-OpenCode plugin have been removed; agents use the native Fiteo MCP capability.
+The Streamable HTTP Todo MCP client and local endpoint resolver are bundled
+with standalone Manul and installed into `~/.manul`. Local Todo polling works
+without a globalskills/aicode checkout. On native Linux/macOS Manul connects
+directly to Todo Desktop's loopback MCP endpoint; under WSL, aicode may start
+the existing optional Windows reverse bridge. The local MCP is unauthenticated
+and does not use a Todo bearer token.
+
+Every intentional daemon start performs a non-fatal preflight of enabled task
+sources. Provider readiness and missing prerequisites are written to
+`~/.manul/logs/daemon.log`; per-cycle provider success/failure and error
+details are written to `~/.manul/logs/poll.log`. A missing Todo client,
+resolver, Python runtime, unreachable MCP endpoint, or failed `list_tasks`
+call is visible as an error instead of being silently treated as a successful
+poll. Manul continues operating other healthy providers.
+
+The task-creation wrapper and OpenCode plugin have been removed; agents use
+the native Fiteo MCP capability.
 
 For an existing installation, run `manul --update`. It fetches only
 `origin/main`, refuses local changes or a non-fast-forward checkout, and runs
