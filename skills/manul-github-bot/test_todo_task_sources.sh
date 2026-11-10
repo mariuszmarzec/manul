@@ -231,7 +231,7 @@ if task_source_shared_todo_client_available; then
 else
   fail "local Todo client should be available without Globalskills/aicode"
 fi
-default_local_config="$(todo_source_local_config '{"type":"todo_local_mcp"}")"
+default_local_config="$(todo_source_local_config '{"type":"todo_local_mcp"}')"
 assert_contains "standalone local Todo resolver probes native loopback without external helper path" "$default_local_config" 'http://127.0.0.1:8765/mcp'
 
 # Startup preflight must report real local MCP readiness without making the
