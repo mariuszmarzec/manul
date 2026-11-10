@@ -70,6 +70,7 @@ fi
 # The daemon never invokes adapter scripts directly; it goes through
 # AgentExecutor / AgentExecutionController.
 source "$DAEMON_SCRIPT_DIR/manul-paths.sh"
+source "$DAEMON_SCRIPT_DIR/workspace-gc.sh"
 source "$DAEMON_SCRIPT_DIR/manul-failure-utils.sh"
 source "$DAEMON_SCRIPT_DIR/process-runner.sh"
 source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
@@ -346,6 +347,7 @@ ensure_repo() {
         fi
       fi
 
+      workspace_gc_touch_repo "$repo" || log "WARN: could not update repository-cache usage for $repo"
       log "repo $repo is ready at $repo_dir (branch=$branch)"
       echo "$repo_dir"
       return 0
@@ -378,6 +380,7 @@ ensure_repo() {
     return 1
   fi
 
+  workspace_gc_touch_repo "$repo" || log "WARN: could not update repository-cache usage for $repo"
   log "repo $repo cloned successfully to $repo_dir"
   echo "$repo_dir"
   return 0
@@ -1392,9 +1395,8 @@ start() {
     log "ERROR: failed to source workspace manager: $workspace_manager"
     return 1
   fi
-  if ! workspace_cleanup_stale 3600; then
-    log "ERROR: workspace stale cleanup failed"
-    return 1
+  if ! workspace_gc_run; then
+    log "WARN: workspace GC/reconciliation failed; continuing with conservative pool initialization"
   fi
   workspace_pool_init "$MAX_CONCURRENT_TASKS"
 
@@ -1734,9 +1736,8 @@ ensure_workspace_pool() {
     log "ERROR: failed to source workspace manager: $workspace_manager"
     return 1
   fi
-  if ! workspace_cleanup_stale 3600; then
-    log "ERROR: workspace stale cleanup failed"
-    return 1
+  if ! workspace_gc_run; then
+    log "WARN: workspace GC/reconciliation failed; continuing with conservative pool initialization"
   fi
   if ! workspace_pool_init "$MAX_CONCURRENT_TASKS"; then
     log "ERROR: workspace pool initialization failed (size=$MAX_CONCURRENT_TASKS)"
