@@ -225,6 +225,7 @@ if [ -z "$_OPENCODE_BASE_CONFIG" ]; then
 fi
 _TASK_WORKSPACE_ROOT_INPUT="${MANUL_TASK_WORKSPACE_ROOT:-}"
 _TASK_WORKDIR_INPUT="${MANUL_TASK_WORKDIR:-}"
+_TASK_EXECUTION_KIND_INPUT="${MANUL_TASK_EXECUTION_KIND:-repository}"
 _workspace_real=""
 _workdir_real=""
 # Runner-supplied paths are authoritative. Validate them before starting the
@@ -243,7 +244,20 @@ if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -n "$_OPENCODE_BASE_CONFIG" ]; then
     fi
     _workspace_parent="$(dirname -- "$_workspace_real")"
     _workspace_name="$(basename -- "$_workspace_real")"
-    if [ "$_workspace_parent" != "$_workspace_base_real" ] || [[ "$_workspace_name" != ws-* ]]; then
+    if [ "$_TASK_EXECUTION_KIND_INPUT" = "report_only" ]; then
+        _report_only_root="$_workspace_base_real/report-only"
+        _report_only_root_real=""
+        if [ ! -L "$_report_only_root" ] && [ -d "$_report_only_root" ]; then
+            _report_only_root_real="$(realpath -e -- "$_report_only_root" 2>/dev/null || true)"
+        fi
+        if [ -z "$_report_only_root_real" ] ||
+           [ "$_report_only_root_real" != "$_report_only_root" ] ||
+           [ "$_workspace_parent" != "$_report_only_root_real" ] ||
+           [[ "$_workspace_name" != ws-* ]]; then
+            printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned report-only workspace is not a direct scratch directory under MANUL_WORKSPACE/report-only","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+            exit 66
+        fi
+    elif [ "$_workspace_parent" != "$_workspace_base_real" ] || [[ "$_workspace_name" != ws-* ]]; then
         printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned workspace is not a direct lease under the configured MANUL_WORKSPACE","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
         exit 66
     fi
