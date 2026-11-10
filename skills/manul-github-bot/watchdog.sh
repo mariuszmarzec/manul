@@ -104,14 +104,17 @@ if [ ! -f "$MANUL_DIR/.enabled" ]; then
 fi
 
 # --- 1) daemon liveness ----------------------------------------------------
-# Reclaim stale workspaces before attempting daemon startup. Without this,
-# a dead worker can leave a BUSY workspace forever and make daemon start fail
-# with "insufficient workspaces for concurrency".
-if [ -f "$DB" ] && [ -f "$MANUL_DIR/workspace-manager.sh" ]; then
+# Reconcile leases and run the conservative filesystem/cache GC before
+# daemon startup. The GC's flock prevents overlap with the daemon's dispatcher.
+if [ -f "$DB" ] && [ -x "$MANUL_DIR/workspace-gc.sh" ]; then
+    if ! "$MANUL_DIR/workspace-gc.sh" >>"$LOG" 2>&1; then
+        log "workspace GC failed"
+    fi
+elif [ -f "$DB" ] && [ -f "$MANUL_DIR/workspace-manager.sh" ]; then
+    # Compatibility fallback for an installation being upgraded before the
+    # workspace-gc symlink has been deployed.
     if bash -n "$MANUL_DIR/workspace-manager.sh" 2>/dev/null && source "$MANUL_DIR/workspace-manager.sh"; then
-        if ! workspace_cleanup_stale 3600; then
-            log "workspace stale cleanup failed"
-        fi
+        workspace_cleanup_stale 3600 || log "workspace stale cleanup failed"
     else
         log "ERROR: invalid workspace manager: $MANUL_DIR/workspace-manager.sh"
     fi
