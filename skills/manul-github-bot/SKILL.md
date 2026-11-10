@@ -164,6 +164,38 @@ must leave data on disk and emit an actionable error. The archive is outside the
 agent's allowlisted workspace and must never be exposed through broader
 OpenCode path permissions.
 
+### Workspace and repository-cache garbage collection
+
+The daemon and watchdog run the conservative `workspace-gc.sh` collector under a
+single `flock`. It reconciles interrupted GC leases even when the normal sweep
+interval has not elapsed, and never removes a BUSY workspace or a workspace
+referenced by a queued, running, or user-blocked task.
+
+Default retention:
+- Unbound IDLE workspaces are eligible after 1 hour.
+- Issue/review contexts without a linked PR are eligible after 30 days without use.
+- A PR-linked context is eligible only after GitHub confirms every attached PR
+  has been closed for at least 7 days. API failures and open/reopened PRs retain
+  the workspace.
+- Recovery snapshots are retained for 30 days from archive creation.
+- Shared repository caches are eligible after 30 days without successful use.
+  The collector acquires the same per-repository lock as `ensure_repo` before
+  removing a cache.
+
+Expired workspaces and unregistered workspace directories are moved, not
+immediately deleted, into the private recovery area. Expired recovery snapshots
+are then removed after their retention window. The shared cache remains
+reusable across task workspaces and is only removed when its usage timestamp
+has expired, its canonical GitHub origin is verified, and no repository lock
+or running task protects it.
+
+Retention can be overridden with the `MANUL_WORKSPACE_GC_*` environment
+variables: `INTERVAL_SECONDS`, `IDLE_HOURS`, `CONTEXT_DAYS`,
+`CLOSED_PR_DAYS`, `RECOVERY_DAYS`, `REPO_DAYS`, and
+`PR_CACHE_TTL_SECONDS`. The standalone command
+`workspace-gc.sh --force` bypasses only the interval gate; it does not bypass
+any safety checks or retention thresholds.
+
 Startup serializes the entire workspace-preparation path and holds a separate
 OS-level owner lock for the supervisor's lifetime. Worker processes must close
 that lock descriptor so a worker cannot keep a dead supervisor's lock alive.
