@@ -15,7 +15,17 @@ launcher integrations remain in their respective host repositories.
 - Runtime data: `~/.manul/`
 - Task database: `~/.manul/state/manul.db`
 - Operator/provider environment: `~/.manul/.env` (mode 600)
-- Workspaces: `~/.manul/workspace/`
+- Workspaces and shared repository caches: `~/.manul/workspace/`
+- Recovery snapshots: `~/.manul/state/recovery/workspaces/`
+
+The workspace garbage collector runs from the daemon and watchdog. It reuses
+shared repository caches, removes unbound workspaces after one hour, expires
+inactive issue/review contexts after 30 days, and expires PR contexts seven
+days after GitHub confirms closure. Expired workspaces are first moved to
+recovery; recovery snapshots are retained for 30 days. Unused shared repository
+caches are eligible after 30 days without use and are removed only while holding
+the repository's normal cache lock. GitHub/API uncertainty, active task
+references, and active locks always retain the affected data.
 
 The source checkout and runtime state are deliberately separate. Reinstalling
 or updating the source must not delete the database, task artifacts, logs,

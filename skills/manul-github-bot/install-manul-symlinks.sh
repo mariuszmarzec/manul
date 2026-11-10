@@ -99,6 +99,7 @@ SCRIPTS=(
     "manul-queue-reset.sh"
     "watchdog.sh"
     "workspace-manager.sh"
+    "workspace-gc.sh"
     # Agent execution runtime abstraction (added in runtime isolation refactor)
     "agent-executor.sh"
     "agent-execution-controller.sh"
@@ -193,7 +194,7 @@ for script in "${SCRIPTS[@]}"; do
     # Executable entry points must remain executable even if the canonical
     # checkout lost its execute bit. agent-task-runner.sh is invoked directly
     # by setsid and therefore cannot rely on being sourced.
-    if [ "$script" = "agent-task-runner.sh" ] || [ "$script" = "manul-queue-reset.sh" ] || [ "$script" = "codex-adapter.sh" ] || [ "$script" = "claude-code-adapter.sh" ]; then
+    if [ "$script" = "agent-task-runner.sh" ] || [ "$script" = "manul-queue-reset.sh" ] || [ "$script" = "codex-adapter.sh" ] || [ "$script" = "claude-code-adapter.sh" ] || [ "$script" = "workspace-gc.sh" ]; then
         chmod +x "$canonical_file" "$runtime_path" 2>/dev/null || true
     elif [ -x "$canonical_file" ]; then
         chmod +x "$runtime_path" 2>/dev/null || true
