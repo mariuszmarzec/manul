@@ -179,7 +179,9 @@ pass "recovery snapshots respect active-task ownership and 30-day retention"
 
 # 10. Shared repository cache is retained until 30 days without use, then pruned.
 create_cache() {
-  local repository="$1" slug="${1//\//-}" path="$MANUL_WORKSPACE/$slug"
+  local repository="$1" slug path
+  slug="${repository//\//-}"
+  path="$MANUL_WORKSPACE/$slug"
   mkdir -p "$path"
   git -C "$path" init -q
   git -C "$path" remote add origin "https://github.com/$repository"
