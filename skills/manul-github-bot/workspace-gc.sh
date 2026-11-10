@@ -318,8 +318,10 @@ workspace_gc_remove_workspace() {
       sqlite3 "$WORKSPACE_GC_DB" "UPDATE workspaces SET status='IDLE' WHERE workspaceId='$safe_id' AND status='GC';" >/dev/null 2>&1 || true
       return 1
     fi
-    if ! rm -rf -- "$path"; then
-      workspace_gc_log "WARN failed to remove workspace directory $path"
+    # Expiring a context removes it from the active pool, but preserve one
+    # operator-recoverable snapshot before deleting the original directory.
+    if ! workspace_preserve_recovery_snapshot "$workspace_id" "gc-expired-context" >/dev/null 2>&1; then
+      workspace_gc_log "WARN could not archive expired workspace $workspace_id; retaining it"
       sqlite3 "$WORKSPACE_GC_DB" "UPDATE workspaces SET status='IDLE' WHERE workspaceId='$safe_id' AND status='GC';" >/dev/null 2>&1 || true
       return 1
     fi
@@ -332,26 +334,6 @@ workspace_gc_remove_workspace() {
     COMMIT;
   " >/dev/null 2>&1 || return 1
   workspace_gc_log "removed expired workspace $workspace_id"
-}
-
-workspace_gc_unbound_workspaces() {
-  local rows workspace_id
-  rows="$(sqlite3 "$WORKSPACE_GC_DB" "
-    SELECT w.workspaceId
-    FROM workspaces w
-    WHERE w.status='IDLE'
-      AND w.lastUsedAt <= datetime('now','-${MANUL_WORKSPACE_GC_IDLE_HOURS} hours')
-      AND NOT EXISTS (
-        SELECT 1 FROM workspace_contexts wc
-        WHERE wc.workspaceId=w.workspaceId
-      )
-    ORDER BY w.lastUsedAt;
-  " 2>/dev/null || true)"
-  while IFS= read -r workspace_id; do
-    [ -n "$workspace_id" ] || continue
-    [ "$(workspace_gc_active_task_count "$workspace_id")" = "0" ] || continue
-    workspace_gc_remove_workspace "$workspace_id" || workspace_gc_log "INFO unbound workspace $workspace_id became busy or failed safe removal; retained"
-  done <<< "$rows"
 }
 
 workspace_gc_context_workspaces() {
@@ -388,7 +370,11 @@ workspace_gc_orphan_directories() {
     [ "$registered" = "0" ] || continue
     age="$(workspace_gc_path_age_seconds "$candidate" 2>/dev/null || echo 0)"
     [[ "$age" =~ ^[0-9]+$ ]] && [ "$age" -ge "$min_age" ] || continue
-    rm -rf -- "$candidate" && workspace_gc_log "removed unregistered workspace directory $name (age=${age}s)"
+    if workspace_preserve_recovery_snapshot "$name" "gc-orphan" >/dev/null 2>&1; then
+      workspace_gc_log "moved unregistered workspace directory $name to recovery (age=${age}s)"
+    else
+      workspace_gc_log "WARN could not archive unregistered workspace directory $name; retained"
+    fi
   done < <(find "$WORKSPACE_GC_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'ws-*' -print0 2>/dev/null)
 }
 
@@ -598,7 +584,6 @@ workspace_gc_run() {
   source "$WORKSPACE_GC_SCRIPT_DIR/workspace-manager.sh"
   workspace_init || workspace_gc_log "WARN workspace schema initialization failed"
   workspace_gc_finalize_marked_workspaces
-  workspace_gc_unbound_workspaces
   workspace_cleanup_stale 3600 || workspace_gc_log "WARN workspace stale-lease reconciliation failed"
   workspace_gc_context_workspaces
   workspace_gc_orphan_directories || workspace_gc_log "WARN orphan workspace scan failed"
