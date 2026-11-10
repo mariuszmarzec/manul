@@ -334,6 +334,26 @@ workspace_gc_remove_workspace() {
   workspace_gc_log "removed expired workspace $workspace_id"
 }
 
+workspace_gc_unbound_workspaces() {
+  local rows workspace_id
+  rows="$(sqlite3 "$WORKSPACE_GC_DB" "
+    SELECT w.workspaceId
+    FROM workspaces w
+    WHERE w.status='IDLE'
+      AND w.lastUsedAt <= datetime('now','-${MANUL_WORKSPACE_GC_IDLE_HOURS} hours')
+      AND NOT EXISTS (
+        SELECT 1 FROM workspace_contexts wc
+        WHERE wc.workspaceId=w.workspaceId
+      )
+    ORDER BY w.lastUsedAt;
+  " 2>/dev/null || true)"
+  while IFS= read -r workspace_id; do
+    [ -n "$workspace_id" ] || continue
+    [ "$(workspace_gc_active_task_count "$workspace_id")" = "0" ] || continue
+    workspace_gc_remove_workspace "$workspace_id" || workspace_gc_log "INFO unbound workspace $workspace_id became busy or failed safe removal; retained"
+  done <<< "$rows"
+}
+
 workspace_gc_context_workspaces() {
   local rows workspace_id safe_id context_count
   rows="$(sqlite3 -separator '|' "$WORKSPACE_GC_DB" "
@@ -551,6 +571,7 @@ workspace_gc_run() {
 
   # Daemon dispatch and watchdog may invoke GC at the same time. flock is
   # released automatically if the process exits or crashes.
+  [ ! -L "$WORKSPACE_GC_LOCK" ] || { workspace_gc_log "ERROR refusing symlinked GC lock path"; return 1; }
   exec {lock_fd}>"$WORKSPACE_GC_LOCK" || return 1
   if ! flock -n "$lock_fd"; then
     exec {lock_fd}>&-
@@ -576,8 +597,9 @@ workspace_gc_run() {
   # working trees to recovery storage before marking/removing stale DB rows.
   source "$WORKSPACE_GC_SCRIPT_DIR/workspace-manager.sh"
   workspace_init || workspace_gc_log "WARN workspace schema initialization failed"
-  workspace_cleanup_stale 3600 || workspace_gc_log "WARN workspace stale-lease reconciliation failed"
   workspace_gc_finalize_marked_workspaces
+  workspace_gc_unbound_workspaces
+  workspace_cleanup_stale 3600 || workspace_gc_log "WARN workspace stale-lease reconciliation failed"
   workspace_gc_context_workspaces
   workspace_gc_orphan_directories || workspace_gc_log "WARN orphan workspace scan failed"
   workspace_gc_recovery_snapshots || workspace_gc_log "WARN recovery snapshot scan failed"
