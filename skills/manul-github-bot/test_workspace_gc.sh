@@ -116,8 +116,10 @@ mkdir -p "$MANUL_WORKSPACE/ws-orphan-old"
 touch -d '2 hours ago' "$MANUL_WORKSPACE/ws-orphan-old"
 workspace_gc_run true
 ! workspace_row_exists ws-unbound-old && ! workspace_dir_exists ws-unbound-old || fail "expired unbound workspace removed"
-[ ! -d "$MANUL_WORKSPACE/ws-orphan-old" ] || fail "old unregistered directory removed"
-pass "expired unbound workspace rows and orphan directories are removed"
+[ ! -d "$MANUL_WORKSPACE/ws-orphan-old" ] || fail "old unregistered directory moved out of active workspace"
+orphan_archive="$(find "$MANUL_STATE_DIR/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -name 'ws-orphan-old-gc-orphan-*' -print -quit)"
+[ -n "$orphan_archive" ] || fail "old unregistered directory preserved in recovery"
+pass "expired unbound workspace rows are pruned and orphan directories are archived"
 
 # 2. A fresh unbound pool slot is not pruned.
 mkdir -p "$MANUL_WORKSPACE/ws-unbound-fresh"
@@ -130,7 +132,9 @@ pass "fresh IDLE pool workspace is retained"
 add_workspace ws-old-issue conv-example-repo-issue-1 '31 days'
 workspace_gc_run true
 ! workspace_row_exists ws-old-issue && ! workspace_dir_exists ws-old-issue || fail "old inactive issue workspace removed"
-pass "inactive issue/review context expires after the configured retention"
+expired_context_archive="$(find "$MANUL_STATE_DIR/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -name 'ws-old-issue-gc-expired-context-*' -print -quit)"
+[ -n "$expired_context_archive" ] || fail "expired issue workspace preserved in recovery"
+pass "inactive issue/review context expires after the configured retention and is archived"
 
 # 4. Open PRs are never removed, even when the workspace is very old.
 add_workspace ws-open-pr conv-example-repo-issue-101 '180 days' 101
@@ -205,5 +209,18 @@ latest_used="$(sqlite3 "$DB" "SELECT lastUsedAt FROM manul_repo_cache_usage WHER
 [ -n "$latest_used" ] || fail "cache usage timestamp recorded"
 sqlite3 "$DB" "SELECT CASE WHEN datetime('$latest_used') >= datetime('now','-1 minute') THEN 1 ELSE 0 END;" | grep -qx 1 || fail "cache usage timestamp refreshed"
 pass "repository cache usage timestamp is refreshed"
+
+# 12. A crash after setting status=GC is finalized before the interval gate.
+mkdir -p "$MANUL_WORKSPACE/ws-interrupted-gc"
+sqlite3 "$DB" "
+  INSERT INTO workspaces(workspaceId,workspacePath,status,lastUsedAt)
+  VALUES('ws-interrupted-gc','$MANUL_WORKSPACE/ws-interrupted-gc','GC',datetime('now'));
+  INSERT INTO manul_workspace_gc_state(stateKey,stateValue)
+  VALUES('lastRunAt',datetime('now'))
+  ON CONFLICT(stateKey) DO UPDATE SET stateValue=excluded.stateValue;
+"
+workspace_gc_run false
+! workspace_row_exists ws-interrupted-gc && ! workspace_dir_exists ws-interrupted-gc || fail "interrupted GC transaction finalized before interval return"
+pass "interrupted workspace GC lease is finalized even inside the scheduled interval"
 
 echo "All workspace GC tests passed."
