@@ -17,11 +17,11 @@ task_source_enabled() { jq -e '(.enabled != false)' <<<"$1" >/dev/null 2>&1; }
 task_source_name() { jq -r '.type // empty' <<<"$1"; }
 
 task_source_todo_client_path() {
-  printf '%s\\n' "${TODO_MCP_CLIENT:-$TASK_SOURCE_DIR/todo-mcp-client.py}"
+  printf '%s\n' "${TODO_MCP_CLIENT:-$TASK_SOURCE_DIR/todo-mcp-client.py}"
 }
 
 task_source_todo_local_helper_path() {
-  printf '%s\\n' "${TODO_LOCAL_MCP_URL_HELPER:-$TASK_SOURCE_DIR/todo-local-mcp-url.sh}"
+  printf '%s\n' "${TODO_LOCAL_MCP_URL_HELPER:-$TASK_SOURCE_DIR/todo-local-mcp-url.sh}"
 }
 
 task_source_shared_todo_client_available() {
