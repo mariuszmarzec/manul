@@ -1231,7 +1231,7 @@ poll_all_task_sources() {
       log "ERROR: task source provider failed (type=$type rc=$provider_rc); continuing with other sources"
       continue
     fi
-    candidate_count="$(printf '%s\\n' "$provider_output" | jq -Rsc 'split("\n") | map(select(length > 0)) | length' 2>/dev/null || echo 0)"
+    candidate_count="$(printf '%s\n' "$provider_output" | jq -Rsc 'split("\n") | map(select(length > 0)) | length' 2>/dev/null || echo 0)"
     while IFS= read -r task_json; do
       [ -n "$task_json" ] || continue
       queue_normalized_source_task "$task_json"
