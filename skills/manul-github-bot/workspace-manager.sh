@@ -476,6 +476,9 @@ workspace_preserve_recovery_snapshot() {
     return 1
   fi
   chmod 700 "$destination" 2>/dev/null || true
+  # The archive retention clock starts when the snapshot is created, not when
+  # the source workspace was last modified. mv preserves directory mtimes.
+  touch "$destination" 2>/dev/null || true
   echo "workspace recovery: preserved workspace=$ws_id task=${task_id:-unmapped} path=$destination" >&2
 }
 
