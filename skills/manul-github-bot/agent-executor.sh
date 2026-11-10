@@ -42,12 +42,13 @@ AgentExecutor.execute() {
         return 1
     fi
 
-    local task_id prompt workspace workspace_root workdir agent attempt timeout session_id stdout_file stderr_file auto_accept preflight_only
+    local task_id prompt workspace workspace_root workdir execution_kind agent attempt timeout session_id stdout_file stderr_file auto_accept preflight_only
     task_id="$(jq -r '.taskId // ""' "$ctx_file" 2>/dev/null)"
     prompt="$(jq -r '.prompt // ""' "$ctx_file" 2>/dev/null)"
     workspace="$(jq -r '.workspace // ""' "$ctx_file" 2>/dev/null)"
     workspace_root="$(jq -r '.workspaceRoot // ""' "$ctx_file" 2>/dev/null)"
     workdir="$(jq -r '.workdir // ""' "$ctx_file" 2>/dev/null)"
+    execution_kind="$(jq -r '.executionKind // "repository"' "$ctx_file" 2>/dev/null)"
     agent="$(jq -r '.agent // ""' "$ctx_file" 2>/dev/null)"
     attempt="$(jq -r '.attempt // 1' "$ctx_file" 2>/dev/null)"
     timeout="$(jq -r '.timeout // 0' "$ctx_file" 2>/dev/null)"
@@ -70,6 +71,14 @@ AgentExecutor.execute() {
     mkdir -p "$MANUL_TASKS_DIR" 2>/dev/null || true
 
     # Validate inputs before dispatching
+    case "$execution_kind" in
+        repository|report_only) ;;
+        *)
+            printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unsupported task execution kind","session_id":"","duration_s":0}\\n' "$task_id"
+            AgentExecutor_ExitCode=1
+            return 1
+            ;;
+    esac
     if [ -z "$task_id" ] || [ "$task_id" = "null" ]; then
         printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Missing taskId in execution context","session_id":"","duration_s":0}\n' "$task_id"
         AgentExecutor_ExitCode=1
@@ -169,6 +178,7 @@ AgentExecutor.execute() {
         MANUL_WORKSPACE="$MANUL_WORKSPACE" \
         MANUL_TASK_WORKSPACE_ROOT="$workspace_root" \
         MANUL_TASK_WORKDIR="$workdir" \
+        MANUL_TASK_EXECUTION_KIND="$execution_kind" \
         bash "$adapter_script" \
         --task-id "$task_id" \
         --prompt "$prompt" \

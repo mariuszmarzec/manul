@@ -95,10 +95,13 @@ Todo sources have two execution variants. Repository-backed tasks use an
 explicit, allowlisted GitHub URL or an unambiguous alias from the optional
 project catalog and follow the normal checkout/branch/PR path. When there is no
 usable project reference, the task runs report-only without a configuration
-opt-in, bypasses repository locks and workspace-pool allocation, and persists
-the final answer as a child Todo task. The adapter verifies that child by
-reading the task tree back before the daemon stores its local receipt and marks
-the root last. The source fingerprint excludes only that one valid,
+opt-in, bypasses repository locks and workspace-pool allocation, and receives
+a private disposable scratch root at
+`MANUL_WORKSPACE/report-only/ws-*`. This namespace is separate from the
+workspace lease pool and is accepted by the OpenCode adapter only for an
+explicit `report_only` execution context. The final answer is persisted as a
+child Todo task. The adapter verifies that child by reading the task tree back
+before the daemon stores its local receipt and marks the root last. The source fingerprint excludes only that one valid,
 source-version-bound result child, so unrelated user edits remain visible.
 
 The shared Todo MCP transport and local endpoint resolver are owned by

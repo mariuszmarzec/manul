@@ -3902,6 +3902,49 @@ task_execution_kind_from_context() {
   printf '%s' "$kind"
 }
 
+report_only_workspace_create() {
+  local workspace_base_real report_only_root report_only_root_real report_only_dir report_only_dir_real
+  mkdir -p "$MANUL_WORKSPACE" || return 1
+  workspace_base_real="$(realpath -e -- "$MANUL_WORKSPACE" 2>/dev/null)" || return 1
+  report_only_root="$workspace_base_real/report-only"
+  [ ! -L "$report_only_root" ] || return 1
+  mkdir -p "$report_only_root" || return 1
+  [ ! -L "$report_only_root" ] || return 1
+  report_only_root_real="$(realpath -e -- "$report_only_root" 2>/dev/null)" || return 1
+  [ "$report_only_root_real" = "$report_only_root" ] || return 1
+  chmod 700 "$report_only_root_real" || return 1
+  report_only_dir="$(umask 077; mktemp -d "$report_only_root_real/ws-XXXXXX")" || return 1
+  [ -d "$report_only_dir" ] && [ ! -L "$report_only_dir" ] || return 1
+  report_only_dir_real="$(realpath -e -- "$report_only_dir" 2>/dev/null)" || {
+    rm -rf -- "$report_only_dir"
+    return 1
+  }
+  if [ "$(dirname -- "$report_only_dir_real")" != "$report_only_root_real" ] ||
+     [[ "$(basename -- "$report_only_dir_real")" != ws-* ]]; then
+    rm -rf -- "$report_only_dir"
+    return 1
+  fi
+  printf '%s\n' "$report_only_dir_real"
+}
+
+report_only_workspace_cleanup() {
+  local report_only_dir="${1:-}" workspace_base_real report_only_root report_only_root_real report_only_dir_real
+  [ -n "$report_only_dir" ] || return 0
+  [ ! -L "$report_only_dir" ] || return 1
+  [ -d "$report_only_dir" ] || return 0
+  workspace_base_real="$(realpath -e -- "$MANUL_WORKSPACE" 2>/dev/null)" || return 1
+  report_only_root="$workspace_base_real/report-only"
+  [ ! -L "$report_only_root" ] && [ -d "$report_only_root" ] || return 1
+  report_only_root_real="$(realpath -e -- "$report_only_root" 2>/dev/null)" || return 1
+  [ "$report_only_root_real" = "$report_only_root" ] || return 1
+  report_only_dir_real="$(realpath -e -- "$report_only_dir" 2>/dev/null)" || return 1
+  if [ "$(dirname -- "$report_only_dir_real")" != "$report_only_root_real" ] ||
+     [[ "$(basename -- "$report_only_dir_real")" != ws-* ]]; then
+    return 1
+  fi
+  rm -rf -- "$report_only_dir_real"
+}
+
 dispatch_once() {
   retry_pending_terminal_lifecycle_comments || log "WARN: terminal lifecycle outbox scan failed"
 
@@ -4402,8 +4445,8 @@ TODO_SOURCE_PROMPT
     fi
 
     if [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
-      REPORT_ONLY_DIR="$(mktemp -d /tmp/manul-report-only.XXXXXX)" || {
-        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not create an isolated scratch directory for the report-only task." "" "$current_attempt" "report_only_workspace"
+      REPORT_ONLY_DIR="$(report_only_workspace_create)" || {
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not create an isolated report-only workspace under MANUL_WORKSPACE." "" "$current_attempt" "report_only_workspace"
         return 0
       }
       workspace_path="$REPORT_ONLY_DIR"
@@ -4811,6 +4854,7 @@ PROMPT_APPEND
      cd "$workspace_path" || {
        log "ERROR: cannot enter working directory $WORKDIR, failing task"
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "The validated task workspace could not be entered by the daemon." "${PR_NUM_FROM_URL:-}" "$current_attempt"
+       [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
        return 0
      }
 
@@ -4824,12 +4868,17 @@ PROMPT_APPEND
      local prev_session_id=""
      prev_session_id="$(sqlite3 "$DB" "SELECT session_id FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' AND session_id IS NOT NULL AND session_id != '' LIMIT 1;" 2>/dev/null || echo "")"
 
+     local AGENT_WORKDIR="$WORKDIR"
+     if [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
+       AGENT_WORKDIR=""
+     fi
      jq -n \
        --arg taskId "$COMMENT_ID" \
        --arg prompt "$TASK_PROMPT_FILE" \
        --arg workspace "$workspace_path" \
        --arg workspaceRoot "$workspace_path" \
-       --arg workdir "$WORKDIR" \
+       --arg workdir "$AGENT_WORKDIR" \
+       --arg executionKind "$TASK_EXECUTION_KIND" \
        --arg agent "${AGENT:-}" \
        --arg agentSelection "$AGENT_SELECTION" \
        --argjson autoAccept "$TASK_AUTO_ACCEPT" \
@@ -4838,7 +4887,7 @@ PROMPT_APPEND
        --arg sessionId "$prev_session_id" \
        --arg stdoutFile "$STDOUT_FILE" \
        --arg stderrFile "$STDERR_FILE" \
-       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, workspaceRoot: $workspaceRoot, workdir: $workdir, agent: $agent, agentSelection: $agentSelection, autoAccept: $autoAccept, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
+       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, workspaceRoot: $workspaceRoot, workdir: $workdir, executionKind: $executionKind, agent: $agent, agentSelection: $agentSelection, autoAccept: $autoAccept, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
        > "$EXEC_CTX_FILE"
 
      # Validate the selected runtime before advertising TASK_STARTED. The
@@ -4854,6 +4903,7 @@ PROMPT_APPEND
      if ! jq '. + {preflight_only:true}' "$EXEC_CTX_FILE" > "$PREFLIGHT_CTX_FILE"; then
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not create the runtime preflight context." "${PR_NUM_FROM_URL:-}" "$current_attempt" "runtime_preflight_context"
        rm -f "$PREFLIGHT_CTX_FILE"
+       [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
        return 0
      fi
 
@@ -4872,6 +4922,7 @@ PROMPT_APPEND
        [ -n "$preflight_stage" ] || preflight_stage="runtime_preflight"
        log "dispatch: runtime preflight failed for task $COMMENT_ID (stage=$preflight_stage, rc=$preflight_rc): $preflight_summary"
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$preflight_summary" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$preflight_stage"
+       [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
        return 0
      fi
 
@@ -4887,6 +4938,7 @@ PROMPT_APPEND
        log "ERROR: could not record the agent-start marker for task $COMMENT_ID after successful runtime preflight (changes=${agent_start_changed:-unknown})"
        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=agent_start_marker_failed"
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker after runtime preflight." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
+       [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
        return 0
      fi
 
@@ -4912,6 +4964,7 @@ PROMPT_APPEND
      if ! publish_task_started_for_claim "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "$IN_PROGRESS_BODY" "${PR_NUM_FROM_URL:-}" "$current_attempt"; then
        # The wrapper has either requeued the claim as a pre-agent failure or
        # left it for watchdog recovery. Never continue to prompt/runtime launch.
+       [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
        return 0
      fi
 
@@ -5005,6 +5058,7 @@ PROMPT_APPEND
        [ -n "$exec_failure_stage" ] || exec_failure_stage="runtime_preflight"
        log "dispatch: adapter failed before agent startup for task $COMMENT_ID (stage=$exec_failure_stage): $exec_summary"
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$exec_summary" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$exec_failure_stage"
+       [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
        return 0
      fi
 
@@ -5031,6 +5085,7 @@ PROMPT_APPEND
         release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "$COMMENT_ID" "blocked_user"
+       [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
         return 0
       fi
       log "ERROR: could not transition $COMMENT_ID to blocked_user; falling through to failure handling"
@@ -5118,8 +5173,8 @@ PROMPT_APPEND
     # Cleanup task artifacts. Report-only tasks own a disposable scratch
     # directory rather than a leased repository workspace.
     rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
-    if [ "$TASK_EXECUTION_KIND" = "report_only" ] && [[ "${REPORT_ONLY_DIR:-}" == /tmp/manul-report-only.* ]] && [ -d "$REPORT_ONLY_DIR" ] && [ ! -L "$REPORT_ONLY_DIR" ]; then
-      rm -rf -- "$REPORT_ONLY_DIR"
+    if [ "$TASK_EXECUTION_KIND" = "report_only" ] && [ -n "${REPORT_ONLY_DIR:-}" ]; then
+      report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
     fi
 
     release_task_lock
