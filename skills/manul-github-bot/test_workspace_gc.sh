@@ -221,6 +221,8 @@ sqlite3 "$DB" "
 "
 workspace_gc_run false
 ! workspace_row_exists ws-interrupted-gc && ! workspace_dir_exists ws-interrupted-gc || fail "interrupted GC transaction finalized before interval return"
-pass "interrupted workspace GC lease is finalized even inside the scheduled interval"
+interrupted_archive="$(find "$MANUL_STATE_DIR/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -name 'ws-interrupted-gc-gc-interrupted-*' -print -quit)"
+[ -n "$interrupted_archive" ] || fail "interrupted GC workspace preserved in recovery"
+pass "interrupted workspace GC lease is safely archived and finalized inside the scheduled interval"
 
 echo "All workspace GC tests passed."
