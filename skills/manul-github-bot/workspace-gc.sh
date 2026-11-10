@@ -288,6 +288,7 @@ workspace_gc_remove_workspace() {
     SET status='GC'
     WHERE workspaceId='$safe_id'
       AND status='IDLE'
+      AND ${workspace_gc_table_exists processed_comments && printf '1' || printf '0'}=1
       AND NOT EXISTS (
         SELECT 1 FROM processed_comments pc
         WHERE pc.workspaceId=workspaces.workspaceId
@@ -412,8 +413,13 @@ workspace_gc_seed_untracked_caches() {
     [[ "$origin" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(\.git)?$ ]] || continue
     repository="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
     [ "${repository//\//-}" = "$name" ] || continue
-    workspace_gc_touch_repo "$repository" || true
-    workspace_gc_log "registered existing repository cache $repository for retention tracking"
+    local safe_repo existing
+    safe_repo="$(workspace_gc_sql_escape "$repository")"
+    existing="$(sqlite3 "$WORKSPACE_GC_DB" "SELECT COUNT(*) FROM manul_repo_cache_usage WHERE repository='$safe_repo';" 2>/dev/null || echo 1)"
+    if [ "$existing" = "0" ]; then
+      workspace_gc_touch_repo "$repository" || true
+      workspace_gc_log "registered existing repository cache $repository for retention tracking"
+    fi
   done < <(find "$WORKSPACE_GC_ROOT" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 }
 
@@ -437,7 +443,10 @@ workspace_gc_remove_repo_cache() {
 
   local cleanup_ok=true latest_used running_count root_real origin expected_origin
   latest_used="$(sqlite3 "$WORKSPACE_GC_DB" "SELECT lastUsedAt FROM manul_repo_cache_usage WHERE repository='$safe_repo' LIMIT 1;" 2>/dev/null || true)"
-  if [ -z "$latest_used" ] || [ "$(sqlite3 "$WORKSPACE_GC_DB" "SELECT CASE WHEN datetime('$ (workspace_gc_sql_escape "$last_used")') <= datetime('now','-${MANUL_WORKSPACE_GC_REPO_DAYS} days') THEN 1 ELSE 0 END;" 2>/dev/null)" != "1" ]; then
+  local safe_last_used
+  safe_last_used="$(workspace_gc_sql_escape "$last_used")"
+  if [ -z "$latest_used" ] || [ "$latest_used" != "$last_used" ] ||
+     [ "$(sqlite3 "$WORKSPACE_GC_DB" "SELECT CASE WHEN datetime('$safe_last_used') <= datetime('now','-${MANUL_WORKSPACE_GC_REPO_DAYS} days') THEN 1 ELSE 0 END;" 2>/dev/null)" != "1" ]; then
     cleanup_ok=false
   fi
   running_count="$(sqlite3 "$WORKSPACE_GC_DB" "SELECT COUNT(*) FROM processed_comments WHERE repository='$safe_repo' AND status='running';" 2>/dev/null || echo 0)"
@@ -503,8 +512,37 @@ workspace_gc_finalize_marked_workspaces() {
   done <<< "$rows"
 }
 
+workspace_gc_validate_config() {
+  local name value default
+  for name in \
+    MANUL_WORKSPACE_GC_INTERVAL_SECONDS \
+    MANUL_WORKSPACE_GC_IDLE_HOURS \
+    MANUL_WORKSPACE_GC_CONTEXT_DAYS \
+    MANUL_WORKSPACE_GC_CLOSED_PR_DAYS \
+    MANUL_WORKSPACE_GC_RECOVERY_DAYS \
+    MANUL_WORKSPACE_GC_REPO_DAYS \
+    MANUL_WORKSPACE_GC_PR_CACHE_TTL_SECONDS; do
+    value="${!name:-}"
+    if ! workspace_gc_valid_positive_integer "$value"; then
+      case "$name" in
+        MANUL_WORKSPACE_GC_INTERVAL_SECONDS) default=3600 ;;
+        MANUL_WORKSPACE_GC_IDLE_HOURS) default=1 ;;
+        MANUL_WORKSPACE_GC_CONTEXT_DAYS) default=30 ;;
+        MANUL_WORKSPACE_GC_CLOSED_PR_DAYS) default=7 ;;
+        MANUL_WORKSPACE_GC_RECOVERY_DAYS) default=30 ;;
+        MANUL_WORKSPACE_GC_REPO_DAYS) default=30 ;;
+        MANUL_WORKSPACE_GC_PR_CACHE_TTL_SECONDS) default=21600 ;;
+      esac
+      printf -v "$name" '%s' "$default"
+      export "$name"
+      workspace_gc_log "WARN invalid $name; using $default"
+    fi
+  done
+}
+
 workspace_gc_run() {
   local force="${1:-false}" lock_fd now_epoch last_run last_run_epoch elapsed
+  workspace_gc_validate_config
   workspace_gc_init || { workspace_gc_log "ERROR unable to initialize GC state"; return 1; }
 
   # Daemon dispatch and watchdog may invoke GC at the same time. flock is
@@ -533,6 +571,7 @@ workspace_gc_run() {
   # Reconcile stale BUSY leases first. The workspace manager moves recoverable
   # working trees to recovery storage before marking/removing stale DB rows.
   source "$WORKSPACE_GC_SCRIPT_DIR/workspace-manager.sh"
+  workspace_init || workspace_gc_log "WARN workspace schema initialization failed"
   workspace_cleanup_stale 3600 || workspace_gc_log "WARN workspace stale-lease reconciliation failed"
   workspace_gc_finalize_marked_workspaces
   workspace_gc_context_workspaces
