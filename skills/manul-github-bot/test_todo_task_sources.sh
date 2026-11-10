@@ -144,9 +144,8 @@ PYTHON
 chmod +x "$BIN/python3"
 export REAL_PYTHON_BIN="$PYTHON_BIN"
 
-# The shared MCP transport and endpoint helper are supplied by globalskills/aicode.
-# These fixtures model that exported interface; the implementation is tested in
-# globalskills CI, not copied into Manul's runtime tree.
+# Optional environment overrides are tested below, but the normal runtime
+# resolves its bundled MCP client and endpoint helper from this Manul checkout.
 SHARED_TODO_DIR="$TEST_DIR/shared-todo"
 mkdir -p "$SHARED_TODO_DIR"
 TODO_MCP_CLIENT="$SHARED_TODO_DIR/todo-mcp-client.py"
@@ -219,6 +218,36 @@ cat > "$TEST_DIR/project-repositories.json" <<'JSON'
 JSON
 # Load the shared resolver before testing its default path.
 source "$SCRIPT_DIR/todo-task-source-utils.sh"
+source "$SCRIPT_DIR/task-source.sh"
+
+# Verify a standalone installation works with no Globalskills/aicode paths.
+SAVED_TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-}"
+SAVED_TODO_LOCAL_MCP_URL_HELPER="${TODO_LOCAL_MCP_URL_HELPER:-}"
+unset TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
+assert_eq "standalone Todo MCP client is bundled with Manul" "1" "$([ -r "$SCRIPT_DIR/todo-mcp-client.py" ] && echo 1 || echo 0)"
+assert_eq "standalone Todo endpoint resolver is bundled with Manul" "1" "$([ -r "$SCRIPT_DIR/todo-local-mcp-url.sh" ] && echo 1 || echo 0)"
+if task_source_shared_todo_client_available; then
+  ok "local Todo client is available without external environment variables"
+else
+  fail "local Todo client should be available without Globalskills/aicode"
+fi
+default_local_config="$(todo_source_local_config '{"type":"todo_local_mcp"}")"
+assert_contains "standalone local Todo resolver probes native loopback without external helper path" "$default_local_config" 'http://127.0.0.1:8765/mcp'
+
+# Startup preflight must report real local MCP readiness without making the
+# optional provider a fatal requirement for the Manul daemon.
+cat > "$TEST_DIR/local-preflight.json" <<'JSON'
+{"repositories":[],"taskSources":[{"type":"todo_local_mcp","enabled":true,"url":"http://127.0.0.1:8765/mcp"}]}
+JSON
+task_source_preflight "$TEST_DIR/local-preflight.json" "$TEST_DIR/local-preflight.log"
+assert_contains "startup preflight records successful local Todo MCP handshake" "$(cat "$TEST_DIR/local-preflight.log")" "todo_local_mcp ready"
+export TODO_LOCAL_MCP_DIRECT_STATUS=000
+task_source_preflight "$TEST_DIR/local-preflight.json" "$TEST_DIR/local-preflight.log"
+assert_contains "startup preflight logs an unreachable enabled local Todo source" "$(cat "$TEST_DIR/local-preflight.log")" "todo_local_mcp is enabled but unavailable"
+export TODO_LOCAL_MCP_DIRECT_STATUS=200
+TODO_MCP_CLIENT="$SAVED_TODO_MCP_CLIENT"
+TODO_LOCAL_MCP_URL_HELPER="$SAVED_TODO_LOCAL_MCP_URL_HELPER"
+export TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
 
 # The repository catalog and mapped skill files resolve from the same fixed
 # ~/.agents/skills root, independently of the calling shell's HOME.
@@ -593,6 +622,45 @@ local_question_task="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
 assert_eq "plain local /manul question is auto-classified as report-only without report keyword" "report_only" "$(jq -r '.execution.kind' <<<"$local_question_task")"
 assert_contains "plain local /manul question keeps its prompt" "$(jq -r '.prompt' <<<"$local_question_task")" "what day is today?"
 assert_eq "plain local /manul question does not require repository metadata" "null" "$(jq -r '.metadata.repository // null' <<<"$local_question_task")"
+
+# Local Todo must match the same root-trigger semantics as remote Todo: a
+# /manul command in any descendant queues the parent tree exactly once.
+cat > "$TEST_DIR/local-nested-trigger.json" <<'JSON'
+[
+  {
+    "id": 491,
+    "description": "Parent task without a local trigger",
+    "addedTime": "2026-10-01T10:00:00",
+    "modifiedTime": "2026-10-01T10:00:00",
+    "parentTaskId": null,
+    "subTasks": [
+      {
+        "id": 492,
+        "description": "/manul answer a nested question",
+        "addedTime": "2026-10-01T10:01:00",
+        "modifiedTime": "2026-10-01T10:01:00",
+        "parentTaskId": 491,
+        "subTasks": [],
+        "isToDo": true,
+        "priority": 1,
+        "scheduler": null,
+        "shares": []
+      }
+    ],
+    "isToDo": true,
+    "priority": 1,
+    "scheduler": null,
+    "shares": []
+  }
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/local-nested-trigger.json"
+nested_trigger_task="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
+assert_eq "local nested /manul trigger queues the parent root once" "491" "$(jq -r '.taskSourceId | split("@")[0]' <<<"$nested_trigger_task")"
+assert_eq "local nested trigger uses report-only when the parent has no repository route" "report_only" "$(jq -r '.execution.kind' <<<"$nested_trigger_task")"
+assert_contains "nested /manul command is removed from the ordered step text" "$(jq -r '.prompt' <<<"$nested_trigger_task")" "answer a nested question"
+assert_not_contains "nested /manul command itself is not forwarded as prompt content" "$(jq -r '.prompt' <<<"$nested_trigger_task")" "/manul"
+
 export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8765/mcp'
 
