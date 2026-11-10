@@ -94,7 +94,6 @@ SCRIPTS=(
     "todo-task-source-utils.sh"
     "todo-mcp-client.py"
     "todo-local-mcp-url.sh"
-    "test_todo_mcp_client.py"
     "start-manul-automation.sh"
     "task-recovery.sh"
     "manul-queue-reset.sh"
