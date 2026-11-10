@@ -34,7 +34,7 @@ workspace_gc_sql_escape() {
 
 workspace_gc_log() {
   mkdir -p "$(dirname "$WORKSPACE_GC_LOG")" 2>/dev/null || true
-  printf '[%s] %s\n' "$(date -Is)" "$*" >>"$WORKSPACE_GC_LOG" 2>/dev/null || true
+  printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$WORKSPACE_GC_LOG" 2>/dev/null || true
 }
 
 workspace_gc_valid_positive_integer() {
@@ -195,7 +195,7 @@ workspace_gc_fetch_pr_state() {
         FROM manul_workspace_gc_pr_cache
         WHERE repository='$safe_repo' AND prNumber=$pr_number LIMIT 1;
       " 2>/dev/null || true
-    )
+    ) || true
   fi
 
   cache_age=$((now_epoch - ${cached_checked:-0}))
