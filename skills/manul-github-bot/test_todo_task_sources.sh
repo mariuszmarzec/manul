@@ -219,6 +219,7 @@ JSON
 # Load the shared resolver before testing its default path.
 source "$SCRIPT_DIR/todo-task-source-utils.sh"
 source "$SCRIPT_DIR/task-source.sh"
+source "$SCRIPT_DIR/task-source-todo-local.sh"
 
 # Verify a standalone installation works with no Globalskills/aicode paths.
 SAVED_TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-}"
@@ -267,7 +268,6 @@ assert_not_contains "mapped skill context ignores an alternate skills root" "$sk
 
 export TODO_TASK_REPOSITORY_CATALOG="$TEST_DIR/project-repositories.json"
 
-source "$SCRIPT_DIR/task-source-todo-local.sh"
 source "$SCRIPT_DIR/task-source-todo-remote.sh"
 source "$SCRIPT_DIR/manul-env.sh"
 
