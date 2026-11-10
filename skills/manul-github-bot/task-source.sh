@@ -257,7 +257,7 @@ task_source_preflight() {
   local configured_sources source_json type status detail failures=0 enabled=0
 
   _task_source_preflight_log() {
-    printf '[%s] %s\\n' "$(date -Is)" "$*" >>"$log_file" 2>/dev/null ||
+    printf '[%s] %s\n' "$(date -Is)" "$*" >>"$log_file" 2>/dev/null ||
       printf '%s\\n' "$*" >&2
   }
 
