@@ -1218,21 +1218,25 @@ queue_normalized_source_task() {
   fi
 }
 poll_all_task_sources() {
-  local source_json type task_json
+  local source_json type task_json source_poll_json provider_output provider_rc candidate_count
   for source_json in "${TASK_SOURCE_CONFIGS[@]}"; do
     type="$(task_source_name "$source_json")"
     [ -n "$type" ] || continue
     # The install baseline is scan metadata, not a universal task filter.
     # Providers decide whether/how they apply it.
-    local source_poll_json
     source_poll_json="$(jq -c --arg baseline "$BASELINE" '.baseline=$baseline' <<<"$source_json")"
+    provider_rc=0
+    provider_output="$(task_source_poll "$source_poll_json" 2>>"$LOG")" || provider_rc=$?
+    if [ "$provider_rc" -ne 0 ]; then
+      log "ERROR: task source provider failed (type=$type rc=$provider_rc); continuing with other sources"
+      continue
+    fi
+    candidate_count="$(printf '%s\\n' "$provider_output" | jq -R 'select(length > 0)' -s 'length' 2>/dev/null || echo 0)"
     while IFS= read -r task_json; do
       [ -n "$task_json" ] || continue
       queue_normalized_source_task "$task_json"
-    done < <(task_source_poll "$source_poll_json" 2>>"$LOG" || {
-      log "WARN: task source provider failed (type=$type), continuing with other sources"
-      true
-    })
+    done <<<"$provider_output"
+    log "INFO: task source poll completed (type=$type candidates=${candidate_count:-0})"
   done
 }
 
