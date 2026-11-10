@@ -564,6 +564,13 @@ workspace_gc_run() {
     return 0
   fi
 
+  # Finish an interrupted two-phase removal even when the normal GC interval
+  # has not elapsed. Otherwise a crash after status=GC could temporarily
+  # shrink the pool until the next scheduled sweep.
+  source "$WORKSPACE_GC_SCRIPT_DIR/workspace-manager.sh"
+  workspace_init || workspace_gc_log "WARN workspace schema initialization failed"
+  workspace_gc_finalize_marked_workspaces
+
   now_epoch="$(date +%s)"
   last_run_epoch="$(sqlite3 "$WORKSPACE_GC_DB" "SELECT COALESCE(strftime('%s',stateValue),'0') FROM manul_workspace_gc_state WHERE stateKey='lastRunAt' LIMIT 1;" 2>/dev/null || echo 0)"
   elapsed=$((now_epoch - ${last_run_epoch:-0}))
@@ -581,9 +588,6 @@ workspace_gc_run() {
 
   # Reconcile stale BUSY leases first. The workspace manager moves recoverable
   # working trees to recovery storage before marking/removing stale DB rows.
-  source "$WORKSPACE_GC_SCRIPT_DIR/workspace-manager.sh"
-  workspace_init || workspace_gc_log "WARN workspace schema initialization failed"
-  workspace_gc_finalize_marked_workspaces
   workspace_cleanup_stale 3600 || workspace_gc_log "WARN workspace stale-lease reconciliation failed"
   workspace_gc_context_workspaces
   workspace_gc_orphan_directories || workspace_gc_log "WARN orphan workspace scan failed"
