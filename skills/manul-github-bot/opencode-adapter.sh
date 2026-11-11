@@ -628,7 +628,8 @@ if execution_kind == "operator_query":
             "tools": {"*": False},
         }
     }
-    tools = {"*": False}
+    tools = {pattern: False for pattern in tool_rule_patterns}
+    tools["*"] = False
 else:
     tools = {"fiteo_todo_create_task": False}
 if fiteo_url and fiteo_pat:
