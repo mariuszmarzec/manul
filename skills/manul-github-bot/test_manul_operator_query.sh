@@ -62,11 +62,11 @@ RESULT="$(
   AGENT_RUNTIME=openclaw \
   OPENCLAW_BIN="$TMP/bin/openclaw" \
   PATH="$TMP/bin:$PATH" \
-  bash -c 'source "$1/agent-executor.sh"; AgentExecutor.execute "$2"' _ "$SCRIPT_DIR" "$WORKSPACE/context.json"
+  bash -c 'source "$1/agent-execution-controller.sh"; AgentExecutionController.execute "$2"' _ "$SCRIPT_DIR" "$WORKSPACE/context.json"
 )"
 
 printf '%s' "$RESULT" | jq -e '.status == "COMPLETED" and .runtime == "openclaw"' >/dev/null
 grep -q '^Operator status: one running task\.$' "$WORKSPACE/stdout"
 grep -q '^TASK_DONE$' "$WORKSPACE/stdout"
 
-echo "PASS: operator_query routes through AgentExecutor with an embedded deny-all OpenClaw invocation"
+echo "PASS: operator_query routes through AgentExecutionController with an embedded deny-all OpenClaw invocation"
