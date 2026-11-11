@@ -257,6 +257,19 @@ if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -n "$_OPENCODE_BASE_CONFIG" ]; then
             printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned report-only workspace is not a direct scratch directory under MANUL_WORKSPACE/report-only","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
             exit 66
         fi
+    elif [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
+        _operator_query_root="$_workspace_base_real/operator-query"
+        _operator_query_root_real=""
+        if [ ! -L "$_operator_query_root" ] && [ -d "$_operator_query_root" ]; then
+            _operator_query_root_real="$(realpath -e -- "$_operator_query_root" 2>/dev/null || true)"
+        fi
+        if [ -z "$_operator_query_root_real" ] ||
+           [ "$_operator_query_root_real" != "$_operator_query_root" ] ||
+           [ "$_workspace_parent" != "$_operator_query_root_real" ] ||
+           [[ "$_workspace_name" != oq-* ]]; then
+            printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned operator query workspace is not a direct scratch directory under MANUL_WORKSPACE/operator-query","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+            exit 66
+        fi
     elif [ "$_workspace_parent" != "$_workspace_base_real" ] || [[ "$_workspace_name" != ws-* ]]; then
         printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned workspace is not a direct lease under the configured MANUL_WORKSPACE","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
         exit 66
@@ -349,7 +362,7 @@ _OVERLAY_ERROR_FILE="$OPENCODE_TASK_CONFIG_DIR/overlay.stderr"
 if ! env -u PYTHONHOME -u PYTHONPATH python3 - "$_OVERLAY_JSON_FILE" "$_workspace_real" "$_workspace_base_real" \
     "${FITEO_BASE_URL:-}" "${FITEO_MANUL_PAT:-}" "${TODO_LOCAL_MCP_URL:-}" \
     "${OPENCODE_CONFIG:-}" "${OPENCODE_CONFIG_DIR:-}" "$HOME" "${XDG_CONFIG_HOME:-$HOME/.config}" \
-    "$_OPENCODE_SCAN_ROOT" "${OPENCODE_CONFIG_CONTENT:-}" 2>"$_OVERLAY_ERROR_FILE" <<'PY_MANUL_OVERLAY'
+    "$_OPENCODE_SCAN_ROOT" "${OPENCODE_CONFIG_CONTENT:-}" "$_TASK_EXECUTION_KIND_INPUT" 2>"$_OVERLAY_ERROR_FILE" <<'PY_MANUL_OVERLAY'
 import fnmatch
 import json
 import os
@@ -357,7 +370,7 @@ import re
 import sys
 from pathlib import Path
 
-output, workspace, workspace_base, fiteo_url, fiteo_pat, todo_url, custom_config, custom_dir, home, xdg_home, project_root, inline_content = sys.argv[1:]
+output, workspace, workspace_base, fiteo_url, fiteo_pat, todo_url, custom_config, custom_dir, home, xdg_home, project_root, inline_content, execution_kind = sys.argv[1:]
 
 def parse_jsonc(text):
     # Remove line/block comments while preserving strings and newlines.
@@ -511,6 +524,7 @@ def collect_permission_rules(obj):
     return rules
 
 names = set()
+agent_names = set()
 tool_rule_patterns = set()
 operator_permissions = []
 scan_ok = True
@@ -535,6 +549,9 @@ for path in dict.fromkeys(paths):
     if isinstance(tools_obj, dict):
         tool_rule_patterns.update(k for k, v in tools_obj.items() if isinstance(k, str))
 
+    agents_obj = obj.get("agent") or {}
+    if isinstance(agents_obj, dict):
+        agent_names.update(agents_obj.keys())
     mcp = obj.get("mcp") or {}
     if isinstance(mcp, dict):
         servers = mcp.get("servers")
@@ -561,6 +578,9 @@ if inline_content:
             tools_obj = parsed.get("tools")
             if isinstance(tools_obj, dict):
                 tool_rule_patterns.update(k for k, v in tools_obj.items() if isinstance(k, str))
+            agents_obj = parsed.get("agent") or {}
+            if isinstance(agents_obj, dict):
+                agent_names.update(agents_obj.keys())
             mcp = parsed.get("mcp") or {}
             if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
                 names.update(mcp["servers"].keys())
@@ -588,7 +608,22 @@ permissions = operator_permissions + [
 # Never permit the raw operator Fiteo create tool inside a Manul task.
 # Task creation is only available through the dedicated Manul-authenticated
 # MCP connection below; the user's global Fiteo server remains untouched.
-tools = {"fiteo_todo_create_task": False}
+operator_agent_config = {}
+if execution_kind == "operator_query":
+    operator_agent_name = "manul-operator-query"
+    if operator_agent_name in agent_names:
+        print("reserved OpenCode agent 'manul-operator-query' already exists; refusing operator query to preserve isolation", file=sys.stderr)
+        raise SystemExit(2)
+    operator_agent_config = {
+        operator_agent_name: {
+            "mode": "primary",
+            "description": "Tool-free Manul operator query. Answer only from the supplied snapshot.",
+            "tools": {"*": False},
+        }
+    }
+    tools = {"*": False}
+else:
+    tools = {"fiteo_todo_create_task": False}
 if fiteo_url and fiteo_pat:
     if "manul-fiteo" in names:
         print("operator MCP 'manul-fiteo' already exists; disabling that reserved tool namespace for this task", file=sys.stderr)
@@ -644,6 +679,8 @@ overlay = {
 }
 if servers:
     overlay["mcp"] = {"servers": servers}
+if operator_agent_config:
+    overlay["agent"] = operator_agent_config
 if tools:
     overlay["tools"] = tools
 combined = deep_merge(existing_inline, overlay)
@@ -676,6 +713,13 @@ if [ "$OPT_PREFLIGHT_ONLY" = "true" ]; then
     jq -cn --arg task_id "$OPT_TASK_ID" \
         '{status:"READY",task_id:$task_id,exit_code:0,summary:"OpenCode runtime preflight passed",session_id:"",duration_s:0,runtime:"opencode",diagnostics:{stage:"runtime_preflight",agent_started:false}}'
     exit 0
+fi
+
+# Operator queries always use a reserved, task-local agent whose tool set is empty.
+REQUESTED_OPERATOR_ROLE=""
+if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
+    REQUESTED_OPERATOR_ROLE="$OPT_AGENT"
+    OPT_AGENT="manul-operator-query"
 fi
 
 # A missing native OpenCode agent definition is optional. Let OpenCode use the
@@ -712,6 +756,12 @@ write_runtime_capability_context() {
     printf '%s\n' '- The adapter validates runner-supplied paths against the configured MANUL_WORKSPACE before starting the model. These exact paths are authoritative; never reconstruct or correct them from usernames, task IDs, or assumptions.'
     printf '%s\n' '- For shell commands, prefer cd "$MANUL_TASK_WORKDIR" when that variable is present. If a tool does not inherit it, use the exact primary-checkout path in the original prompt. Prefer "$HOME/..." for home-relative paths; do not assume tilde expansion inside quoted strings or tool arguments.'
     printf '%s\n' '- Only the primary checkout may be edited/delivered by default. Related checkouts explicitly declared read-only remain read-only.'
+    if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
+        printf '%s\n' '- Operator query mode is tool-free. Use only the read-only snapshot embedded in the prompt; do not access local files or invoke tools.'
+        if [ -n "${REQUESTED_OPERATOR_ROLE:-}" ]; then
+            printf -- '- Requested canonical role guidance: %s\n' "$REQUESTED_OPERATOR_ROLE"
+        fi
+    fi
     printf '%s\n' '- Access is still subject to OpenCode tool-level and path-level decisions. An external-directory allow rule is not a guarantee that every bash command or tool call will be allowed.'
     printf '%s\n' '- Never inspect or modify sibling task workspaces, shared caches, Manul databases/logs/configuration, adapters, or other runtime state. Never try to bypass a denial via another tool, a different path, a symlink, a wrapper, or a reshaped command.'
     printf '%s\n' '' 'Effective V2 external_directory permission rules (path patterns are JSON-quoted):'
