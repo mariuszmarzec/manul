@@ -468,14 +468,45 @@ See `GITHUB_CONTROL_PROTOCOL.md` for machine-readable details.
 
 The local control interface consists of:
 
-```
+```bash
 manul --update
+manul --prompt "Question for Manul"
+printf '%s' "Question for Manul" | manul --json
 manul-submit.sh
 manul-status.sh
 manul-result.sh
 manul-wait.sh
 manul-conversation.sh
 manul-orchestrator.sh
+```
+
+### Synchronous operator query
+
+`manul --prompt "Question"` runs a one-shot, read-only operator query
+through the configured agent runtime. It is separate from the GitHub/Todo
+`/manul` command protocol: it does not create a queued task, reserve a
+repository, post comments, or mutate Manul task state. The CLI builds a
+bounded, redacted snapshot from the Manul database and selected logs, then
+passes that snapshot to `AgentExecutionController`. The agent must answer
+from that snapshot; it is not given direct database/log access or tools.
+
+The question may also be supplied through stdin. Optional flags are
+`--timeout SECONDS` (10–7200, default 300) and `--json`; run
+`manul --help` for usage. OpenClaw, OpenCode and Claude Code have
+tool-disabled execution policies. Codex fails closed until its adapter can
+guarantee a zero-tool execution mode.
+
+This is a local shell entrypoint provided by `manul-shell.zsh`, not a
+`/manul prompt` chat command and not a tool available to an agent running
+inside a task workspace. It is available in a Zsh session after the canonical
+shell integration is loaded (normally by `~/.zshrc`). If the shell reports
+that the option is unknown, update the canonical checkout and reload the
+shell integration:
+
+```bash
+manul --update
+source ~/.zshrc
+manul --help
 ```
 
 See `LOCAL_INTERFACE.md` and `ORCHESTRATOR.md`.
