@@ -2578,6 +2578,9 @@ repair_result_comment_marker() {
     return 1
   fi
 
+  # Return the already-read/repaired body to verify_result_comment so optional
+  # non-empty verification does not need another GitHub API read.
+  REPAIRED_RESULT_COMMENT_BODY="$repaired_body"
   log "verify_result_comment: repaired stale marker attempt=$selected_attempt to current attempt=$attempt in existing comment $selected_id for task $comment_id"
   lc_log "RESULT_MARKER_REPAIRED" "task=$comment_id repo=$repo issue=$url_issue_num previous_attempt=$selected_attempt attempt=$attempt comment_id=$selected_id"
   rm -rf "$tmpdir"
@@ -2588,12 +2591,29 @@ repair_result_comment_marker() {
 # Uses deterministic task/attempt marker: <!-- manul-task:<COMMENT_ID>:attempt:<ATTEMPT> -->
 # Fails closed on any error (missing commentUrl, API failure, no matching comment).
 # Rejects lifecycle comments (🔄, ✅, ❌, ⚠️) — they share the signature but lack the marker.
+# Return success only when the result body contains meaningful user-facing
+# content after removing the deterministic marker and Manul signature. The
+# body can be the escaped single-line value returned by the comments jq filter
+# or the raw body from the marker-repair response.
+result_comment_body_has_content() {
+  local body="$1" marker="$2" clean
+  clean="$(printf '%s\n' "$body" | sed "s|$marker||g; s/— manul 🐈//g; s/\\\\n/ /g" | tr -d '[:space:]')"
+  [ -n "$clean" ]
+}
+
 verify_result_comment() {
   local repo="$1"
   local issue="$2"
   local comment_id="$3"
   local safe_comment_id="$4"
   local attempt="$5"
+  local require_nonempty="${6:-false}"
+  local result_body=""
+  local REPAIRED_RESULT_COMMENT_BODY=""
+
+  # An optional caller can distinguish an empty result from a missing/invalid
+  # marker without introducing a second read of the comments endpoint.
+  RESULT_COMMENT_VERIFY_FAILURE_CODE=""
 
   # Get the task's commentUrl for correlation
   local comment_url
@@ -2677,6 +2697,7 @@ verify_result_comment() {
     fi
     if [[ "$body" == *"$marker"* ]]; then
       result_count=$((result_count + 1))
+      result_body="$body"
     fi
   done < "$bodies_file"
 
@@ -2688,6 +2709,13 @@ verify_result_comment() {
   fi
 
   if [ "$result_count" -gt 0 ]; then
+    if [ "$require_nonempty" = "true" ] && ! result_comment_body_has_content "$result_body" "$marker"; then
+      RESULT_COMMENT_VERIFY_FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      log "ERROR: verify_result_comment: result comment for task $comment_id attempt $attempt contains no meaningful user-facing content"
+      lc_log "RESULT_COMMENT_EMPTY" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt scope=$result_scope"
+      rm -rf "$tmpdir"
+      return 1
+    fi
     log "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num scope=$result_scope"
     rm -rf "$tmpdir"
     return 0
@@ -2700,6 +2728,12 @@ verify_result_comment() {
   # number. The helper repairs the invisible marker in-place only after checking
   # task identity, unique candidate count, and the current agentStartedAt window.
   if repair_result_comment_marker "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt"; then
+    if [ "$require_nonempty" = "true" ] && ! result_comment_body_has_content "$REPAIRED_RESULT_COMMENT_BODY" "$marker"; then
+      RESULT_COMMENT_VERIFY_FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      log "ERROR: verify_result_comment: repaired result comment for task $comment_id attempt $attempt contains no meaningful user-facing content"
+      lc_log "RESULT_COMMENT_EMPTY" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt scope=$result_scope repaired=true"
+      return 1
+    fi
     log "verify_result_comment: recovered result comment with stale attempt marker for task $comment_id attempt $attempt"
     return 0
   fi
@@ -3099,15 +3133,15 @@ verify_implement_comment_only_delivery() {
     return 1
   fi
 
-  if ! verify_result_comment "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt"; then
-    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="DELIVERY_COMMENT_MISSING"
-    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Implementation task on base/default branch did not publish a verifiable result comment for attempt $attempt"
-    return 1
-  fi
-
-  if ! verify_nonempty_result_comment "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt"; then
-    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
-    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Implementation task result comment for attempt $attempt is empty or contains only the marker/signature"
+  local RESULT_COMMENT_VERIFY_FAILURE_CODE=""
+  if ! verify_result_comment "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt" "true"; then
+    if [ "$RESULT_COMMENT_VERIFY_FAILURE_CODE" = "DELIVERY_COMMENT_EMPTY" ]; then
+      IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Implementation task result comment for attempt $attempt is empty or contains only the marker/signature"
+    else
+      IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="DELIVERY_COMMENT_MISSING"
+      IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Implementation task on base/default branch did not publish a verifiable result comment for attempt $attempt"
+    fi
     return 1
   fi
 
