@@ -133,7 +133,7 @@ jq -n \
   --arg stdout "$STDOUT_FILE" \
   --arg stderr "$STDERR_FILE" \
   --argjson timeout "$TIMEOUT" \
-  '{taskId:$taskId,prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:"",executionKind:"operator_query",agent:$agent,agentSelection:(if $agent == "" then "automatic" else "explicit" end),autoAccept:false,attempt:1,timeout:$timeout,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' \
+  '{taskId:$taskId,prompt:$prompt,workspace:$workspace,workspaceRoot:$workspace,workdir:"",executionKind:"operator_query",agent:"",agentSelection:"automatic",autoAccept:false,attempt:1,timeout:$timeout,session_id:"",stdout_file:$stdout,stderr_file:$stderr}' \
   > "$EXEC_CTX_FILE"
 chmod 600 "$EXEC_CTX_FILE"
 
