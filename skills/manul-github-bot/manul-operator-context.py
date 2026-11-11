@@ -153,12 +153,12 @@ def main() -> int:
         if lines:
             logs[name] = lines
 
-    active = [task for task in tasks if task["status"] in {"queued", "running", "blocked_user"}]
+    active_count = sum(counts.get(status, 0) for status in ("queued", "running", "blocked_user"))
     snapshot = {
         "generatedAt": now.isoformat(),
         "scope": "read-only operator snapshot; active tasks plus tasks with activity in the last 7 days",
         "taskCountsInRecent300Rows": counts,
-        "activeTaskCountInRecent300Rows": len(active),
+        "activeTaskCountInRecent300Rows": active_count,
         "tasks": tasks,
         "logs": logs,
     }
