@@ -3057,10 +3057,6 @@ persist_verified_pr_metadata() {
   return 0
 }
 
-# Verify that the agent's result comment contains the exact canonical URL
-# of the real PR belonging to this task branch. This prevents an issue URL,
-# an issue number masquerading as a PR number, /compare links, or stale PR links
-# from being reported as the task result.
 # Validate the exceptional IMPLEMENT delivery path for informational work that
 # intentionally produces no repository diff. This is not the general VERIFY
 # report-only mode: it still requires TASK_DONE plus a task/attempt-bound,
@@ -3117,6 +3113,10 @@ verify_result_comment_pr_url_if_required() {
   verify_result_comment_pr_url "$@"
 }
 
+# Verify that the agent's result comment contains the exact canonical URL
+# of the real PR belonging to this task branch. This prevents an issue URL,
+# an issue number masquerading as a PR number, /compare links, or stale PR links
+# from being reported as the task result.
 verify_result_comment_pr_url() {
   local repo="$1" issue_num="$2" comment_id="$3" safe_comment_id="$4" attempt="$5" workdir="$6" expected_base="$7"
   local branch="$8"
