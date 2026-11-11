@@ -67,8 +67,15 @@ fi
 : > "$RAW_STDOUT_FILE"; : > "$RAW_STDERR_FILE"
 ProcessRunner_TmpStdout="$RAW_STDOUT_FILE"; ProcessRunner_TmpStderr="$RAW_STDERR_FILE"
 printf '[%s] claude-code-adapter: task=%s attempt=%s session=%s role=%s binary=%s permission_mode=acceptEdits\n' "$(date -Is)" "$OPT_TASK_ID" "$OPT_ATTEMPT" "${OPT_SESSION_ID:-new}" "${OPT_AGENT:-automatic}" "$CLAUDE_BIN" >> "$OPT_STDERR_FILE"
-PR_RESULT="$(ProcessRunner.run --timeout "$AGENT_TIMEOUT" --idle-timeout "$AGENT_IDLE_TIMEOUT" --idle-jsonl-file "$RAW_STDOUT_FILE" --idle-tool-timeout "$AGENT_TOOL_IDLE_TIMEOUT" --cwd "$OPT_WORKSPACE" --env "MANUL_PROMPT_FILE=$CURRENT_PROMPT_FILE" --env "MANUL_SESSION_ID=$OPT_SESSION_ID" --env "MANUL_CLAUDE_MODEL=$CLAUDE_MODEL" -- bash -c '
-  bin="$1"; set -- "$bin" --print --verbose --output-format stream-json --input-format text --permission-mode acceptEdits
+CLAUDE_OPERATOR_QUERY=false
+if [ "${MANUL_TASK_EXECUTION_KIND:-repository}" = "operator_query" ]; then CLAUDE_OPERATOR_QUERY=true; fi
+PR_RESULT="$(ProcessRunner.run --timeout "$AGENT_TIMEOUT" --idle-timeout "$AGENT_IDLE_TIMEOUT" --idle-jsonl-file "$RAW_STDOUT_FILE" --idle-tool-timeout "$AGENT_TOOL_IDLE_TIMEOUT" --cwd "$OPT_WORKSPACE" --env "MANUL_PROMPT_FILE=$CURRENT_PROMPT_FILE" --env "MANUL_SESSION_ID=$OPT_SESSION_ID" --env "MANUL_CLAUDE_MODEL=$CLAUDE_MODEL" --env "MANUL_CLAUDE_OPERATOR_QUERY=$CLAUDE_OPERATOR_QUERY" -- bash -c '
+  bin="$1"
+  if [ "$MANUL_CLAUDE_OPERATOR_QUERY" = "true" ]; then
+    set -- "$bin" --print --verbose --output-format stream-json --input-format text --permission-mode plan --tools "" --disallowedTools "mcp__*"
+  else
+    set -- "$bin" --print --verbose --output-format stream-json --input-format text --permission-mode acceptEdits
+  fi
   if [ -n "$MANUL_SESSION_ID" ]; then set -- "$@" --resume "$MANUL_SESSION_ID"; fi
   if [ -n "$MANUL_CLAUDE_MODEL" ]; then set -- "$@" --model "$MANUL_CLAUDE_MODEL"; fi
   exec "$@" < "$MANUL_PROMPT_FILE"
