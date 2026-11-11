@@ -3069,6 +3069,14 @@ verify_implement_comment_only_delivery() {
   IMPLEMENT_COMMENT_ONLY_FAILURE_CODE=""
   IMPLEMENT_COMMENT_ONLY_FAILURE_REASON=""
 
+  if [ -z "$branch" ]; then
+    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="VERIFICATION_FAILED"
+    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Could not verify the current base/default branch for comment-only delivery"
+    log "dispatch: task $comment_id cannot verify the current branch for comment-only delivery"
+    lc_log "TASK_ERROR" "task=$comment_id reason=comment_only_branch_unverifiable"
+    return 1
+  fi
+
   local current_head verified_initial_head
   current_head="$(git -C "$workdir" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
   verified_initial_head=""
