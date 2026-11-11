@@ -300,7 +300,7 @@ echo "PASS: comment-only delivery skips only redundant final marker read; normal
 # result comment is accepted as comment-only delivery without requiring a PR.
 CURRENT_RESULT_MARKER="<!-- manul-task:${CURRENT_TASK}:attempt:1 -->"
 jq -cn --arg marker "$CURRENT_RESULT_MARKER" \
-  '[{id:999,in_reply_to_id:null,body:($marker + "\\n# Task completed\\nAnswer: yes, it is possible.")}]' \
+  '[{id:999,in_reply_to_id:null,body:($marker + "\n# Task completed\nAnswer: yes, it is possible.")}]' \
   >"$FAKE_RESULT_COMMENTS_JSON"
 git -C "$WORKDIR" checkout -q main
 git -C "$WORKDIR" reset -q --hard "$INITIAL_BASE_SHA"
@@ -313,7 +313,7 @@ else
 fi
 
 # A dirty base checkout remains forbidden even if a valid result comment exists.
-printf 'forbidden direct edit\\n' >"$WORKDIR/forbidden.txt"
+printf 'forbidden direct edit\n' >"$WORKDIR/forbidden.txt"
 if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$INITIAL_BASE_SHA" "main"; then
   echo "FAIL: accepted comment-only delivery after a direct base-branch edit" >&2
   exit 1
