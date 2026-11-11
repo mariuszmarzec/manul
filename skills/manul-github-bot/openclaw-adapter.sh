@@ -307,6 +307,6 @@ jq -cn \
     --arg summary "$_summary" \
     --arg session_id "$_session_id" \
     --arg duration_s "$_duration" \
-    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber)}'
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:"openclaw"}'
 
 exit "$_exit_code" 
