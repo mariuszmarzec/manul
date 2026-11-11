@@ -108,7 +108,7 @@ class OperatorContextTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(output.read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["activeTaskCount"], 1)
+        self.assertEqual(payload["activeTaskCountInRecent300Rows"], 1)
         self.assertEqual({task["taskId"] for task in payload["tasks"]}, {"running-1", "done-1"})
         done = next(task for task in payload["tasks"] if task["taskId"] == "done-1")
         self.assertEqual(done["sourceId"], "116372")
