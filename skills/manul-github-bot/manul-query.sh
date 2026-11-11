@@ -88,7 +88,10 @@ cleanup_operator_workspace() {
     fi
   fi
 }
-trap cleanup_operator_workspace EXIT HUP INT TERM
+trap cleanup_operator_workspace EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 export MANUL_WORKSPACE="$WORKSPACE_BASE"
 export MANUL_TASKS_DIR="$WORKSPACE/tasks"
