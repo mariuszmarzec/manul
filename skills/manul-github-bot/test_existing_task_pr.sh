@@ -347,6 +347,21 @@ else
   echo "PASS: missing current-attempt markers are rejected"
 fi
 
+# An absent or unresolvable initial repository baseline must fail closed.
+jq -cn --arg marker "$CURRENT_RESULT_MARKER" \
+  '[{id:1002,in_reply_to_id:null,body:($marker + "\n# Task completed\nAnswer: yes, it is possible.")}]' \
+  >"$FAKE_RESULT_COMMENTS_JSON"
+for invalid_baseline in "" "not-a-commit"; do
+  if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$invalid_baseline" "main"; then
+    echo "FAIL: accepted comment-only delivery with an unverifiable baseline ($invalid_baseline)" >&2
+    exit 1
+  else
+    [ "$COMMENT_ONLY_DELIVERY" = "false" ]
+    [ "$IMPLEMENT_COMMENT_ONLY_FAILURE_CODE" = "VERIFICATION_FAILED" ]
+    echo "PASS: unverifiable baseline is rejected (${invalid_baseline:-empty})"
+  fi
+done
+
 # The final PR-URL gate is skipped only for verified comment-only delivery.
 # Ordinary GitHub IMPLEMENT tasks still invoke it, and Todo sources preserve
 # their independent receipt-based completion path.
