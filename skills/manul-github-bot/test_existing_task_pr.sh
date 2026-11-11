@@ -291,7 +291,10 @@ grep -q 'VERIFIED_MERGED_RESULT_PR_BASE' <<<"$evaluator_block"
 grep -Fq 'local VERIFIED_MERGED_RESULT_PR_BASE=""' "$SCRIPT_DIR/manul-daemon.sh"
 grep -q 'verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID"' <<<"$evaluator_block"
 grep -q 'verify_result_comment_pr_url_if_required "$COMMENT_ONLY_DELIVERY" "$TASK_SOURCE_TYPE"' <<<"$evaluator_block"
-echo "PASS: IMPLEMENT evaluator has a dedicated comment-only path and preserves normal PR URL validation"
+final_marker_gate="$(grep -F -A 7 '# The comment-only base-branch verifier already checked this exact marker' "$SCRIPT_DIR/manul-daemon.sh")"
+grep -Fq '[ "$COMMENT_ONLY_DELIVERY" != "true" ]' <<<"$final_marker_gate"
+grep -Fq 'verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID"' <<<"$final_marker_gate"
+echo "PASS: comment-only delivery skips only redundant final marker read; normal GitHub tasks retain it"
 
 # Case 9: a clean base checkout with a verified, non-empty current-attempt
 # result comment is accepted as comment-only delivery without requiring a PR.
