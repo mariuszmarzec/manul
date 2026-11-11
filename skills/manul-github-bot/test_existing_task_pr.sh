@@ -363,6 +363,20 @@ for invalid_baseline in "" "not-a-commit"; do
   fi
 done
 
+# A detached HEAD (empty branch name) is not proof that the task stayed on
+# the base/default branch, even when HEAD equals the initial commit.
+jq -cn --arg marker "$CURRENT_RESULT_MARKER" \
+  '[{id:1003,in_reply_to_id:null,body:($marker + "\n# Task completed\nAnswer: yes, it is possible.")}]' \
+  >"$FAKE_RESULT_COMMENTS_JSON"
+if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$INITIAL_BASE_SHA" ""; then
+  echo "FAIL: accepted comment-only delivery with an unverifiable detached HEAD branch" >&2
+  exit 1
+else
+  [ "$COMMENT_ONLY_DELIVERY" = "false" ]
+  [ "$IMPLEMENT_COMMENT_ONLY_FAILURE_CODE" = "VERIFICATION_FAILED" ]
+  echo "PASS: detached HEAD is rejected for comment-only delivery"
+fi
+
 # The final PR-URL gate is skipped only for verified comment-only delivery.
 # Ordinary GitHub IMPLEMENT tasks still invoke it, and Todo sources preserve
 # their independent receipt-based completion path.
