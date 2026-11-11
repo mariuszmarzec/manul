@@ -2579,6 +2579,9 @@ repair_result_comment_marker() {
     return 1
   fi
 
+  # Return the already-read/repaired body to verify_result_comment so optional
+  # non-empty verification does not need another GitHub API read.
+  REPAIRED_RESULT_COMMENT_BODY="$repaired_body"
   log "verify_result_comment: repaired stale marker attempt=$selected_attempt to current attempt=$attempt in existing comment $selected_id for task $comment_id"
   lc_log "RESULT_MARKER_REPAIRED" "task=$comment_id repo=$repo issue=$url_issue_num previous_attempt=$selected_attempt attempt=$attempt comment_id=$selected_id"
   rm -rf "$tmpdir"
@@ -2589,12 +2592,29 @@ repair_result_comment_marker() {
 # Uses deterministic task/attempt marker: <!-- manul-task:<COMMENT_ID>:attempt:<ATTEMPT> -->
 # Fails closed on any error (missing commentUrl, API failure, no matching comment).
 # Rejects lifecycle comments (🔄, ✅, ❌, ⚠️) — they share the signature but lack the marker.
+# Return success only when the result body contains meaningful user-facing
+# content after removing the deterministic marker and Manul signature. The
+# body can be the escaped single-line value returned by the comments jq filter
+# or the raw body from the marker-repair response.
+result_comment_body_has_content() {
+  local body="$1" marker="$2" clean
+  clean="$(printf '%s\n' "$body" | sed "s|$marker||g; s/— manul 🐈//g; s/\\\\n/ /g" | tr -d '[:space:]')"
+  [ -n "$clean" ]
+}
+
 verify_result_comment() {
   local repo="$1"
   local issue="$2"
   local comment_id="$3"
   local safe_comment_id="$4"
   local attempt="$5"
+  local require_nonempty="${6:-false}"
+  local result_body=""
+  local REPAIRED_RESULT_COMMENT_BODY=""
+
+  # An optional caller can distinguish an empty result from a missing/invalid
+  # marker without introducing a second read of the comments endpoint.
+  RESULT_COMMENT_VERIFY_FAILURE_CODE=""
 
   # Get the task's commentUrl for correlation
   local comment_url
@@ -2678,6 +2698,7 @@ verify_result_comment() {
     fi
     if [[ "$body" == *"$marker"* ]]; then
       result_count=$((result_count + 1))
+      result_body="$body"
     fi
   done < "$bodies_file"
 
@@ -2689,6 +2710,13 @@ verify_result_comment() {
   fi
 
   if [ "$result_count" -gt 0 ]; then
+    if [ "$require_nonempty" = "true" ] && ! result_comment_body_has_content "$result_body" "$marker"; then
+      RESULT_COMMENT_VERIFY_FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      log "ERROR: verify_result_comment: result comment for task $comment_id attempt $attempt contains no meaningful user-facing content"
+      lc_log "RESULT_COMMENT_EMPTY" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt scope=$result_scope"
+      rm -rf "$tmpdir"
+      return 1
+    fi
     log "verify_result_comment: found result comment for task $comment_id attempt $attempt on $repo#$url_issue_num scope=$result_scope"
     rm -rf "$tmpdir"
     return 0
@@ -2701,6 +2729,12 @@ verify_result_comment() {
   # number. The helper repairs the invisible marker in-place only after checking
   # task identity, unique candidate count, and the current agentStartedAt window.
   if repair_result_comment_marker "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt"; then
+    if [ "$require_nonempty" = "true" ] && ! result_comment_body_has_content "$REPAIRED_RESULT_COMMENT_BODY" "$marker"; then
+      RESULT_COMMENT_VERIFY_FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      log "ERROR: verify_result_comment: repaired result comment for task $comment_id attempt $attempt contains no meaningful user-facing content"
+      lc_log "RESULT_COMMENT_EMPTY" "task=$comment_id repo=$repo issue=$url_issue_num attempt=$attempt scope=$result_scope repaired=true"
+      return 1
+    fi
     log "verify_result_comment: recovered result comment with stale attempt marker for task $comment_id attempt $attempt"
     return 0
   fi
@@ -3058,6 +3092,84 @@ persist_verified_pr_metadata() {
   return 0
 }
 
+# Validate the exceptional IMPLEMENT delivery path for informational work that
+# intentionally produces no repository diff. This is not the general VERIFY
+# report-only mode: it still requires TASK_DONE plus a task/attempt-bound,
+# non-empty GitHub result comment, and is available only on a clean base branch.
+verify_implement_comment_only_delivery() {
+  local repo="$1" issue="$2" comment_id="$3" safe_comment_id="$4" attempt="$5"
+  local workdir="$6" initial_head="$7" branch="$8"
+
+  COMMENT_ONLY_DELIVERY="false"
+  IMPLEMENT_COMMENT_ONLY_FAILURE_CODE=""
+  IMPLEMENT_COMMENT_ONLY_FAILURE_REASON=""
+
+  if [ -z "$branch" ]; then
+    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="VERIFICATION_FAILED"
+    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Could not verify the current base/default branch for comment-only delivery"
+    log "dispatch: task $comment_id cannot verify the current branch for comment-only delivery"
+    lc_log "TASK_ERROR" "task=$comment_id reason=comment_only_branch_unverifiable"
+    return 1
+  fi
+
+  local current_head verified_initial_head
+  current_head="$(git -C "$workdir" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+  verified_initial_head=""
+  if [ -n "$initial_head" ]; then
+    verified_initial_head="$(git -C "$workdir" rev-parse --verify "${initial_head}^{commit}" 2>/dev/null || true)"
+  fi
+  if [ -z "$workdir" ] || [ -z "$current_head" ] || [ -z "$verified_initial_head" ]; then
+    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="VERIFICATION_FAILED"
+    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Could not verify the repository baseline for comment-only delivery on base/default branch ($branch)"
+    log "dispatch: task $comment_id cannot verify repository baseline for comment-only delivery"
+    lc_log "TASK_ERROR" "task=$comment_id reason=comment_only_baseline_unverifiable branch=$branch"
+    return 1
+  fi
+
+  if repository_changed_since "$workdir" "$verified_initial_head"; then
+    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="VERIFICATION_FAILED"
+    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Repository changes were made directly on a base/default branch ($branch)"
+    log "dispatch: task $comment_id changed repository state on forbidden base branch $branch"
+    lc_log "TASK_ERROR" "task=$comment_id reason=changes_on_base_branch branch=$branch"
+    return 1
+  fi
+
+  local RESULT_COMMENT_VERIFY_FAILURE_CODE=""
+  if ! verify_result_comment "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt" "true"; then
+    if [ "$RESULT_COMMENT_VERIFY_FAILURE_CODE" = "DELIVERY_COMMENT_EMPTY" ]; then
+      IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+      IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Implementation task result comment for attempt $attempt is empty or contains only the marker/signature"
+    else
+      IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="DELIVERY_COMMENT_MISSING"
+      IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Implementation task on base/default branch did not publish a verifiable result comment for attempt $attempt"
+    fi
+    return 1
+  fi
+
+  COMMENT_ONLY_DELIVERY="true"
+  log "dispatch: task $comment_id accepted with verified non-empty comment-only delivery on clean base branch $branch"
+  lc_log "IMPLEMENT_COMMENT_ONLY_DELIVERY" "task=$comment_id repo=$repo branch=$branch attempt=$attempt"
+  return 0
+}
+
+# The PR-URL invariant remains mandatory for normal GitHub IMPLEMENT deliveries
+# and is bypassed only for the explicitly verified clean-base comment-only path.
+# Todo sources retain their separate source-receipt delivery contract.
+verify_result_comment_pr_url_if_required() {
+  local comment_only_delivery="$1" task_source_type="$2"
+  shift 2
+
+  if [ "$comment_only_delivery" = "true" ]; then
+    log "dispatch: skipping PR URL verification for verified comment-only IMPLEMENT delivery"
+    lc_log "PR_RESULT_LINK_VERIFY_SKIPPED" "reason=verified_comment_only_delivery"
+    return 0
+  fi
+  if task_source_is_todo_type "$task_source_type"; then
+    return 0
+  fi
+  verify_result_comment_pr_url "$@"
+}
+
 # Verify that the agent's result comment contains the exact canonical URL
 # of the real PR belonging to this task branch. This prevents an issue URL,
 # an issue number masquerading as a PR number, /compare links, or stale PR links
@@ -3391,6 +3503,9 @@ evaluate_task_completion() {
   fi
   
   local SUCCESS="false"
+  local COMMENT_ONLY_DELIVERY="false"
+  local IMPLEMENT_COMMENT_ONLY_FAILURE_CODE=""
+  local IMPLEMENT_COMMENT_ONLY_FAILURE_REASON=""
 
   # A user-input request is a deliberate pause, not task failure.
   # Detect and validate the complete structured block before any success/failure
@@ -3593,7 +3708,8 @@ else
      elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
       # IMPLEMENT work normally must finish on its own feature branch. A no-op
       # on the base branch is accepted only when an existing PR for this same
-      # issue has been independently re-verified.
+      # issue has been independently re-verified, or the agent posted a valid
+      # result comment indicating successful completion without repository changes.
       local already_satisfied="false"
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
@@ -3615,12 +3731,18 @@ else
           current_branch="$VERIFIED_EXISTING_PR_BRANCH"
           log "dispatch: task $COMMENT_ID accepted as already delivered through verified merged PR $VERIFIED_EXISTING_PR_URL"
           lc_log "IMPLEMENT_ALREADY_SATISFIED_MERGED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM branch=$current_branch base=$VERIFIED_MERGED_RESULT_PR_BASE url=$VERIFIED_EXISTING_PR_URL"
+        elif verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$INITIAL_HEAD" "$current_branch"; then
+          # A clean base checkout plus this attempt's verified, non-empty result
+          # comment is an intentional informational IMPLEMENT delivery. Keep a
+          # distinct flag so later PR URL checks do not mistake it for a PR task.
+          already_satisfied="true"
+          log "dispatch: task $COMMENT_ID accepted as completed with verified comment-only delivery (no repository changes)"
         else
           SUCCESS="false"
-          FAILURE_CODE="VERIFICATION_FAILED"
-          FAIL_REASON="Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing or merged task PR"
-          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch; no pre-existing or merged task PR was verified"
-          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
+          FAILURE_CODE="${IMPLEMENT_COMMENT_ONLY_FAILURE_CODE:-VERIFICATION_FAILED}"
+          FAIL_REASON="${IMPLEMENT_COMMENT_ONLY_FAILURE_REASON:-Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing or merged task PR}"
+          log "dispatch: task $COMMENT_ID rejected on base branch $current_branch: ${FAIL_REASON}"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_delivery_rejected code=$FAILURE_CODE branch=$current_branch"
         fi
       fi
 
@@ -3642,7 +3764,7 @@ else
         else
           verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
         fi
-        if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" && ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+        if ! verify_result_comment_pr_url_if_required "$COMMENT_ONLY_DELIVERY" "$TASK_SOURCE_TYPE" "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
@@ -3728,7 +3850,10 @@ PY_REPORT_ANSWER
   fi
   # GitHub-rooted tasks require a deterministic result-comment receipt.
   # Todo tasks instead use the source MCP and do not have a GitHub issue thread.
-  if [ "$SUCCESS" = "true" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+  # The comment-only base-branch verifier already checked this exact marker and
+  # the non-empty body. Avoid a second API read that could turn a verified
+  # delivery into a retry solely because the follow-up read transiently fails.
+  if [ "$SUCCESS" = "true" ] && [ "$COMMENT_ONLY_DELIVERY" != "true" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
     if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
       SUCCESS="false"
       FAILURE_CODE="DELIVERY_COMMENT_MISSING"
