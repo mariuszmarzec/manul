@@ -310,7 +310,7 @@ The agent may read/search configured related repository checkouts inside the lea
 
 ## 14. Agent task access boundary
 
-### 14a. Operator query execution
+### Operator query execution
 
 - `operator_query` is a one-shot, synchronous CLI execution kind. It is never
   inserted into the task queue and never claims a repository lock, workspace
@@ -337,7 +337,6 @@ The agent may read/search configured related repository checkouts inside the lea
 - Operator queries do not emit task lifecycle markers to GitHub and must not
   persist runtime session IDs, queue rows, results, or task logs.
 
-## 14. Agent task access boundary
 
 An explicitly authorized operator-side maintenance session running **outside a
 Manul-managed task** may inspect read-only logs under `~/.manul/logs/**` to
