@@ -36,9 +36,13 @@ pr_auto_source="$(sed -n '/^pr_auto_create() {$/,/^}$/p' "$SCRIPT_DIR/manul-daem
 required_pr_source="$(sed -n '/^verify_required_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 base_infer_source="$(sed -n '/^infer_task_base_branch() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 result_comment_source="$(sed -n '/^verify_result_comment() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+nonempty_result_comment_source="$(sed -n '/^verify_nonempty_result_comment() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 repo_changed_source="$(sed -n '/^repository_changed_since() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
-if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ] || [ -z "$pr_check_source" ] || [ -z "$pr_auto_source" ] || [ -z "$required_pr_source" ] || [ -z "$base_infer_source" ] || [ -z "$result_comment_source" ] || [ -z "$repo_changed_source" ]; then
-  echo "FAIL: existing-task/required-PR verifier functions were not found in manul-daemon.sh" >&2
+comment_only_delivery_source="$(sed -n '/^verify_implement_comment_only_delivery() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+pr_url_required_source="$(sed -n '/^verify_result_comment_pr_url_if_required() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+task_source_type_source="$(sed -n '/^task_source_is_todo_type() {$/,/^}$/p' "$SCRIPT_DIR/task-source.sh")"
+if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ] || [ -z "$pr_check_source" ] || [ -z "$pr_auto_source" ] || [ -z "$required_pr_source" ] || [ -z "$base_infer_source" ] || [ -z "$result_comment_source" ] || [ -z "$nonempty_result_comment_source" ] || [ -z "$repo_changed_source" ] || [ -z "$comment_only_delivery_source" ] || [ -z "$pr_url_required_source" ] || [ -z "$task_source_type_source" ]; then
+  echo "FAIL: required production verifier functions were not found" >&2
   exit 1
 fi
 eval "$verifier_source"
@@ -48,7 +52,14 @@ eval "$pr_auto_source"
 eval "$base_infer_source"
 eval "$required_pr_source"
 eval "$result_comment_source"
+eval "$nonempty_result_comment_source"
 eval "$repo_changed_source"
+eval "$comment_only_delivery_source"
+eval "$pr_url_required_source"
+eval "$task_source_type_source"
+# The repair path is covered elsewhere; this test asserts fail-closed behavior
+# when neither the exact current-attempt marker nor a repair candidate exists.
+repair_result_comment_marker() { return 1; }
 
 sqlite3 "$DB" <<'SQL'
 CREATE TABLE processed_comments (
@@ -126,7 +137,19 @@ if [[ "$1" == "pr" && "$2" == "view" ]]; then
   exit 0
 fi
 if [[ "$1" == "api" && "$2" == "repos/test/repo/issues/17/comments" ]]; then
-  cat "$FAKE_RESULT_COMMENTS_JSON"
+  shift 2
+  jq_filter=""
+  while (($#)); do
+    case "$1" in
+      --jq) jq_filter="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -n "$jq_filter" ]; then
+    jq -r "$jq_filter" "$FAKE_RESULT_COMMENTS_JSON"
+  else
+    cat "$FAKE_RESULT_COMMENTS_JSON"
+  fi
   exit 0
 fi
 if [[ "$1" == "api" && "$2" == "repos/test/repo/issues/17" ]]; then
@@ -256,49 +279,92 @@ else
   echo "PASS: rejects merged PRs targeting an unexpected base"
 fi
 
-# Assert that the real IMPLEMENT evaluator allows a no-op retry only after one
-# of the verified-existing-PR paths succeeds and always validates the result URL.
-evaluator_block="$(grep -F -A 80 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
+# Assert that the real IMPLEMENT evaluator preserves strict PR validation,
+# while routing only the verified comment-only exception through its dedicated
+# finalization gate.
+evaluator_block="$(grep -F -A 95 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
 grep -q 'verify_existing_task_pr' <<<"$evaluator_block"
 grep -q 'verify_merged_result_pr' <<<"$evaluator_block"
 grep -q 'already_satisfied="true"' <<<"$evaluator_block"
 grep -q 'already_satisfied" != "true"' <<<"$evaluator_block"
 grep -q 'VERIFIED_MERGED_RESULT_PR_BASE' <<<"$evaluator_block"
 grep -Fq 'local VERIFIED_MERGED_RESULT_PR_BASE=""' "$SCRIPT_DIR/manul-daemon.sh"
-grep -q 'verify_result_comment_pr_url' <<<"$evaluator_block"
-echo "PASS: IMPLEMENT evaluator recognizes independently verified merged PRs and retains result URL verification"
+grep -q 'verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID"' <<<"$evaluator_block"
+grep -q 'verify_result_comment_pr_url_if_required "$COMMENT_ONLY_DELIVERY" "$TASK_SOURCE_TYPE"' <<<"$evaluator_block"
+echo "PASS: IMPLEMENT evaluator has a dedicated comment-only path and preserves normal PR URL validation"
 
-# Case 9: an IMPLEMENT task on the base branch with no repository diff and no
-# PR must be accepted when a verified result comment with the exact current
-# attempt marker exists. This is the informational/comment-only delivery path
-# that was previously unreachable (the evaluator rejected the task before
-# ever calling verify_result_comment).
+# Case 9: a clean base checkout with a verified, non-empty current-attempt
+# result comment is accepted as comment-only delivery without requiring a PR.
 CURRENT_RESULT_MARKER="<!-- manul-task:${CURRENT_TASK}:attempt:1 -->"
 jq -cn --arg marker "$CURRENT_RESULT_MARKER" \
-  '[[{id:999,body:($marker + "\n# Task completed\nAnswer: yes, it is possible.")}]]' \
+  '[{id:999,in_reply_to_id:null,body:($marker + "\\n# Task completed\\nAnswer: yes, it is possible.")}]' \
   >"$FAKE_RESULT_COMMENTS_JSON"
 git -C "$WORKDIR" checkout -q main
 git -C "$WORKDIR" reset -q --hard "$INITIAL_BASE_SHA"
-if ! repository_changed_since "$WORKDIR" "$INITIAL_BASE_SHA"; then
-  : # clean base checkout, no diff expected
-fi
-if verify_result_comment "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1; then
-  echo "PASS: verify_result_comment accepts exact current-attempt result marker on base branch"
+if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$INITIAL_BASE_SHA" "main"; then
+  [ "$COMMENT_ONLY_DELIVERY" = "true" ]
+  echo "PASS: clean base checkout plus verified non-empty result comment is accepted"
 else
-  echo "FAIL: expected verify_result_comment to accept the current-attempt result marker" >&2
+  echo "FAIL: expected clean base checkout plus verified non-empty result comment to be accepted (code=$IMPLEMENT_COMMENT_ONLY_FAILURE_CODE reason=$IMPLEMENT_COMMENT_ONLY_FAILURE_REASON)" >&2
   exit 1
 fi
-# The evaluator itself must expose the new branch in its decision tree.
-evaluator_block="$(grep -F -A 80 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
-grep -q 'repository_changed_since "$WORKDIR" "$INITIAL_HEAD"' <<<"$evaluator_block" || {
-  echo "FAIL: IMPLEMENT evaluator missing repository-changed guard on base branch" >&2; exit 1; }
-grep -q 'verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"' <<<"$evaluator_block" || {
-  echo "FAIL: IMPLEMENT evaluator missing result-comment acceptance on base branch" >&2; exit 1; }
-grep -q 'IMPLEMENT_COMMENT_ONLY_DELIVERY' <<<"$evaluator_block" || {
-  echo "FAIL: IMPLEMENT evaluator missing IMPLEMENT_COMMENT_ONLY_DELIVERY lifecycle event" >&2; exit 1; }
-grep -q 'accepted as completed with verified result comment (no repository changes)' <<<"$evaluator_block" || {
-  echo "FAIL: IMPLEMENT evaluator missing comment-only acceptance log line" >&2; exit 1; }
-echo "PASS: IMPLEMENT evaluator accepts verified result comment on base branch with no repo diff"
+
+# A dirty base checkout remains forbidden even if a valid result comment exists.
+printf 'forbidden direct edit\\n' >"$WORKDIR/forbidden.txt"
+if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$INITIAL_BASE_SHA" "main"; then
+  echo "FAIL: accepted comment-only delivery after a direct base-branch edit" >&2
+  exit 1
+else
+  [ "$COMMENT_ONLY_DELIVERY" = "false" ]
+  [ "$IMPLEMENT_COMMENT_ONLY_FAILURE_CODE" = "VERIFICATION_FAILED" ]
+  echo "PASS: direct edits on the base branch are still rejected"
+fi
+rm -f "$WORKDIR/forbidden.txt"
+
+# A marker without meaningful user-facing content is not a completed delivery.
+jq -cn --arg marker "$CURRENT_RESULT_MARKER" \
+  '[{id:1000,in_reply_to_id:null,body:$marker}]' >"$FAKE_RESULT_COMMENTS_JSON"
+if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$INITIAL_BASE_SHA" "main"; then
+  echo "FAIL: accepted an empty comment-only result" >&2
+  exit 1
+else
+  [ "$COMMENT_ONLY_DELIVERY" = "false" ]
+  [ "$IMPLEMENT_COMMENT_ONLY_FAILURE_CODE" = "DELIVERY_COMMENT_EMPTY" ]
+  echo "PASS: marker-only result comments are rejected"
+fi
+
+# An absent current-attempt marker is also fail-closed.
+jq -cn '[{id:1001,in_reply_to_id:null,body:"stale result from another attempt"}]' >"$FAKE_RESULT_COMMENTS_JSON"
+if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$INITIAL_BASE_SHA" "main"; then
+  echo "FAIL: accepted a result without the exact current-attempt marker" >&2
+  exit 1
+else
+  [ "$COMMENT_ONLY_DELIVERY" = "false" ]
+  [ "$IMPLEMENT_COMMENT_ONLY_FAILURE_CODE" = "DELIVERY_COMMENT_MISSING" ]
+  echo "PASS: missing current-attempt markers are rejected"
+fi
+
+# The final PR-URL gate is skipped only for verified comment-only delivery.
+# Ordinary GitHub IMPLEMENT tasks still invoke it, and Todo sources preserve
+# their independent receipt-based completion path.
+PR_URL_VERIFY_CALLS=0
+verify_result_comment_pr_url() { PR_URL_VERIFY_CALLS=$((PR_URL_VERIFY_CALLS + 1)); return 0; }
+if ! verify_result_comment_pr_url_if_required true github_issues test/repo 17 task task 1 "$WORKDIR" main feature; then
+  echo "FAIL: verified comment-only delivery unexpectedly failed PR URL finalization" >&2
+  exit 1
+fi
+[ "$PR_URL_VERIFY_CALLS" -eq 0 ]
+if ! verify_result_comment_pr_url_if_required false github_issues test/repo 17 task task 1 "$WORKDIR" main feature; then
+  echo "FAIL: normal GitHub task PR URL validation unexpectedly failed" >&2
+  exit 1
+fi
+[ "$PR_URL_VERIFY_CALLS" -eq 1 ]
+if ! verify_result_comment_pr_url_if_required false todo_remote_mcp test/repo 17 task task 1 "$WORKDIR" main feature; then
+  echo "FAIL: Todo source receipt path unexpectedly failed PR URL finalization" >&2
+  exit 1
+fi
+[ "$PR_URL_VERIFY_CALLS" -eq 1 ]
+echo "PASS: only verified comment-only delivery bypasses PR URL validation"
 
 # Ambiguous PR creation: GitHub creates the PR, but the gh client reports a
 # transport failure. The following retry must discover and reuse that PR rather
