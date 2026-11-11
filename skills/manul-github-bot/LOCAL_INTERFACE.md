@@ -161,6 +161,29 @@ Provides local commands for:
 
 Its state is persisted in the Manul SQLite database.
 
+## Operator query
+
+A synchronous, read-only operator question through the configured agent runtime.
+It does not create a queue task, reserve a repository, post a GitHub comment,
+or modify task state.
+
+```bash
+manul --prompt "What is the current status of the calculator E2E task?"
+manul --prompt "Summarize the tasks you worked on during the last 24 hours"
+manul --prompt "Diagnose the most recent task failure" --agent researcher
+printf '%s' "What is currently running?" | manul --json
+```
+
+The CLI assembles a bounded, redacted SQLite/log snapshot before invoking
+`AgentExecutionController`. The agent receives the snapshot in its prompt;
+it is not given direct access to the database, logs, other workspaces, or
+operator credentials. OpenClaw, OpenCode, and Claude Code use tool-free
+operator-query policies. Codex currently fails closed because its adapter
+does not yet expose a verified zero-tool mode.
+
+Options: `--prompt TEXT` (or stdin), `--agent ROLE`, `--timeout SECONDS`,
+and `--json`. The default timeout is 300 seconds.
+
 ## External orchestrator
 
 ### `manul-orchestrator.sh`
