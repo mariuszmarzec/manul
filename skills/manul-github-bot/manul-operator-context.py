@@ -145,6 +145,8 @@ def main() -> int:
         return 1
 
     logs_root = Path(args.logs_dir)
+    if logs_root.is_symlink() or not logs_root.is_dir():
+        logs_root = Path("/__manul_operator_logs_unavailable__")
     logs: dict[str, list[str]] = {}
     for name in ("lifecycle.log", "daemon.log", "poll.log", "watchdog.log"):
         lines = read_tail(logs_root / name)
@@ -155,8 +157,8 @@ def main() -> int:
     snapshot = {
         "generatedAt": now.isoformat(),
         "scope": "read-only operator snapshot; active tasks plus tasks with activity in the last 7 days",
-        "taskCounts": counts,
-        "activeTaskCount": len(active),
+        "taskCountsInRecent300Rows": counts,
+        "activeTaskCountInRecent300Rows": len(active),
         "tasks": tasks,
         "logs": logs,
     }
