@@ -608,6 +608,13 @@ permissions = operator_permissions + [
 # Never permit the raw operator Fiteo create tool inside a Manul task.
 # Task creation is only available through the dedicated Manul-authenticated
 # MCP connection below; the user's global Fiteo server remains untouched.
+if execution_kind == "operator_query":
+    # No optional Manul MCP is injected for this turn, even if the daemon
+    # inherited credentials/endpoints from its long-lived environment.
+    fiteo_url = ""
+    fiteo_pat = ""
+    todo_url = ""
+
 operator_agent_config = {}
 if execution_kind == "operator_query":
     operator_agent_name = "manul-operator-query"
@@ -698,6 +705,10 @@ fi
 chmod 600 "$_OVERLAY_JSON_FILE"
 OPENCODE_CONFIG_CONTENT="$(cat "$_OVERLAY_JSON_FILE")"
 export OPENCODE_CONFIG_CONTENT
+if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
+    unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID TODO_LOCAL_MCP_URL
+    unset TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
+fi
 log "using a temporary OpenCode runtime overlay; operator JSON/JSONC files and OPENCODE_CONFIG remain unchanged"
 
 if [ -n "${FITEO_BASE_URL:-}" ] && [ -n "${FITEO_MANUL_PAT:-}" ]; then
