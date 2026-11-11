@@ -26,6 +26,8 @@ jobs:
           done < <(find skills/manul-github-bot -maxdepth 1 -type f -name '*.sh' -print | sort)
       - name: Test standalone Todo MCP client
         run: python3 skills/manul-github-bot/test_todo_mcp_client.py
+      - name: Test read-only operator context snapshot
+        run: python3 skills/manul-github-bot/test_manul_operator_context.py
       - name: Run hermetic Manul shell tests
         run: |
           set -euo pipefail
