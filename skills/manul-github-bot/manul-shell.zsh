@@ -34,6 +34,7 @@ manul-ensure-runtime() {
     if [ ! -d "$MANUL_RUNTIME_DIR" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-daemon.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-status.sh" ] \
+       || [ ! -f "$MANUL_RUNTIME_DIR/manul-query.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-comments-remove.sh" ]; then
         # Keep repair output off this function's stdout. CLI callers commonly
         # pipe status through head/grep; a closed stdout pipe must not SIGPIPE
@@ -61,6 +62,13 @@ unalias manul manul-status manul-comments-remove 2>/dev/null || true
 # manul is the intentional lifecycle entrypoint.
 # With no arguments it starts Manul; explicit subcommands are passed through.
 manul() {
+    # Informational operator queries are one-shot agent turns, not daemon actions.
+    if (( $# > 0 )) && [[ "$1" == "--prompt" || "$1" == "--agent" || "$1" == "--timeout" || "$1" == "--json" || "$1" == "--help" || "$1" == "-h" ]]; then
+        manul-ensure-runtime || return $?
+        "$MANUL_CANONICAL_DIR/manul-query.sh" "$@"
+        return $?
+    fi
+
     local action="start"
     if (( $# > 0 )); then
         action="$1"
