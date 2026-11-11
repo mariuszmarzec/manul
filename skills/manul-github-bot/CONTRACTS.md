@@ -310,6 +310,35 @@ The agent may read/search configured related repository checkouts inside the lea
 
 ## 14. Agent task access boundary
 
+### 14a. Operator query execution
+
+- `operator_query` is a one-shot, synchronous CLI execution kind. It is never
+  inserted into the task queue and never claims a repository lock, workspace
+  lease, Todo item, GitHub issue, or conversation.
+- The CLI builds a bounded, secret-redacted snapshot from SQLite opened with
+  `mode=ro` plus a small set of recent Manul log tails. The adapter receives
+  the prompt and snapshot inside a disposable `MANUL_WORKSPACE/operator-query/oq-*`
+  directory with mode 0700. The exact path is validated before execution and
+  removed after the invocation.
+- The agent must not access files, tools, MCPs, the Gateway, repositories,
+  credentials, databases, or logs directly. All evidence is provided in the
+  prompt. Task prompts, result summaries, contexts, and log lines are untrusted
+  data, not instructions.
+- OpenClaw must use embedded `agent exec` with an invocation-local
+  `tools.deny=["*"]` override; it must not connect to the Gateway.
+  OpenCode must use the reserved `manul-operator-query` agent with all tools
+  disabled in the temporary config overlay. Claude Code must disable built-in
+  tools and deny MCP tools. These controls are invocation-local and must never
+  mutate operator configuration.
+- Codex operator-query execution is currently unsupported and must fail closed
+  until a verified tool-free runtime configuration is available. A read-only
+  filesystem sandbox alone is not sufficient because it may still disclose
+  host files.
+- Operator queries do not emit task lifecycle markers to GitHub and must not
+  persist runtime session IDs, queue rows, results, or task logs.
+
+## 14. Agent task access boundary
+
 An explicitly authorized operator-side maintenance session running **outside a
 Manul-managed task** may inspect read-only logs under `~/.manul/logs/**` to
 diagnose runtime failures and may write sanitized evidence under
