@@ -3069,7 +3069,21 @@ verify_implement_comment_only_delivery() {
   IMPLEMENT_COMMENT_ONLY_FAILURE_CODE=""
   IMPLEMENT_COMMENT_ONLY_FAILURE_REASON=""
 
-  if repository_changed_since "$workdir" "$initial_head"; then
+  local current_head verified_initial_head
+  current_head="$(git -C "$workdir" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+  verified_initial_head=""
+  if [ -n "$initial_head" ]; then
+    verified_initial_head="$(git -C "$workdir" rev-parse --verify "${initial_head}^{commit}" 2>/dev/null || true)"
+  fi
+  if [ -z "$workdir" ] || [ -z "$current_head" ] || [ -z "$verified_initial_head" ]; then
+    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="VERIFICATION_FAILED"
+    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Could not verify the repository baseline for comment-only delivery on base/default branch ($branch)"
+    log "dispatch: task $comment_id cannot verify repository baseline for comment-only delivery"
+    lc_log "TASK_ERROR" "task=$comment_id reason=comment_only_baseline_unverifiable branch=$branch"
+    return 1
+  fi
+
+  if repository_changed_since "$workdir" "$verified_initial_head"; then
     IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="VERIFICATION_FAILED"
     IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Repository changes were made directly on a base/default branch ($branch)"
     log "dispatch: task $comment_id changed repository state on forbidden base branch $branch"
