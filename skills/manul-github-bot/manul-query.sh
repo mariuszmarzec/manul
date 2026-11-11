@@ -14,7 +14,6 @@ manul_env_load "$MANUL_DIR" || exit 1
 source "$SCRIPT_DIR/manul-paths.sh"
 
 PROMPT=""
-AGENT=""
 JSON_OUTPUT=false
 TIMEOUT=""
 while [ "$#" -gt 0 ]; do
@@ -22,9 +21,6 @@ while [ "$#" -gt 0 ]; do
     --prompt)
       [ "$#" -ge 2 ] || { echo "ERROR: --prompt requires text" >&2; exit 2; }
       PROMPT="$2"; shift 2 ;;
-    --agent)
-      [ "$#" -ge 2 ] || { echo "ERROR: --agent requires a role" >&2; exit 2; }
-      AGENT="$2"; shift 2 ;;
     --timeout)
       [ "$#" -ge 2 ] || { echo "ERROR: --timeout requires seconds" >&2; exit 2; }
       TIMEOUT="$2"; shift 2 ;;
@@ -32,8 +28,7 @@ while [ "$#" -gt 0 ]; do
     --help|-h)
       cat <<'HELP'
 Usage:
-  manul --prompt "Question" [--agent ROLE] [--timeout SECONDS] [--json]
-  manul --prompt "Question" --agent researcher
+  manul --prompt "Question" [--timeout SECONDS] [--json]
 
 A one-shot informational query. It does not create a Manul task or change the queue.
 When --prompt is omitted, the query is read from stdin.
@@ -135,7 +130,6 @@ jq -n \
   --arg taskId "$TASK_ID" \
   --arg prompt "$PROMPT_FILE" \
   --arg workspace "$WORKSPACE" \
-  --arg agent "$AGENT" \
   --arg stdout "$STDOUT_FILE" \
   --arg stderr "$STDERR_FILE" \
   --argjson timeout "$TIMEOUT" \
