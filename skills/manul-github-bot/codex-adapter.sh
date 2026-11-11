@@ -20,6 +20,11 @@ fail() {
   exit "$code"
 }
 [ -n "$OPT_TASK_ID" ] && [ -n "$OPT_PROMPT" ] && [ -n "$OPT_WORKSPACE" ] && [ -n "$OPT_STDOUT_FILE" ] && [ -n "$OPT_STDERR_FILE" ] || fail 2 "Missing required adapter arguments"
+if [ "${MANUL_TASK_EXECUTION_KIND:-repository}" = "operator_query" ]; then
+  # Codex currently has no verified per-invocation tool-free mode in this adapter.
+  # Fail closed instead of exposing host paths through a read-only sandbox.
+  fail 2 "Codex operator-query mode is disabled until the runtime can guarantee zero tool access"
+fi
 [ -f "$OPT_PROMPT" ] || fail 66 "Prompt file not found"
 [ -d "$OPT_WORKSPACE" ] || fail 66 "Workspace directory not found"
 CODEX_BIN_RESOLVED=""
