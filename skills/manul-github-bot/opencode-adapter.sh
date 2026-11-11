@@ -736,9 +736,7 @@ if [ "$OPT_PREFLIGHT_ONLY" = "true" ]; then
 fi
 
 # Operator queries always use a reserved, task-local agent whose tool set is empty.
-REQUESTED_OPERATOR_ROLE=""
 if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
-    REQUESTED_OPERATOR_ROLE="$OPT_AGENT"
     OPT_AGENT="manul-operator-query"
 fi
 
@@ -778,9 +776,6 @@ write_runtime_capability_context() {
     printf '%s\n' '- Only the primary checkout may be edited/delivered by default. Related checkouts explicitly declared read-only remain read-only.'
     if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
         printf '%s\n' '- Operator query mode is tool-free. Use only the read-only snapshot embedded in the prompt; do not access local files or invoke tools.'
-        if [ -n "${REQUESTED_OPERATOR_ROLE:-}" ]; then
-            printf -- '- Requested canonical role guidance: %s\n' "$REQUESTED_OPERATOR_ROLE"
-        fi
     fi
     printf '%s\n' '- Access is still subject to OpenCode tool-level and path-level decisions. An external-directory allow rule is not a guarantee that every bash command or tool call will be allowed.'
     printf '%s\n' '- Never inspect or modify sibling task workspaces, shared caches, Manul databases/logs/configuration, adapters, or other runtime state. Never try to bypass a denial via another tool, a different path, a symlink, a wrapper, or a reshaped command.'
