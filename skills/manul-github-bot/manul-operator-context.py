@@ -73,8 +73,38 @@ def load_tasks(db_path: Path, now: dt.datetime) -> tuple[list[dict[str, Any]], d
         ).fetchone()
         if table is None:
             raise RuntimeError("Manul database has no processed_comments table")
+        available_columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(processed_comments)")
+        }
+        bounded_columns = {
+            "commentId": 180,
+            "repository": 180,
+            "status": 40,
+            "taskSourceType": 60,
+            "taskSourceId": 160,
+            "agent": 80,
+            "createdAt": 80,
+            "agentStartedAt": 80,
+            "processedAt": 80,
+            "prompt": 1600,
+            "resultSummary": 2400,
+            "context": 1200,
+        }
+        direct_columns = ("issueNumber", "attempts")
+        expressions: list[str] = []
+        for name, limit in bounded_columns.items():
+            if name in available_columns:
+                expressions.append(
+                    f'substr(COALESCE("{name}", \'\'), 1, {limit}) AS "{name}"'
+                )
+            else:
+                expressions.append(f'NULL AS "{name}"')
+        for name in direct_columns:
+            expressions.append(f'"{name}"' if name in available_columns else f'NULL AS "{name}"')
         rows = connection.execute(
-            "SELECT * FROM processed_comments ORDER BY rowid DESC LIMIT 300"
+            "SELECT " + ", ".join(expressions) +
+            " FROM processed_comments ORDER BY rowid DESC LIMIT 300"
         ).fetchall()
     finally:
         connection.close()
