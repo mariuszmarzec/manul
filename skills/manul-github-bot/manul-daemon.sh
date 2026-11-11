@@ -3793,7 +3793,10 @@ PY_REPORT_ANSWER
   fi
   # GitHub-rooted tasks require a deterministic result-comment receipt.
   # Todo tasks instead use the source MCP and do not have a GitHub issue thread.
-  if [ "$SUCCESS" = "true" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+  # The comment-only base-branch verifier already checked this exact marker and
+  # the non-empty body. Avoid a second API read that could turn a verified
+  # delivery into a retry solely because the follow-up read transiently fails.
+  if [ "$SUCCESS" = "true" ] && [ "$COMMENT_ONLY_DELIVERY" != "true" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
     if ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
       SUCCESS="false"
       FAILURE_CODE="DELIVERY_COMMENT_MISSING"
