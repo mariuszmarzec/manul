@@ -3061,6 +3061,62 @@ persist_verified_pr_metadata() {
 # of the real PR belonging to this task branch. This prevents an issue URL,
 # an issue number masquerading as a PR number, /compare links, or stale PR links
 # from being reported as the task result.
+# Validate the exceptional IMPLEMENT delivery path for informational work that
+# intentionally produces no repository diff. This is not the general VERIFY
+# report-only mode: it still requires TASK_DONE plus a task/attempt-bound,
+# non-empty GitHub result comment, and is available only on a clean base branch.
+verify_implement_comment_only_delivery() {
+  local repo="$1" issue="$2" comment_id="$3" safe_comment_id="$4" attempt="$5"
+  local workdir="$6" initial_head="$7" branch="$8"
+
+  COMMENT_ONLY_DELIVERY="false"
+  IMPLEMENT_COMMENT_ONLY_FAILURE_CODE=""
+  IMPLEMENT_COMMENT_ONLY_FAILURE_REASON=""
+
+  if repository_changed_since "$workdir" "$initial_head"; then
+    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="VERIFICATION_FAILED"
+    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Repository changes were made directly on a base/default branch ($branch)"
+    log "dispatch: task $comment_id changed repository state on forbidden base branch $branch"
+    lc_log "TASK_ERROR" "task=$comment_id reason=changes_on_base_branch branch=$branch"
+    return 1
+  fi
+
+  if ! verify_result_comment "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt"; then
+    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="DELIVERY_COMMENT_MISSING"
+    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Implementation task on base/default branch did not publish a verifiable result comment for attempt $attempt"
+    return 1
+  fi
+
+  if ! verify_nonempty_result_comment "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt"; then
+    IMPLEMENT_COMMENT_ONLY_FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+    IMPLEMENT_COMMENT_ONLY_FAILURE_REASON="Implementation task result comment for attempt $attempt is empty or contains only the marker/signature"
+    return 1
+  fi
+
+  COMMENT_ONLY_DELIVERY="true"
+  log "dispatch: task $comment_id accepted with verified non-empty comment-only delivery on clean base branch $branch"
+  lc_log "IMPLEMENT_COMMENT_ONLY_DELIVERY" "task=$comment_id repo=$repo branch=$branch attempt=$attempt"
+  return 0
+}
+
+# The PR-URL invariant remains mandatory for normal GitHub IMPLEMENT deliveries
+# and is bypassed only for the explicitly verified clean-base comment-only path.
+# Todo sources retain their separate source-receipt delivery contract.
+verify_result_comment_pr_url_if_required() {
+  local comment_only_delivery="$1" task_source_type="$2"
+  shift 2
+
+  if [ "$comment_only_delivery" = "true" ]; then
+    log "dispatch: skipping PR URL verification for verified comment-only IMPLEMENT delivery"
+    lc_log "PR_RESULT_LINK_VERIFY_SKIPPED" "reason=verified_comment_only_delivery"
+    return 0
+  fi
+  if task_source_is_todo_type "$task_source_type"; then
+    return 0
+  fi
+  verify_result_comment_pr_url "$@"
+}
+
 verify_result_comment_pr_url() {
   local repo="$1" issue_num="$2" comment_id="$3" safe_comment_id="$4" attempt="$5" workdir="$6" expected_base="$7"
   local branch="$8"
@@ -3390,6 +3446,9 @@ evaluate_task_completion() {
   fi
   
   local SUCCESS="false"
+  local COMMENT_ONLY_DELIVERY="false"
+  local IMPLEMENT_COMMENT_ONLY_FAILURE_CODE=""
+  local IMPLEMENT_COMMENT_ONLY_FAILURE_REASON=""
 
   # A user-input request is a deliberate pause, not task failure.
   # Detect and validate the complete structured block before any success/failure
@@ -3615,27 +3674,18 @@ else
           current_branch="$VERIFIED_EXISTING_PR_BRANCH"
           log "dispatch: task $COMMENT_ID accepted as already delivered through verified merged PR $VERIFIED_EXISTING_PR_URL"
           lc_log "IMPLEMENT_ALREADY_SATISFIED_MERGED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM branch=$current_branch base=$VERIFIED_MERGED_RESULT_PR_BASE url=$VERIFIED_EXISTING_PR_URL"
-        elif repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then
-          # Repository was modified on a base branch; this is forbidden for
-          # IMPLEMENT tasks that require a feature branch PR workflow.
-          SUCCESS="false"
-          FAILURE_CODE="VERIFICATION_FAILED"
-          FAIL_REASON="Repository changes were made directly on a base/default branch ($current_branch)"
-          log "dispatch: task $COMMENT_ID changed repository state on forbidden base branch $current_branch"
-          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=changes_on_base_branch branch=$current_branch"
-        elif verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-          # No repository changes and a valid result comment was posted.
-          # For IMPLEMENT tasks on base branch with no PR, a verified result
-          # comment indicates successful completion without requiring a PR.
+        elif verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$INITIAL_HEAD" "$current_branch"; then
+          # A clean base checkout plus this attempt's verified, non-empty result
+          # comment is an intentional informational IMPLEMENT delivery. Keep a
+          # distinct flag so later PR URL checks do not mistake it for a PR task.
           already_satisfied="true"
-          log "dispatch: task $COMMENT_ID accepted as completed with verified result comment (no repository changes)"
-          lc_log "IMPLEMENT_COMMENT_ONLY_DELIVERY" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH"
+          log "dispatch: task $COMMENT_ID accepted as completed with verified comment-only delivery (no repository changes)"
         else
           SUCCESS="false"
-          FAILURE_CODE="VERIFICATION_FAILED"
-          FAIL_REASON="Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing or merged task PR"
-          log "dispatch: task $COMMENT_ID reported success on forbidden branch $current_branch; no pre-existing or merged task PR was verified"
-          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=success_on_base_branch branch=$current_branch base=$INITIAL_BASE_BRANCH"
+          FAILURE_CODE="${IMPLEMENT_COMMENT_ONLY_FAILURE_CODE:-VERIFICATION_FAILED}"
+          FAIL_REASON="${IMPLEMENT_COMMENT_ONLY_FAILURE_REASON:-Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing or merged task PR}"
+          log "dispatch: task $COMMENT_ID rejected on base branch $current_branch: ${FAIL_REASON}"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_delivery_rejected code=$FAILURE_CODE branch=$current_branch"
         fi
       fi
 
@@ -3657,7 +3707,7 @@ else
         else
           verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
         fi
-        if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" && ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+        if ! verify_result_comment_pr_url_if_required "$COMMENT_ONLY_DELIVERY" "$TASK_SOURCE_TYPE" "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
