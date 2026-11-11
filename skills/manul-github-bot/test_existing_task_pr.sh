@@ -35,13 +35,13 @@ pr_check_source="$(sed -n '/^pr_check_existing() {$/,/^}$/p' "$SCRIPT_DIR/manul-
 pr_auto_source="$(sed -n '/^pr_auto_create() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 required_pr_source="$(sed -n '/^verify_required_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 base_infer_source="$(sed -n '/^infer_task_base_branch() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+result_comment_body_source="$(sed -n '/^result_comment_body_has_content() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 result_comment_source="$(sed -n '/^verify_result_comment() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
-nonempty_result_comment_source="$(sed -n '/^verify_nonempty_result_comment() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 repo_changed_source="$(sed -n '/^repository_changed_since() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 comment_only_delivery_source="$(sed -n '/^verify_implement_comment_only_delivery() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 pr_url_required_source="$(sed -n '/^verify_result_comment_pr_url_if_required() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 task_source_type_source="$(sed -n '/^task_source_is_todo_type() {$/,/^}$/p' "$SCRIPT_DIR/task-source.sh")"
-if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ] || [ -z "$pr_check_source" ] || [ -z "$pr_auto_source" ] || [ -z "$required_pr_source" ] || [ -z "$base_infer_source" ] || [ -z "$result_comment_source" ] || [ -z "$nonempty_result_comment_source" ] || [ -z "$repo_changed_source" ] || [ -z "$comment_only_delivery_source" ] || [ -z "$pr_url_required_source" ] || [ -z "$task_source_type_source" ]; then
+if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ] || [ -z "$pr_check_source" ] || [ -z "$pr_auto_source" ] || [ -z "$required_pr_source" ] || [ -z "$base_infer_source" ] || [ -z "$result_comment_body_source" ] || [ -z "$result_comment_source" ] || [ -z "$repo_changed_source" ] || [ -z "$comment_only_delivery_source" ] || [ -z "$pr_url_required_source" ] || [ -z "$task_source_type_source" ]; then
   echo "FAIL: required production verifier functions were not found" >&2
   exit 1
 fi
@@ -51,8 +51,8 @@ eval "$pr_check_source"
 eval "$pr_auto_source"
 eval "$base_infer_source"
 eval "$required_pr_source"
+eval "$result_comment_body_source"
 eval "$result_comment_source"
-eval "$nonempty_result_comment_source"
 eval "$repo_changed_source"
 eval "$comment_only_delivery_source"
 eval "$pr_url_required_source"
@@ -106,6 +106,8 @@ export FAKE_GH_PR_LIST="$TMP/pr-list.json"
 export FAKE_RESULT_COMMENTS_JSON="$TMP/result-comments.json"
 export FAKE_PR_VIEW_JSON="$TMP/pr-view.json"
 export PR_CREATE_COUNT_FILE="$TMP/pr-create-count"
+export RESULT_READ_COUNT_FILE="$TMP/result-read-count"
+printf '0\n' >"$RESULT_READ_COUNT_FILE"
 export FAKE_ISSUE_STATE="closed"
 cat >"$TMP/bin-gh" <<'MOCK'
 #!/usr/bin/env bash
@@ -137,6 +139,8 @@ if [[ "$1" == "pr" && "$2" == "view" ]]; then
   exit 0
 fi
 if [[ "$1" == "api" && "$2" == "repos/test/repo/issues/17/comments" ]]; then
+  read_count="$(cat "$RESULT_READ_COUNT_FILE" 2>/dev/null || echo 0)"
+  printf '%s\n' "$((read_count + 1))" >"$RESULT_READ_COUNT_FILE"
   shift 2
   jq_filter=""
   while (($#)); do
@@ -291,6 +295,12 @@ grep -q 'VERIFIED_MERGED_RESULT_PR_BASE' <<<"$evaluator_block"
 grep -Fq 'local VERIFIED_MERGED_RESULT_PR_BASE=""' "$SCRIPT_DIR/manul-daemon.sh"
 grep -q 'verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID"' <<<"$evaluator_block"
 grep -q 'verify_result_comment_pr_url_if_required "$COMMENT_ONLY_DELIVERY" "$TASK_SOURCE_TYPE"' <<<"$evaluator_block"
+comment_only_helper_block="$(sed -n '/^verify_implement_comment_only_delivery() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+grep -Fq 'verify_result_comment "$repo" "$issue" "$comment_id" "$safe_comment_id" "$attempt" "true"' <<<"$comment_only_helper_block"
+if grep -q 'verify_nonempty_result_comment' <<<"$comment_only_helper_block"; then
+  echo "FAIL: comment-only delivery performs a second non-empty comment API read" >&2
+  exit 1
+fi
 final_marker_gate="$(grep -F -A 7 '# The comment-only base-branch verifier already checked this exact marker' "$SCRIPT_DIR/manul-daemon.sh")"
 grep -Fq '[ "$COMMENT_ONLY_DELIVERY" != "true" ]' <<<"$final_marker_gate"
 grep -Fq 'verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID"' <<<"$final_marker_gate"
@@ -304,10 +314,12 @@ jq -cn --arg marker "$CURRENT_RESULT_MARKER" \
   >"$FAKE_RESULT_COMMENTS_JSON"
 git -C "$WORKDIR" checkout -q main
 git -C "$WORKDIR" reset -q --hard "$INITIAL_BASE_SHA"
+printf '0\n' >"$RESULT_READ_COUNT_FILE"
 if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$INITIAL_BASE_SHA" "main"; then
   [ "$COMMENT_ONLY_DELIVERY" = "true" ]
   VERIFIED_COMMENT_ONLY_DELIVERY="$COMMENT_ONLY_DELIVERY"
-  echo "PASS: clean base checkout plus verified non-empty result comment is accepted"
+  [ "$(cat "$RESULT_READ_COUNT_FILE")" = "1" ]
+  echo "PASS: clean base checkout plus verified non-empty result comment is accepted in one GitHub API read"
 else
   echo "FAIL: expected clean base checkout plus verified non-empty result comment to be accepted (code=$IMPLEMENT_COMMENT_ONLY_FAILURE_CODE reason=$IMPLEMENT_COMMENT_ONLY_FAILURE_REASON)" >&2
   exit 1
