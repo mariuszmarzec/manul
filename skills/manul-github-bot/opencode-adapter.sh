@@ -707,8 +707,16 @@ chmod 600 "$_OVERLAY_JSON_FILE"
 OPENCODE_CONFIG_CONTENT="$(cat "$_OVERLAY_JSON_FILE")"
 export OPENCODE_CONFIG_CONTENT
 if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
-    unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID TODO_LOCAL_MCP_URL
-    unset TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
+    # Keep variables defined for nounset-safe diagnostics below, but blank
+    # their exported values so OpenCode cannot inherit operator credentials.
+    FITEO_BASE_URL=""
+    FITEO_MANUL_PAT=""
+    FITEO_MANUL_SHARE_USER_ID=""
+    TODO_LOCAL_MCP_URL=""
+    TODO_LOCAL_MCP_AVAILABLE=""
+    TODO_LOCAL_MCP_CONNECTED=""
+    export FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID TODO_LOCAL_MCP_URL
+    export TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
 fi
 log "using a temporary OpenCode runtime overlay; operator JSON/JSONC files and OPENCODE_CONFIG remain unchanged"
 
