@@ -306,6 +306,7 @@ git -C "$WORKDIR" checkout -q main
 git -C "$WORKDIR" reset -q --hard "$INITIAL_BASE_SHA"
 if verify_implement_comment_only_delivery "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1 "$WORKDIR" "$INITIAL_BASE_SHA" "main"; then
   [ "$COMMENT_ONLY_DELIVERY" = "true" ]
+  VERIFIED_COMMENT_ONLY_DELIVERY="$COMMENT_ONLY_DELIVERY"
   echo "PASS: clean base checkout plus verified non-empty result comment is accepted"
 else
   echo "FAIL: expected clean base checkout plus verified non-empty result comment to be accepted (code=$IMPLEMENT_COMMENT_ONLY_FAILURE_CODE reason=$IMPLEMENT_COMMENT_ONLY_FAILURE_REASON)" >&2
@@ -367,7 +368,7 @@ done
 # their independent receipt-based completion path.
 PR_URL_VERIFY_CALLS=0
 verify_result_comment_pr_url() { PR_URL_VERIFY_CALLS=$((PR_URL_VERIFY_CALLS + 1)); return 0; }
-if ! verify_result_comment_pr_url_if_required true github_issues test/repo 17 task task 1 "$WORKDIR" main feature; then
+if ! verify_result_comment_pr_url_if_required "$VERIFIED_COMMENT_ONLY_DELIVERY" github_issues test/repo 17 task task 1 "$WORKDIR" main feature; then
   echo "FAIL: verified comment-only delivery unexpectedly failed PR URL finalization" >&2
   exit 1
 fi
