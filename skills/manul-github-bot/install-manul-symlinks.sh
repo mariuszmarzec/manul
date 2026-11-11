@@ -78,6 +78,8 @@ SCRIPTS=(
     "manul-result-feedback.sh"
     "manul-result.sh"
     "manul-status.sh"
+    "manul-query.sh"
+    "manul-operator-context.py"
     "manul-submit.sh"
     "manul-wait.sh"
     "orchestrator.prompt.md"

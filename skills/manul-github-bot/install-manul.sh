@@ -71,7 +71,7 @@ export MANUL_CANONICAL_DIR="$CANONICAL_DIR"
 
 for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh manul-env.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
-             manul-shell.zsh update-manul.sh opencode-permissions.sh manul-daemon.sh manul-status.sh; do
+             manul-shell.zsh update-manul.sh opencode-permissions.sh manul-daemon.sh manul-status.sh manul-query.sh manul-operator-context.py; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then
         fail "Missing required canonical file: $CANONICAL_DIR/$required"
     fi

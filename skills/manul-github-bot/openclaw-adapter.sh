@@ -174,14 +174,28 @@ log "starting task=$OPT_TASK_ID session=$SESSION_KEY timeout=${OPENCLAW_AGENT_TI
 ProcessRunner_TmpStdout="$OPT_STDOUT_FILE"
 ProcessRunner_TmpStderr="$OPT_STDERR_FILE"
 
-_pr_result="$(ProcessRunner.run \
-    --timeout "$OPENCLAW_AGENT_TIMEOUT" \
-    --cwd "$OPT_WORKSPACE" \
-    -- "$OPENCLAW_BIN" agent \
-        --agent "$OPENCLAW_AGENT_ID" \
-        --session-key "$SESSION_KEY" \
+if [ "${MANUL_TASK_EXECUTION_KIND:-repository}" = "operator_query" ]; then
+    # Embedded one-shot execution does not connect to or mutate the Gateway.
+    # The per-run deny-all policy is composed in memory and never persisted.
+    _session_id=""
+    _pr_result="$(ProcessRunner.run \
         --timeout "$OPENCLAW_AGENT_TIMEOUT" \
-        --message-file "$EXECUTION_PROMPT")"
+        --cwd "$OPT_WORKSPACE" \
+        -- "$OPENCLAW_BIN" agent exec \
+            --message-file "$EXECUTION_PROMPT" \
+            --cwd "$OPT_WORKSPACE" \
+            --code-mode direct \
+            --config-override '{"tools":{"deny":["*"]}}')"
+else
+    _pr_result="$(ProcessRunner.run \
+        --timeout "$OPENCLAW_AGENT_TIMEOUT" \
+        --cwd "$OPT_WORKSPACE" \
+        -- "$OPENCLAW_BIN" agent \
+            --agent "$OPENCLAW_AGENT_ID" \
+            --session-key "$SESSION_KEY" \
+            --timeout "$OPENCLAW_AGENT_TIMEOUT" \
+            --message-file "$EXECUTION_PROMPT")"
+fi
 _pr_header="$(printf '%s\n' "$_pr_result" | head -1)"
 _pr_rc="$(printf '%s' "$_pr_header" | cut -d'|' -f1)"
 _pr_dur="$(printf '%s' "$_pr_header" | cut -d'|' -f2)"
@@ -293,6 +307,6 @@ jq -cn \
     --arg summary "$_summary" \
     --arg session_id "$_session_id" \
     --arg duration_s "$_duration" \
-    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber)}'
+    '{status:$status, task_id:$task_id, exit_code:($exit_code|tonumber), summary:$summary, session_id:$session_id, duration_s:($duration_s|tonumber), runtime:"openclaw"}'
 
 exit "$_exit_code" 

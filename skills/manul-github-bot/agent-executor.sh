@@ -72,7 +72,7 @@ AgentExecutor.execute() {
 
     # Validate inputs before dispatching
     case "$execution_kind" in
-        repository|report_only) ;;
+        repository|report_only|operator_query) ;;
         *)
             printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unsupported task execution kind","session_id":"","duration_s":0}\n' "$task_id"
             AgentExecutor_ExitCode=1
