@@ -35,7 +35,9 @@ pr_check_source="$(sed -n '/^pr_check_existing() {$/,/^}$/p' "$SCRIPT_DIR/manul-
 pr_auto_source="$(sed -n '/^pr_auto_create() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 required_pr_source="$(sed -n '/^verify_required_pr() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
 base_infer_source="$(sed -n '/^infer_task_base_branch() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
-if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ] || [ -z "$pr_check_source" ] || [ -z "$pr_auto_source" ] || [ -z "$required_pr_source" ] || [ -z "$base_infer_source" ]; then
+result_comment_source="$(sed -n '/^verify_result_comment() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+repo_changed_source="$(sed -n '/^repository_changed_since() {$/,/^}$/p' "$SCRIPT_DIR/manul-daemon.sh")"
+if [ -z "$verifier_source" ] || [ -z "$merged_verifier_source" ] || [ -z "$pr_check_source" ] || [ -z "$pr_auto_source" ] || [ -z "$required_pr_source" ] || [ -z "$base_infer_source" ] || [ -z "$result_comment_source" ] || [ -z "$repo_changed_source" ]; then
   echo "FAIL: existing-task/required-PR verifier functions were not found in manul-daemon.sh" >&2
   exit 1
 fi
@@ -45,6 +47,8 @@ eval "$pr_check_source"
 eval "$pr_auto_source"
 eval "$base_infer_source"
 eval "$required_pr_source"
+eval "$result_comment_source"
+eval "$repo_changed_source"
 
 sqlite3 "$DB" <<'SQL'
 CREATE TABLE processed_comments (
@@ -254,7 +258,7 @@ fi
 
 # Assert that the real IMPLEMENT evaluator allows a no-op retry only after one
 # of the verified-existing-PR paths succeeds and always validates the result URL.
-evaluator_block="$(grep -F -A 65 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
+evaluator_block="$(grep -F -A 80 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
 grep -q 'verify_existing_task_pr' <<<"$evaluator_block"
 grep -q 'verify_merged_result_pr' <<<"$evaluator_block"
 grep -q 'already_satisfied="true"' <<<"$evaluator_block"
@@ -263,6 +267,38 @@ grep -q 'VERIFIED_MERGED_RESULT_PR_BASE' <<<"$evaluator_block"
 grep -Fq 'local VERIFIED_MERGED_RESULT_PR_BASE=""' "$SCRIPT_DIR/manul-daemon.sh"
 grep -q 'verify_result_comment_pr_url' <<<"$evaluator_block"
 echo "PASS: IMPLEMENT evaluator recognizes independently verified merged PRs and retains result URL verification"
+
+# Case 9: an IMPLEMENT task on the base branch with no repository diff and no
+# PR must be accepted when a verified result comment with the exact current
+# attempt marker exists. This is the informational/comment-only delivery path
+# that was previously unreachable (the evaluator rejected the task before
+# ever calling verify_result_comment).
+CURRENT_RESULT_MARKER="<!-- manul-task:${CURRENT_TASK}:attempt:1 -->"
+jq -cn --arg marker "$CURRENT_RESULT_MARKER" \
+  '[[{id:999,body:($marker + "\n# Task completed\nAnswer: yes, it is possible.")}]]' \
+  >"$FAKE_RESULT_COMMENTS_JSON"
+git -C "$WORKDIR" checkout -q main
+git -C "$WORKDIR" reset -q --hard "$INITIAL_BASE_SHA"
+if ! repository_changed_since "$WORKDIR" "$INITIAL_BASE_SHA"; then
+  : # clean base checkout, no diff expected
+fi
+if verify_result_comment "test/repo" 17 "$CURRENT_TASK" "$CURRENT_TASK" 1; then
+  echo "PASS: verify_result_comment accepts exact current-attempt result marker on base branch"
+else
+  echo "FAIL: expected verify_result_comment to accept the current-attempt result marker" >&2
+  exit 1
+fi
+# The evaluator itself must expose the new branch in its decision tree.
+evaluator_block="$(grep -F -A 80 'elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then' "$SCRIPT_DIR/manul-daemon.sh")"
+grep -q 'repository_changed_since "$WORKDIR" "$INITIAL_HEAD"' <<<"$evaluator_block" || {
+  echo "FAIL: IMPLEMENT evaluator missing repository-changed guard on base branch" >&2; exit 1; }
+grep -q 'verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"' <<<"$evaluator_block" || {
+  echo "FAIL: IMPLEMENT evaluator missing result-comment acceptance on base branch" >&2; exit 1; }
+grep -q 'IMPLEMENT_COMMENT_ONLY_DELIVERY' <<<"$evaluator_block" || {
+  echo "FAIL: IMPLEMENT evaluator missing IMPLEMENT_COMMENT_ONLY_DELIVERY lifecycle event" >&2; exit 1; }
+grep -q 'accepted as completed with verified result comment (no repository changes)' <<<"$evaluator_block" || {
+  echo "FAIL: IMPLEMENT evaluator missing comment-only acceptance log line" >&2; exit 1; }
+echo "PASS: IMPLEMENT evaluator accepts verified result comment on base branch with no repo diff"
 
 # Ambiguous PR creation: GitHub creates the PR, but the gh client reports a
 # transport failure. The following retry must discover and reuse that PR rather

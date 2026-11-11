@@ -161,7 +161,9 @@ older than the current attempt, or an API/update/read-back error remain
 fail-closed. This handles an agent accidentally copying an old attempt number
 without accepting a previous attempt's result or creating duplicate comments.
 
-Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution, a verified non-empty result comment with the exact task/attempt marker, and an unchanged repository are sufficient; no branch, commit, or PR is required. `IMPLEMENT` tasks retain branch/commit/PR validation even when status or progress comments have been posted. The presence of a comment alone never selects report-only delivery.
+Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution, a verified non-empty result comment with the exact task/attempt marker, and an unchanged repository are sufficient; no branch, commit, or PR are required. `IMPLEMENT` tasks retain branch/commit/PR validation even when status or progress comments have been posted. The presence of a comment alone never selects report-only delivery.
+
+An `IMPLEMENT` task that finishes on the base/default branch with **no repository diff** is accepted as informational/comment-only delivery when a verified result comment with the exact current task/attempt marker exists. The evaluator checks `repository_changed_since` **before** calling `verify_result_comment`, so a forbidden base-branch edit still fails while a clean informational answer succeeds. This path requires no PR and is distinct from the `VERIFY` report-only path (`DELIVERY_MODE=comment_only`), which additionally forbids any repository change and requires a non-empty result body.
 
 The daemon may verify the final PR identity and repository cleanliness before accepting completion.
 

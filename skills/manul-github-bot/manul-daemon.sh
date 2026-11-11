@@ -3592,7 +3592,8 @@ else
      elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
       # IMPLEMENT work normally must finish on its own feature branch. A no-op
       # on the base branch is accepted only when an existing PR for this same
-      # issue has been independently re-verified.
+      # issue has been independently re-verified, or the agent posted a valid
+      # result comment indicating successful completion without repository changes.
       local already_satisfied="false"
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
@@ -3614,6 +3615,21 @@ else
           current_branch="$VERIFIED_EXISTING_PR_BRANCH"
           log "dispatch: task $COMMENT_ID accepted as already delivered through verified merged PR $VERIFIED_EXISTING_PR_URL"
           lc_log "IMPLEMENT_ALREADY_SATISFIED_MERGED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM branch=$current_branch base=$VERIFIED_MERGED_RESULT_PR_BASE url=$VERIFIED_EXISTING_PR_URL"
+        elif repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then
+          # Repository was modified on a base branch; this is forbidden for
+          # IMPLEMENT tasks that require a feature branch PR workflow.
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="Repository changes were made directly on a base/default branch ($current_branch)"
+          log "dispatch: task $COMMENT_ID changed repository state on forbidden base branch $current_branch"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=changes_on_base_branch branch=$current_branch"
+        elif verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+          # No repository changes and a valid result comment was posted.
+          # For IMPLEMENT tasks on base branch with no PR, a verified result
+          # comment indicates successful completion without requiring a PR.
+          already_satisfied="true"
+          log "dispatch: task $COMMENT_ID accepted as completed with verified result comment (no repository changes)"
+          lc_log "IMPLEMENT_COMMENT_ONLY_DELIVERY" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH"
         else
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
