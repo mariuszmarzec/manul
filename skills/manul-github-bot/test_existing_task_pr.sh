@@ -247,10 +247,10 @@ git -C "$WORKDIR" push -q origin "$PR_HEAD_SHA:refs/heads/$TASK_BRANCH_2"
 git -C "$WORKDIR" push -q origin "$PR_HEAD_SHA:refs/heads/$TASK_BRANCH_3"
 write_attempt_pr_fixture() {
   local branch="$1" state="${2:-OPEN}" number="${3:-20}"
-  jq -cn --arg url "https://github.com/test/repo/pull/$number" \
+  jq -cn --argjson number "$number" --arg url "https://github.com/test/repo/pull/$number" \
     --arg state "$state" --arg branch "$branch" --arg sha "$PR_HEAD_SHA" \
-    '[{number:(env.PR_FIXTURE_NUMBER|tonumber?),url:$url,state:$state,baseRefName:"main",headRefName:$branch,body:"Markdown renderer delivery",headRefOid:$sha}]' \
-    | sed "s/\\\"number\\\":null/\\\"number\\\":$number/" >"$FAKE_GH_PR_LIST"
+    '[{number:$number,url:$url,state:$state,baseRefName:"main",headRefName:$branch,body:"Markdown renderer delivery",headRefOid:$sha}]' \
+    >"$FAKE_GH_PR_LIST"
 }
 write_attempt_pr_fixture "$TASK_BRANCH_2"
 VERIFIED_EXISTING_PR_BRANCH=""
@@ -305,6 +305,22 @@ else
   echo "FAIL: expected stable task metadata marker to correlate the PR" >&2
   exit 1
 fi
+
+# Pre-dispatch recovery must not reuse an open PR belonging to a different,
+# already-completed task on the same issue.
+UNRELATED_BRANCH="feature/17-unrelated-completed-task"
+git -C "$WORKDIR" push -q origin "$PR_HEAD_SHA:refs/heads/$UNRELATED_BRANCH"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,action,prUrl) VALUES ('$PREVIOUS_TASK','test/repo',17,'https://github.com/test/repo/issues/17','completed','IMPLEMENT','https://github.com/test/repo/pull/25');"
+write_attempt_pr_fixture "$UNRELATED_BRANCH" "OPEN" 25
+unrelated_rc=0
+verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" || unrelated_rc=$?
+if [ "$unrelated_rc" -eq 1 ]; then
+  echo "PASS: pre-dispatch retry does not adopt a different completed task's PR"
+else
+  echo "FAIL: pre-dispatch retry adopted unrelated prior task PR (rc=$unrelated_rc)" >&2
+  exit 1
+fi
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='$PREVIOUS_TASK';"
 
 # Case 6: a prior attempt's result comment can independently prove that work
 # was delivered by a merged PR, even if the feature branch was deleted.
