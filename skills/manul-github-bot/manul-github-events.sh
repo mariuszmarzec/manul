@@ -142,7 +142,7 @@ parse_command() {
   fi
 
   # Known actions
-  local known_actions="run review-fix continue verify status close"
+  local known_actions="run review-fix continue verify investigate status close"
 
   # First token is the action
   local first_token
@@ -176,9 +176,11 @@ parse_command() {
       action="CONTINUE"
       prompt="$(echo "$cmd" | sed 's/^continue[[:space:]]*//')"
       ;;
-    verify)
+    verify|investigate)
+      # "investigate" is an explicit report-only alias for the existing VERIFY
+      # action; keep the downstream comment-only delivery contract unchanged.
       action="VERIFY"
-      prompt="$(echo "$cmd" | sed 's/^verify[[:space:]]*//')"
+      prompt="$(echo "$cmd" | sed -E 's/^(verify|investigate)[[:space:]]*//')"
       ;;
     status)
       action="STATUS"
