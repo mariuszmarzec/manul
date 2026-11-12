@@ -4455,19 +4455,6 @@ This task was explicitly submitted as VERIFY or INVESTIGATE. It is a report-only
 VERIFY_PROMPT
     fi
 
-    if [ "$TASK_ACTION" = "VERIFY" ]; then
-      cat >> "$TASK_PROMPT_FILE" <<'VERIFY_PROMPT'
-## Investigation / verification mode — REPORT ONLY
-
-This task was explicitly submitted as VERIFY or INVESTIGATE. It is a report-only task:
-- Investigate the request, inspect relevant source/docs, and run safe read-only validation when useful.
-- Do NOT edit, create, delete, format, or generate repository files.
-- Do NOT create or switch branches, commit, push, create/update a PR, or change repository state.
-- Post one useful result comment on the source issue/PR using the exact task/attempt marker and then emit TASK_DONE.
-- When the requested outcome would require a code change, report the finding and recommend the change; do not implement it in this task.
-VERIFY_PROMPT
-    fi
-
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_EOF'
 ## Command Intent Guidance
 Before taking any action, determine whether this task is:
