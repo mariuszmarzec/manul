@@ -582,8 +582,8 @@ result = []
 in_fence = False
 fence_char = None
 fence_length = 0
-for line in lines:
-    match = re.match(r"^\s*(`{3,}|~{3,})", line)
+for index, line in enumerate(lines):
+    match = re.match(r"^\s*(\x60{3,}|~{3,})", line)
     if match:
         marker = match.group(1)
         if not in_fence:
@@ -592,7 +592,13 @@ for line in lines:
             in_fence, fence_char, fence_length = False, None, 0
         result.append(line)
         continue
-    if not in_fence and line and not line.endswith(("  ", "\\\\")):
+    next_line = lines[index + 1] if index + 1 < len(lines) else ""
+    if (
+        not in_fence
+        and line
+        and next_line.strip()
+        and not line.endswith(("  ", "\\"))
+    ):
         line += "  "
     result.append(line)
 sys.stdout.write("\n".join(result))
