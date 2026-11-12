@@ -193,7 +193,7 @@ parse_command() {
       # Try to use first token as a configured role agent.
       if echo "$known_agents" | grep -qw "$first_token"; then
         agent="$first_token"
-        prompt="$(echo "$cmd" | sed "s/^${first_token}[[:space:]]*//")"
+        prompt="$(echo "$cmd" | sed 's/^[^[:space:]]*[[:space:]]*//')"
         action="IMPLEMENT"
       else
         # Default to IMPLEMENT with full prompt
