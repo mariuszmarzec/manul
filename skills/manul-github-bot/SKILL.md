@@ -562,7 +562,7 @@ lockTtl
 ```
 
 
-The heartbeat child is considered healthy only when its task-scoped PID file identifies the expected direct child of the worker loop. If consecutive SQLite heartbeat updates fail or affect no row while the claim is still owned, it logs the failures and exits unhealthy after `automation.heartbeatMaxConsecutiveFailures` (default 3). The watchdog cron (every 5 minutes) checks both lease timestamps and heartbeat-process liveness; it performs one conditional SQLite claim transition before stopping the old executor tree. Recovery compares the exact claim token, worker PID, heartbeat timestamp and lease timestamp captured in its scan so it cannot kill a task whose heartbeat was refreshed concurrently. Stale retries retain their attempt count and receive at least a five-second termination window before they can be dispatched again.
+The heartbeat child is considered healthy only when its task-scoped PID file identifies the expected direct child of the worker loop. If consecutive SQLite heartbeat updates fail or affect no row while the claim is still owned, it logs the failures and exits unhealthy after `automation.heartbeatMaxConsecutiveFailures` (default 3). The watchdog cron (every 5 minutes) checks both lease timestamps and heartbeat-process liveness; it performs one conditional SQLite claim transition before stopping the old executor tree. Recovery compares the exact claim token, worker PID, heartbeat timestamp and lease timestamp captured in its scan so it cannot kill a task whose heartbeat was refreshed concurrently. Stale retries retain their attempt count and receive at least a fifteen-second termination window before they can be dispatched again.
 
 Other top-level controls include:
 
