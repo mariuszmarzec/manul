@@ -571,13 +571,41 @@ todo_task_mark_done() {
 }
 
 
+# The Todo UI renders descriptions with mikepenz/multiplatform-markdown-renderer.
+# Preserve Markdown structure and make ordinary line breaks explicit hard breaks.
+todo_task_markdown_format() {
+  python3 -c '
+import re, sys
+text = sys.stdin.read().replace("\r\n", "\n").replace("\r", "\n")
+lines = text.split("\n")
+result = []
+in_fence = False
+fence_char = None
+fence_length = 0
+for line in lines:
+    match = re.match(r"^\s*(`{3,}|~{3,})", line)
+    if match:
+        marker = match.group(1)
+        if not in_fence:
+            in_fence, fence_char, fence_length = True, marker[0], len(marker)
+        elif marker[0] == fence_char and len(marker) >= fence_length:
+            in_fence, fence_char, fence_length = False, None, 0
+        result.append(line)
+        continue
+    if not in_fence and line and not line.endswith(("  ", "\\\\")):
+        line += "  "
+    result.append(line)
+sys.stdout.write("\n".join(result))
+'
+}
+
 # Persist an informational answer as a child task. The marker binds the record
 # to the exact source version and payload digest; retries reuse it instead of
 # creating duplicate answers, including after a lost MCP response.
 todo_task_report_deliver() {
   local source_json="$1" source_type="$2" source_id="$3" generated_answer="$4"
   local task_id expected_version tasks_json root_json marker_prefix result_json result_count
-  local result_id result_description result_todo arguments answer digest receipt actual_version
+  local result_id result_description result_todo arguments answer digest receipt actual_version formatted_answer
   local manul_user_id=""
   task_id="$(todo_task_id_from_source_id "$source_id")"
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
@@ -612,13 +640,92 @@ todo_task_report_deliver() {
     return 1
   fi
 
+  formatted_answer="$(todo_task_markdown_format <<<"$generated_answer")" || return 1
+
   if [ "$result_count" -eq 1 ]; then
     result_json="$(jq -c '.[0]' <<<"$result_json")"
     result_id="$(jq -r '.id // empty' <<<"$result_json")"
     result_description="$(jq -r '.description // empty' <<<"$result_json")"
   else
-    digest="$(printf '%s' "$generated_answer" | sha256sum | awk '{print $1}')"
-    result_description="${marker_prefix}sha256=${digest} -->"$'\n'"$generated_answer"
+    digest="$(printf '%s' "$formatted_answer" | sha256sum | awk '{print $1}')"
+    result_description="${marker_prefix}sha256=${digest} -->"
+    case "$source_type" in
+      todo_local_mcp)
+        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
+        todo_mcp_source_call "$source_json" "$source_type" create_task "$arguments" >/dev/null || return $? ;;
+      todo_remote_mcp)
+        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}}')"
+        todo_mcp_source_call "$source_json" "$source_type" todo_create_task "$arguments" >/dev/null || return $? ;;
+    esac
+    tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
+    root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+    result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
+      [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | startswith($prefix))]
+    ' <<<"$root_json")" || return 1
+    result_count="$(jq -r 'length' <<<"$result_json")"
+    [ "$result_count" -eq 1 ] || {
+      echo "Todo report create did not produce exactly one readable result subtask" >&2
+      return 1
+    }
+    result_json="$(jq -c '.[0]' <<<"$result_json")"
+    result_id="$(jq -r '.id // empty' <<<"$result_json")"
+    result_description="$(jq -r '.description // empty' <<<"$result_json")"
+  fi
+
+  [[ "$result_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
+  [ "$actual_version" = "$expected_version" ] || {
+    echo "Todo report result read-back failed source-version verification" >&2
+    return 1
+  }
+  result_todo="$(jq -r 'if .isToDo == null then "true" else (.isToDo|tostring) end' <<<"$result_json")"
+  if [ "$result_todo" != "false" ]; then
+    case "$source_type" in
+      todo_local_mcp)
+        arguments="$(jq -cn --argjson taskId "$result_id" '{taskIds:[$taskId]}')"
+        todo_mcp_source_call "$source_json" "$source_type" mark_tasks_done "$arguments" >/dev/null || return $? ;;
+      todo_remote_mcp)
+        arguments="$(jq -cn --argjson id "$result_id" '{id:$id,task:{isToDo:false}}')"
+        todo_mcp_source_call "$source_json" "$source_type" todo_update_task "$arguments" >/dev/null || return $? ;;
+    esac
+  fi
+
+  # Read the provider state again after mutation. Exact text, parent, completed
+  # flag, unique receipt and unchanged source structure are all required.
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
+  root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
+    [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | startswith($prefix))]
+  ' <<<"$root_json")" || return 1
+  [ "$(jq -r 'length' <<<"$result_json")" -eq 1 ] || return 1
+  result_json="$(jq -c '.[0]' <<<"$result_json")"
+  [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
+  [ "$(jq -r '.isToDo' <<<"$result_json")" = "false" ] || return 1
+  [ "$(jq -r '.description // empty' <<<"$result_json")" = "$result_description" ] || return 1
+  if [ "$source_type" = "todo_remote_mcp" ] &&
+     ! todo_task_has_remote_share "$root_json" "$manul_user_id"; then
+    echo "Todo report parent is no longer shared with Manul" >&2
+    return 1
+  fi
+  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
+  [ "$actual_version" = "$expected_version" ] || {
+    echo "Todo source changed while the report result was being verified" >&2
+    return 1
+  }
+
+  answer="${result_description#*$'\n'}"
+  digest="$(printf '%s' "$answer" | sha256sum | awk '{print $1}')"
+  receipt="$(jq -cn \
+    --arg sourceId "$source_id" \
+    --argjson rootTaskId "$task_id" \
+    --argjson resultTaskId "$result_id" \
+    --arg answerSha256 "$digest" \
+    --arg verifiedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg answer "$answer" \
+    '{sourceId:$sourceId,rootTaskId:$rootTaskId,resultTaskId:$resultTaskId,answerSha256:$answerSha256,verifiedAt:$verifiedAt,answer:$answer}')"
+  printf '%s\n' "$receipt"
+}
+\n'"$formatted_answer"
     case "$source_type" in
       todo_local_mcp)
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
