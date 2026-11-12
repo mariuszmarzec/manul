@@ -119,6 +119,7 @@ cat <<'JSON'
 [
   {"number":11,"html_url":"https://github.com/owner/issues/issues/11","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Run root task","body":"/manul implement this"},
   {"number":13,"html_url":"https://github.com/owner/issues/issues/13","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Diagnostics only","body":"/manul verify\nDiagnose only and report findings without changing code"},
+  {"number":14,"html_url":"https://github.com/owner/issues/issues/14","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Investigate only","body":"/manul investigate\\nInvestigate only and report findings without changing code"},
   {"number":12,"html_url":"https://github.com/owner/issues/pull/12","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"PR is not root","body":"/manul should never be a source","pull_request":{"url":"https://api.github.com/repos/owner/issues/pulls/12"}}
 ]
 JSON
@@ -135,6 +136,9 @@ assert_contains "GitHub trigger is removed from normalized prompt" "$github_task
 assert_not_contains "GitHub PR is never a root source" "$github_tasks" '"taskSourceId":"owner/issues#12"'
 assert_contains "explicit verify command is normalized as report-only" "$github_tasks" '"action":"VERIFY"'
 assert_contains "verify command is removed from the agent prompt" "$github_tasks" '"prompt":"Diagnose only and report findings without changing code"'
+assert_contains "GitHub /manul investigate is normalized as report-only" "$github_tasks" '"taskSourceId":"owner/issues#14"'
+assert_contains "investigate alias is mapped to VERIFY" "$(printf '%s\\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#14")')" '"action":"VERIFY"'
+assert_contains "investigate command prefix is stripped from prompt" "$(printf '%s\\n' "$github_tasks" | jq -r 'select(.taskSourceId == "owner/issues#14") | .prompt')" "Investigate only and report findings without changing code"
 
 # Queue a normalized VERIFY source through the production queueing function and assert
 # the explicit delivery action survives persistence in processed_comments.
