@@ -679,10 +679,14 @@ For repository-backed Todo tasks, completion follows repository delivery
 verification (including a verified PR when code changed). For report-only Todo
 tasks, the agent's non-empty final answer is instead written as a child task under
 the source root. The adapter reads the tree back and verifies the unique child,
-parent relationship, exact answer, and completed flag. Its marker binds the child
-to the original source fingerprint and an answer SHA-256 digest; only one valid,
-source-version-bound result child is omitted from subsequent source fingerprints.
-A modified/ambiguous output child is not ignored.
+parent relationship, exact rendered payload, and completed flag. The child keeps
+renderer-compatible Markdown hard breaks, while new result markers also carry a
+separately checksummed, base64-encoded copy of the exact unformatted answer.
+Receipts return that original answer on both initial delivery and retry, so
+renderer-only whitespace never changes the agent's response. Legacy markers
+without the original-answer field remain readable using their stored payload.
+Only one valid, source-version-bound result child is omitted from subsequent
+source fingerprints. A modified/ambiguous output child is not ignored.
  
 The daemon persists the verified result receipt in its own task row before
 completion. A lost create response or later partial failure is retry-safe: a
