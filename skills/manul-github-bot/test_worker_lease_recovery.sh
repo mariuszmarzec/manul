@@ -352,7 +352,7 @@ else
 fi
 assert_eq 1 "$STUCK_HEARTBEAT_RC" "heartbeat exits unhealthy after bounded database failures"
 grep -q 'HEARTBEAT_UNHEALTHY task=heartbeat-stuck ' "$LIFECYCLE_LOG" \
-  && echo "PASS: unhealthy heartbeat is recorded in lifecycle log" \\
+  && echo "PASS: unhealthy heartbeat is recorded in lifecycle log" \
   || { echo "FAIL: unhealthy heartbeat lifecycle event missing" >&2; exit 1; }
 assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='heartbeat-stuck';")" "heartbeat failure does not mutate task ownership"
 sqlite3 "$DB" "DROP TRIGGER suppress_heartbeat_update;"
