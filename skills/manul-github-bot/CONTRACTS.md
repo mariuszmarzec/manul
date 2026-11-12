@@ -93,6 +93,16 @@ A recovery operation must verify ownership before changing a running task.
 
 Heartbeat/lease recovery must never blindly reset a live task owned by another worker.
 
+The task-scoped heartbeat PID is a separate liveness signal from the long-lived
+worker PID. A worker PID being alive does not prove that its heartbeat loop is
+alive or successfully updating SQLite. Heartbeat database updates use a bounded
+SQLite busy timeout and a configurable consecutive-failure limit
+(`automation.heartbeatMaxConsecutiveFailures`, default 3). If the claim is
+still owned but updates repeatedly fail or affect no row, the heartbeat must
+log a `HEARTBEAT_UNHEALTHY` lifecycle event and exit non-zero so watchdog
+recovery can detect it. If the claim was completed, requeued or otherwise lost,
+the heartbeat exits normally without classifying the task as unhealthy.
+
 ## 5. Single source of truth
 
 `manul.db` is the authoritative task state.
@@ -116,7 +126,7 @@ The default configuration uses:
 
 Repository locks prevent two tasks from concurrently modifying the same repository workspace.
 
-A task lock/flock is a safety mechanism, not a replacement for SQLite ownership checks. Startup must serialize preparation and hold a separate OS-level daemon-owner lock for the full supervisor lifetime; a stale/reused PID must not allow a second supervisor to start. The dispatcher and daemon-owner lock descriptors must not be inherited by long-lived background helpers, workers, or isolated agent executors. Stopping/recovering a task must terminate the complete executor and heartbeat process trees—including descendants that create their own process groups—before the workspace can be reused. PID-file cleanup must not hide a still-running process.
+A task lock/flock is a safety mechanism, not a replacement for SQLite ownership checks. Startup must serialize preparation and hold a separate OS-level daemon-owner lock for the full supervisor lifetime; a stale/reused PID must not allow a second supervisor to start. The dispatcher and daemon-owner lock descriptors must not be inherited by long-lived background helpers, workers, or isolated agent executors. Stopping/recovering a task must terminate the complete executor and heartbeat process trees—including descendants that create their own process groups—before the workspace can be reused. Stale recovery transitions the claim first, then terminates the task-scoped heartbeat child and executor tree; it may signal a heartbeat only when its PID, parent worker PID and Manul loop command identity match the exact claim, otherwise it leaves the process unsignalled so the changed SQLite ownership makes it exit normally. PID-file cleanup must not hide a still-running process. The daemon and watchdog must use the same task-scoped process-control helpers so recovery can rediscover an executor after a stale/missing PID file and does not signal unrelated/reused PIDs.
 
 
 
@@ -381,18 +391,21 @@ These restrictions are part of the default task contract, not requirements that 
 
 ## 14. Watchdog contract
 
-The watchdog is a liveness/recovery mechanism, not a general task scheduler.
+The watchdog is a liveness/recovery mechanism, not a general task scheduler. Its cron invocation is the periodic task-recovery mechanism (default every five minutes); the daemon performs a separate startup recovery pass only.
 
 It may:
 - restart an enabled daemon that is not running;
 - remove a stale daemon lock;
 - reclaim stale workspaces;
-- recover tasks whose heartbeat/lease is stale.
+- recover a running claim when its lease is stale, its worker is dead, or its task-scoped heartbeat process is missing/unhealthy.
 
 It must not:
 - reset healthy running tasks;
 - reset all tasks merely because a lock is old;
-- create a second independent retry policy.
+- create a second independent retry policy;
+- terminate an executor based only on a stale SELECT snapshot.
+
+Before signalling any executor, recovery must atomically transition the exact running claim using its claim token, worker PID, heartbeat timestamp and lease timestamp as compare-and-swap conditions. If the row changed (including a concurrent heartbeat refresh or new claim), recovery must skip process termination. A queued retry must retain a short non-zero dispatch delay so the previous heartbeat and executor process trees can be stopped before the task PID files are reused. Concurrent watchdog invocations must be serialized.
 
 The daemon also performs a recovery pass at loop startup; this is a deliberate startup safeguard and not a competing retry mechanism.
 
