@@ -648,7 +648,7 @@ todo_task_report_deliver() {
     result_description="$(jq -r '.description // empty' <<<"$result_json")"
   else
     digest="$(printf '%s' "$formatted_answer" | sha256sum | awk '{print $1}')"
-    result_description="${marker_prefix}sha256=${digest} -->"
+    result_description="${marker_prefix}sha256=${digest} -->"$'\n'"$formatted_answer"
     case "$source_type" in
       todo_local_mcp)
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
