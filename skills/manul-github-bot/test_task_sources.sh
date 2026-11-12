@@ -136,13 +136,10 @@ assert_contains "GitHub trigger is removed from normalized prompt" "$github_task
 assert_not_contains "GitHub PR is never a root source" "$github_tasks" '"taskSourceId":"owner/issues#12"'
 assert_contains "explicit verify command is normalized as report-only" "$github_tasks" '"action":"VERIFY"'
 assert_contains "verify command is removed from the agent prompt" "$github_tasks" '"prompt":"Diagnose only and report findings without changing code"'
-investigate_task="$(printf '%s\\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#14")')"
+investigate_task="$(printf '%s\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#14")')"
 assert_contains "GitHub /manul investigate issue is discovered" "$github_tasks" '"taskSourceId":"owner/issues#14"'
 assert_contains "investigate command is mapped to VERIFY" "$investigate_task" '"action":"VERIFY"'
 assert_eq "investigate prefix is removed from the task prompt" "Investigate only and report findings without changing code" "$(jq -r '.prompt' <<<"$investigate_task")"
-assert_contains "GitHub /manul investigate is normalized as report-only" "$github_tasks" '"taskSourceId":"owner/issues#14"'
-assert_contains "investigate alias is mapped to VERIFY" "$(printf '%s\\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#14")')" '"action":"VERIFY"'
-assert_contains "investigate command prefix is stripped from prompt" "$(printf '%s\\n' "$github_tasks" | jq -r 'select(.taskSourceId == "owner/issues#14") | .prompt')" "Investigate only and report findings without changing code"
 
 # Queue a normalized VERIFY source through the production queueing function and assert
 # the explicit delivery action survives persistence in processed_comments.
