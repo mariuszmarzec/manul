@@ -833,7 +833,8 @@ assert_eq "local report source is current before execution" "0" "$(todo_task_sti
 : > "$TODO_MCP_CALL_LOG"
 export TODO_MCP_FAIL_MARK=1
 local_report_rc=0
-todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "Local report answer with exact content." >/dev/null || local_report_rc=$?
+local_report_answer=$'Local report answer with exact content.\nSecond line must remain byte-for-byte unchanged.'
+todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "$local_report_answer" >/dev/null || local_report_rc=$?
 assert_rc "failed completion mutation leaves the report task retryable" "2" "$local_report_rc"
 partial_local_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
 assert_eq "partial local write leaves root task active" "true" "$partial_local_root_status"
@@ -842,8 +843,8 @@ assert_eq "partial local write keeps one result subtask" "1" "$partial_local_chi
 partial_local_child_status=$(jq -r .[0].subTasks[0].isToDo "$TODO_MCP_FIXTURE")
 assert_eq "partial local write leaves result subtask pending" "true" "$partial_local_child_status"
 unset TODO_MCP_FAIL_MARK
-local_report_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "Local report answer with exact content.")"
-assert_eq "local report receipt preserves the exact answer" "Local report answer with exact content." "$(jq -r '.answer' <<<"$local_report_receipt")"
+local_report_receipt="$(todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "$local_report_answer")"
+assert_eq "local report receipt preserves the exact unformatted multi-line answer" "$local_report_answer" "$(jq -r '.answer' <<<"$local_report_receipt")"
 local_report_result_id="$(jq -r '.resultTaskId' <<<"$local_report_receipt")"
 jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-report-child-status"
 IFS= read -r local_report_child_status < "$TEST_DIR/local-report-child-status"
@@ -860,9 +861,8 @@ todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id
 jq -r .resultTaskId "$TEST_DIR/local-retry-receipt.json" > "$TEST_DIR/local-retry-result-id"
 IFS= read -r local_retry_result_id < "$TEST_DIR/local-retry-result-id"
 assert_eq "local report retry reuses the existing child" "$local_report_result_id" "$local_retry_result_id"
-jq -r .answer "$TEST_DIR/local-retry-receipt.json" > "$TEST_DIR/local-retry-answer"
-IFS= read -r local_retry_answer < "$TEST_DIR/local-retry-answer"
-assert_eq "local report retry returns the exact previously persisted answer" "Local report answer with exact content." "$local_retry_answer"
+local_retry_answer="$(jq -r .answer "$TEST_DIR/local-retry-receipt.json")"
+assert_eq "local report retry returns the exact previously persisted multi-line answer" "$local_report_answer" "$local_retry_answer"
 grep -Fc "create_task" "$TODO_MCP_CALL_LOG" > "$TEST_DIR/local-create-count"
 IFS= read -r local_create_count < "$TEST_DIR/local-create-count"
 assert_eq "local report creates only one output child across retry" "1" "$local_create_count"
@@ -886,9 +886,10 @@ val value = 1
 ```
 MARKDOWN
 )"
-assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_markdown" $'First line  \nSecond line  '
-assert_contains "Markdown list structure remains intact" "$formatted_markdown" $'- one  \n- two  '
+assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_markdown" $'First line  \nSecond line'
+assert_contains "Markdown list structure remains intact" "$formatted_markdown" $'- one  \n- two'
 assert_contains "fenced code block content is preserved" "$formatted_markdown" $'```kotlin\nval value = 1\n```'
+assert_eq "single-line report text has no redundant trailing hard break" "Single-line report answer." "$(printf '%s' 'Single-line report answer.' | todo_task_markdown_format)"
 # A new /manul report version must retain the previous result as history
 # while excluding only the output child bound to the newly polled source version.
 jq '.[0].description = "/manul report Updated request after initial report"' "$TEST_DIR/local-report.json" > "$TEST_DIR/local-report-second-version.json"

@@ -1036,7 +1036,7 @@ start_heartbeat() {
       fi
 
       local update_output changed update_rc
-      if update_output="$(sqlite3 -bail "$DB" "PRAGMA busy_timeout=5000; UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND workerPid=$worker_pid $ownership_sql; SELECT changes();" 2>>"$LOG")"; then
+      if update_output="$(sqlite3 -bail "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND workerPid=$worker_pid $ownership_sql; SELECT changes();" 2>>"$LOG")"; then
         update_rc=0
         changed="$(printf '%s\n' "$update_output" | tail -n 1)"
       else
@@ -1054,7 +1054,7 @@ start_heartbeat() {
       # no longer owns the task. A matching row with a failed/no-op UPDATE is
       # an infrastructure failure and must not loop forever silently.
       local db_state db_state_rc
-      if db_state="$(sqlite3 -bail "$DB" "PRAGMA busy_timeout=5000; SELECT status || '|' || COALESCE(workerPid,0) || '|' || COALESCE(claimToken,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG")"; then
+      if db_state="$(sqlite3 -bail "$DB" "SELECT status || '|' || COALESCE(workerPid,0) || '|' || COALESCE(claimToken,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG")"; then
         db_state_rc=0
       else
         db_state_rc=$?
