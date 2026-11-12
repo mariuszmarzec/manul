@@ -4973,14 +4973,14 @@ PROMPT_APPEND
       if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
         cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This Todo task is resuming the existing PR #__TASK_PR_NUMBER__ created by an earlier attempt of this exact task.
-- Existing PR head branch: \`__PR_HEAD_BRANCH__\` (already checked out and verified by Manul)
+- Existing PR head branch: `__PR_HEAD_BRANCH__` (already checked out and verified by Manul)
 - Continue implementation/recovery on this same branch and update the existing PR #__TASK_PR_NUMBER__.
 - Do NOT create another branch or PR. Keep the Todo task as the delivery source; do not post a GitHub issue result comment.
 PROMPT_APPEND
       else
         cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 - This standalone issue task is resuming the existing PR #__TASK_PR_NUMBER__ created by an earlier attempt of this exact task.
-- Existing PR head branch: \`__PR_HEAD_BRANCH__\` (already checked out and verified by Manul)
+- Existing PR head branch: `__PR_HEAD_BRANCH__` (already checked out and verified by Manul)
 - Continue implementation/recovery on this same branch and update the existing PR #__TASK_PR_NUMBER__.
 - Do NOT create another branch or PR. The source issue remains #__ISSUE_NUM__; post the task result on that issue.
 PROMPT_APPEND
