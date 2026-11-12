@@ -15,7 +15,7 @@ TEST_HOME="$tmp/home"
 mkdir -p "$tmp/bin" "$TASK_WORKSPACE" "$TEST_HOME"
 cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
-printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_marker-docs","part":{"type":"text","text":"TASK_DONE task completed"}}'
+printf '%s\n' '{"type":"text","timestamp":1000,"sessionID":"ses_marker-docs","part":{"type":"text","text":"TASK_DONE: task completed"}}'
 printf '%s\n' '{"type":"tool_use","timestamp":1100,"sessionID":"ses_marker-docs","part":{"type":"tool-use","state":{"status":"completed","input":{"documentation":"Use TASK_NEEDS_USER_BEGIN then TASK_NEEDS_USER_END to ask for input."}}}}'
 printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_marker-docs","part":{"type":"step-finish","reason":"stop"}}'
 exit 0
