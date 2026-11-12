@@ -119,7 +119,7 @@ cat <<'JSON'
 [
   {"number":11,"html_url":"https://github.com/owner/issues/issues/11","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Run root task","body":"/manul implement this"},
   {"number":13,"html_url":"https://github.com/owner/issues/issues/13","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Diagnostics only","body":"/manul verify\nDiagnose only and report findings without changing code"},
-  {"number":14,"html_url":"https://github.com/owner/issues/issues/14","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Investigate only","body":"/manul investigate\nInvestigate only and report findings without changing code"},
+  {"number":14,"html_url":"https://github.com/owner/issues/issues/14","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Investigate only","body":"/manul Investigate\nInvestigate only and report findings without changing code"},
   {"number":12,"html_url":"https://github.com/owner/issues/pull/12","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"PR is not root","body":"/manul should never be a source","pull_request":{"url":"https://api.github.com/repos/owner/issues/pulls/12"}}
 ]
 JSON
