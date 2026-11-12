@@ -405,7 +405,7 @@ It must not:
 - create a second independent retry policy;
 - terminate an executor based only on a stale SELECT snapshot.
 
-Before signalling any executor, recovery must atomically transition the exact running claim using its claim token, worker PID, heartbeat timestamp and lease timestamp as compare-and-swap conditions. If the row changed (including a concurrent heartbeat refresh or new claim), recovery must skip process termination. A queued retry must retain a short non-zero dispatch delay so the previous heartbeat and executor process trees can be stopped before the task PID files are reused. Concurrent watchdog invocations must be serialized.
+Before signalling any executor, recovery must atomically transition the exact running claim using its claim token, worker PID, heartbeat timestamp and lease timestamp as compare-and-swap conditions. If the row changed (including a concurrent heartbeat refresh or new claim), recovery must skip process termination. A queued retry must retain at least a fifteen-second dispatch delay so the previous heartbeat and executor process trees can be stopped before the task PID files are reused. Concurrent watchdog invocations must be serialized.
 
 The daemon also performs a recovery pass at loop startup; this is a deliberate startup safeguard and not a competing retry mechanism.
 
