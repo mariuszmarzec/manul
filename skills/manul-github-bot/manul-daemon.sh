@@ -2926,7 +2926,7 @@ verify_existing_task_pr() {
         | select(
             (((.body // "") | contains("<!-- manul-task:" + $task + " -->"))
               or ((.body // "") | contains("task " + $task)))
-            or ((.headRefName // "") | contains($taskToken))
+            or ((.headRefName // "") | test("(^|-)"+$taskToken+"-attempt-[0-9]+$"))
             or (($priorUrls | index($candidateUrl)) != null)
           )
       ]' 2>/dev/null)" || {
