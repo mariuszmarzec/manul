@@ -826,7 +826,7 @@ recover_stale_tasks() {
     else
       lease_clause="AND leaseExpiresAt IS NULL"
     fi
-    if [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]]; then
+    if [[ "$worker_pid" =~ ^[0-9]+$ ]]; then
       worker_clause="AND workerPid=$worker_pid"
     else
       worker_clause="AND workerPid IS NULL"
