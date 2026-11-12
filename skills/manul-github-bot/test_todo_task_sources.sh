@@ -861,8 +861,7 @@ todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id
 jq -r .resultTaskId "$TEST_DIR/local-retry-receipt.json" > "$TEST_DIR/local-retry-result-id"
 IFS= read -r local_retry_result_id < "$TEST_DIR/local-retry-result-id"
 assert_eq "local report retry reuses the existing child" "$local_report_result_id" "$local_retry_result_id"
-jq -r .answer "$TEST_DIR/local-retry-receipt.json" > "$TEST_DIR/local-retry-answer"
-IFS= read -r local_retry_answer < "$TEST_DIR/local-retry-answer"
+local_retry_answer="$(jq -r .answer "$TEST_DIR/local-retry-receipt.json")"
 assert_eq "local report retry returns the exact previously persisted multi-line answer" "$local_report_answer" "$local_retry_answer"
 grep -Fc "create_task" "$TODO_MCP_CALL_LOG" > "$TEST_DIR/local-create-count"
 IFS= read -r local_create_count < "$TEST_DIR/local-create-count"
@@ -887,10 +886,10 @@ val value = 1
 ```
 MARKDOWN
 )"
-assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_markdown" $'First line  \\nSecond line'
-assert_contains "Markdown list structure remains intact" "$formatted_markdown" $'- one  \\n- two'
-assert_contains "fenced code block content is preserved" "$formatted_markdown" $'```kotlin\\nval value = 1\\n```'
-assert_eq "single-line report text has no redundant trailing hard break" "Single-line report answer." "$(todo_task_markdown_format <<<\"Single-line report answer.\")"
+assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_markdown" $'First line  \nSecond line'
+assert_contains "Markdown list structure remains intact" "$formatted_markdown" $'- one  \n- two'
+assert_contains "fenced code block content is preserved" "$formatted_markdown" $'```kotlin\nval value = 1\n```'
+assert_eq "single-line report text has no redundant trailing hard break" "Single-line report answer." "$(printf '%s\\n' 'Single-line report answer.' | todo_task_markdown_format)"
 # A new /manul report version must retain the previous result as history
 # while excluding only the output child bound to the newly polled source version.
 jq '.[0].description = "/manul report Updated request after initial report"' "$TEST_DIR/local-report.json" > "$TEST_DIR/local-report-second-version.json"
