@@ -22,6 +22,7 @@ cat >"$CONFIG" <<'JSON'
     "maxPreExecutionFailures": 2,
     "lockTtl": 1800,
     "heartbeatTimeout": 900,
+    "heartbeatMaxConsecutiveFailures": 3,
     "leaseTimeout": 900
   },
   "retryConfig": {
@@ -258,6 +259,106 @@ flock -u 210
 exec 210>&-
 echo "PASS: startup cleanup reaps orphan heartbeat trees without releasing another owner's lock"
 
+# 0e) A heartbeat PID is healthy only when it is the expected direct child
+# process for this worker, not merely any process with a live/reused PID.
+HEARTBEAT_IDENTITY_SCRIPT="$TEST_DIR/manul-daemon.sh"
+cat >"$HEARTBEAT_IDENTITY_SCRIPT" <<'HEARTBEAT_ID'
+#!/usr/bin/env bash
+trap 'exit 0' TERM INT
+while :; do
+  read -r -t 1 _ || true
+done
+HEARTBEAT_ID
+chmod +x "$HEARTBEAT_IDENTITY_SCRIPT"
+HEARTBEAT_IDENTITY_PID_FILE="$(manul_task_file_path "$MANUL_DIR" "heartbeat-identity" "heartbeat.pid")"
+bash "$HEARTBEAT_IDENTITY_SCRIPT" loop --worker=0 --parent-pid="$CURRENT_TEST_PID" &
+HEARTBEAT_IDENTITY_PID=$!
+printf '%s\n' "$HEARTBEAT_IDENTITY_PID" >"$HEARTBEAT_IDENTITY_PID_FILE"
+for _ in {1..20}; do
+  task_heartbeat_is_alive "heartbeat-identity" "$CURRENT_TEST_PID" && break
+  sleep 0.05
+done
+if ! task_heartbeat_is_alive "heartbeat-identity" "$CURRENT_TEST_PID"; then
+  echo "FAIL: live task heartbeat was not recognized by PID/parent/command identity" >&2
+  kill "$HEARTBEAT_IDENTITY_PID" 2>/dev/null || true
+  wait "$HEARTBEAT_IDENTITY_PID" 2>/dev/null || true
+  exit 1
+fi
+kill -TERM "$HEARTBEAT_IDENTITY_PID" 2>/dev/null || true
+wait "$HEARTBEAT_IDENTITY_PID" 2>/dev/null || true
+if task_heartbeat_is_alive "heartbeat-identity" "$CURRENT_TEST_PID"; then
+  echo "FAIL: terminated heartbeat was still reported alive" >&2
+  exit 1
+fi
+rm -f "$HEARTBEAT_IDENTITY_PID_FILE"
+echo "PASS: heartbeat liveness validates PID, parent worker and Manul loop identity"
+
+# 0e.1) Recovery must reap only the task-scoped heartbeat child after the
+# database claim has already been transitioned.
+HEARTBEAT_REAP_PID_FILE="$(manul_task_file_path "$MANUL_DIR" "heartbeat-reap" "heartbeat.pid")"
+bash "$HEARTBEAT_IDENTITY_SCRIPT" loop --worker=0 --parent-pid="$CURRENT_TEST_PID" &
+HEARTBEAT_REAP_PID=$!
+printf '%s\n' "$HEARTBEAT_REAP_PID" >"$HEARTBEAT_REAP_PID_FILE"
+for _ in {1..20}; do
+  task_heartbeat_is_alive "heartbeat-reap" "$CURRENT_TEST_PID" && break
+  sleep 0.05
+done
+if ! task_heartbeat_is_alive "heartbeat-reap" "$CURRENT_TEST_PID"; then
+  echo "FAIL: heartbeat reaping fixture was not recognized" >&2
+  kill "$HEARTBEAT_REAP_PID" 2>/dev/null || true
+  wait "$HEARTBEAT_REAP_PID" 2>/dev/null || true
+  exit 1
+fi
+terminate_task_heartbeat_for_claim "heartbeat-reap" "$CURRENT_TEST_PID"
+wait "$HEARTBEAT_REAP_PID" 2>/dev/null || true
+if task_process_is_running "$HEARTBEAT_REAP_PID" || [ -e "$HEARTBEAT_REAP_PID_FILE" ]; then
+  echo "FAIL: task recovery did not reap its heartbeat PID and marker" >&2
+  exit 1
+fi
+echo "PASS: task recovery reaps the exact task-scoped heartbeat child"
+
+# 0f) Repeated failed/no-op heartbeat writes must make the heartbeat unhealthy
+# instead of leaving a live but permanently silent child.
+sqlite3 "$DB" "
+INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,attempts,workerPid,claimToken)
+VALUES ('heartbeat-stuck','$REPO',780,'https://github.com/$REPO/issues/780','running',1,$CURRENT_TEST_PID,'heartbeat-stuck-token');
+CREATE TRIGGER suppress_heartbeat_update
+BEFORE UPDATE ON processed_comments
+WHEN OLD.commentId='heartbeat-stuck'
+BEGIN SELECT RAISE(IGNORE); END;
+"
+HEARTBEAT_INTERVAL=1
+HEARTBEAT_MAX_CONSECUTIVE_FAILURES=3
+start_heartbeat "heartbeat-stuck" "$CURRENT_TEST_PID" "heartbeat-stuck-token"
+STUCK_HEARTBEAT_PID_FILE="$(manul_task_file_path "$MANUL_DIR" "heartbeat-stuck" "heartbeat.pid")"
+STUCK_HEARTBEAT_PID="$(cat "$STUCK_HEARTBEAT_PID_FILE" 2>/dev/null || true)"
+if ! [[ "$STUCK_HEARTBEAT_PID" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: unhealthy heartbeat fixture did not start" >&2
+  exit 1
+fi
+for _ in {1..40}; do
+  if ! task_process_is_running "$STUCK_HEARTBEAT_PID"; then break; fi
+  sleep 0.25
+done
+if task_process_is_running "$STUCK_HEARTBEAT_PID"; then
+  echo "FAIL: heartbeat kept running after its consecutive failure limit" >&2
+  kill -KILL "$STUCK_HEARTBEAT_PID" 2>/dev/null || true
+  exit 1
+fi
+if wait "$STUCK_HEARTBEAT_PID"; then
+  STUCK_HEARTBEAT_RC=0
+else
+  STUCK_HEARTBEAT_RC=$?
+fi
+assert_eq 1 "$STUCK_HEARTBEAT_RC" "heartbeat exits unhealthy after bounded database failures"
+grep -q 'HEARTBEAT_UNHEALTHY task=heartbeat-stuck ' "$LIFECYCLE_LOG" \
+  && echo "PASS: unhealthy heartbeat is recorded in lifecycle log" \
+  || { echo "FAIL: unhealthy heartbeat lifecycle event missing" >&2; exit 1; }
+assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='heartbeat-stuck';")" "heartbeat failure does not mutate task ownership"
+sqlite3 "$DB" "DROP TRIGGER suppress_heartbeat_update;"
+rm -f "$STUCK_HEARTBEAT_PID_FILE"
+echo "PASS: repeated failed heartbeat writes terminate visibly without changing task state"
+
 # 1) Completion succeeds only for the worker owning the lease.
 sqlite3 "$DB" "
 INSERT INTO processed_comments VALUES
@@ -292,10 +393,26 @@ sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('dead-fresh','$REPO',41,'h
 recover_stale_tasks
 assert_eq queued "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='dead-fresh';")" "dead worker with fresh lease requeued"
 
-# 3c) Live worker + fresh lease is left alone.
+# 3c) A live worker with a fresh DB lease AND a live heartbeat is left alone.
 sqlite3 "$DB" "INSERT INTO processed_comments VALUES ('live-fresh','$REPO',42,'https://github.com/$REPO/issues/42','IMPLEMENT','running',1,datetime('now'),datetime('now'),datetime('now','+900 seconds'),$CURRENT_TEST_PID,'live-fresh-token',NULL,NULL,0,datetime('now'))"
+bash "$HEARTBEAT_IDENTITY_SCRIPT" loop --worker=0 --parent-pid="$CURRENT_TEST_PID" &
+LIVE_FRESH_HEARTBEAT_PID=$!
+printf '%s\n' "$LIVE_FRESH_HEARTBEAT_PID" >"$(manul_task_file_path "$MANUL_DIR" "live-fresh" "heartbeat.pid")"
+for _ in {1..20}; do
+  task_heartbeat_is_alive "live-fresh" "$CURRENT_TEST_PID" && break
+  sleep 0.05
+done
+if ! task_heartbeat_is_alive "live-fresh" "$CURRENT_TEST_PID"; then
+  echo "FAIL: live-fresh heartbeat fixture was not recognized" >&2
+  kill "$LIVE_FRESH_HEARTBEAT_PID" 2>/dev/null || true
+  wait "$LIVE_FRESH_HEARTBEAT_PID" 2>/dev/null || true
+  exit 1
+fi
 recover_stale_tasks
-assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live-fresh';")" "live worker with fresh lease preserved"
+assert_eq running "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='live-fresh';")" "live worker and heartbeat with fresh lease preserved"
+kill -TERM "$LIVE_FRESH_HEARTBEAT_PID" 2>/dev/null || true
+wait "$LIVE_FRESH_HEARTBEAT_PID" 2>/dev/null || true
+rm -f "$(manul_task_file_path "$MANUL_DIR" "live-fresh" "heartbeat.pid")"
 
 # 3c.1) ISO-8601 UTC timestamps must be parsed as dates, not compared as strings.
 # The worker is alive, so recovery depends on recognizing its expired lease.
@@ -318,6 +435,35 @@ if ! grep -Fq "datetime(leaseExpiresAt) < datetime('now')" "$SCRIPT_DIR/watchdog
   exit 1
 fi
 echo "PASS: scheduler and watchdog timestamp comparisons are normalized"
+if ! grep -Fq 'source "$DAEMON_SCRIPT_DIR/task-process-control.sh"' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon does not source shared task process control" >&2
+  exit 1
+fi
+if ! grep -Fq 'source "$SCRIPT_DIR/task-process-control.sh"' "$SCRIPT_DIR/watchdog.sh"; then
+  echo "FAIL: watchdog does not source shared task process control" >&2
+  exit 1
+fi
+if ! grep -Fq 'terminate_task_heartbeat_for_claim "$comment_id" "$worker_pid"' "$SCRIPT_DIR/watchdog.sh"; then
+  echo "FAIL: watchdog does not reap the stale task heartbeat" >&2
+  exit 1
+fi
+if ! grep -Fq 'terminate_task_heartbeat_for_claim "$comment_id" "$worker_pid"' "$SCRIPT_DIR/manul-daemon.sh"; then
+  echo "FAIL: daemon recovery does not reap the stale task heartbeat" >&2
+  exit 1
+fi
+if ! grep -Fq 'task_heartbeat_is_alive "$comment_id" "$worker_pid"' "$SCRIPT_DIR/watchdog.sh"; then
+  echo "FAIL: watchdog does not check heartbeat process liveness" >&2
+  exit 1
+fi
+if ! grep -Fq 'AND heartbeatAt=' "$SCRIPT_DIR/watchdog.sh" || ! grep -Fq 'AND leaseExpiresAt=' "$SCRIPT_DIR/watchdog.sh"; then
+  echo "FAIL: watchdog recovery does not compare the selected heartbeat/lease snapshot" >&2
+  exit 1
+fi
+if ! grep -Fq 'task-process-control.sh' "$SCRIPT_DIR/install-manul-symlinks.sh" || ! grep -Fq 'task-process-control.sh' "$SCRIPT_DIR/install-manul.sh"; then
+  echo "FAIL: installer does not deploy and require shared task process control" >&2
+  exit 1
+fi
+echo "PASS: watchdog heartbeat checks, optimistic ownership guard and helper installation are present"
 
 # 3d) Recovery does not report success when its conditional SQLite transition fails.
 sqlite3 "$DB" "

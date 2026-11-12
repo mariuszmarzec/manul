@@ -70,6 +70,7 @@ fi
 # The daemon never invokes adapter scripts directly; it goes through
 # AgentExecutor / AgentExecutionController.
 source "$DAEMON_SCRIPT_DIR/manul-paths.sh"
+source "$DAEMON_SCRIPT_DIR/task-process-control.sh"
 source "$DAEMON_SCRIPT_DIR/workspace-gc.sh"
 source "$DAEMON_SCRIPT_DIR/manul-failure-utils.sh"
 source "$DAEMON_SCRIPT_DIR/process-runner.sh"
@@ -96,6 +97,8 @@ DAEMON_OWNER_LOCK_FILE="$MANUL_LOCKS_DIR/daemon-owner.flock"
 TASK_LOCK_FILE="$MANUL_LOCKS_DIR/task-dispatch.flock"
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="$MANUL_DB"
+
+log() { echo "[$(date -Is)] $*" >>"$LOG"; }
 CFG_INTERVAL="$(jq -r '.pollInterval // empty' "$CONFIG" 2>/dev/null)"
 # Human-mode result comment presentation is configurable but intentionally
 # defaults to concise, teammate-like comments.
@@ -122,6 +125,12 @@ CFG_HEARTBEAT_TIMEOUT="$(jq -r '.automation.heartbeatTimeout // 900' "$CONFIG" 2
 HEARTBEAT_TIMEOUT="${MANUL_HEARTBEAT_TIMEOUT:-${CFG_HEARTBEAT_TIMEOUT:-900}}"
 CFG_LEASE_TIMEOUT="$(jq -r '.automation.leaseTimeout // 900' "$CONFIG" 2>/dev/null)"
 LEASE_TIMEOUT="${MANUL_LEASE_TIMEOUT:-${CFG_LEASE_TIMEOUT:-900}}"
+CFG_HEARTBEAT_MAX_FAILURES="$(jq -r '.automation.heartbeatMaxConsecutiveFailures // 3' "$CONFIG" 2>/dev/null)"
+HEARTBEAT_MAX_CONSECUTIVE_FAILURES="${MANUL_HEARTBEAT_MAX_CONSECUTIVE_FAILURES:-${CFG_HEARTBEAT_MAX_FAILURES:-3}}"
+if ! [[ "$HEARTBEAT_MAX_CONSECUTIVE_FAILURES" =~ ^[0-9]+$ ]] || [ "$HEARTBEAT_MAX_CONSECUTIVE_FAILURES" -lt 1 ] || [ "$HEARTBEAT_MAX_CONSECUTIVE_FAILURES" -gt 20 ]; then
+  log "WARN: invalid heartbeatMaxConsecutiveFailures ($HEARTBEAT_MAX_CONSECUTIVE_FAILURES), defaulting to 3"
+  HEARTBEAT_MAX_CONSECUTIVE_FAILURES=3
+fi
 # Read concurrency configuration from config.json
 CFG_MAX_CONCURRENT="$(jq -r '.automation.maxConcurrentTasks // 1' "$CONFIG" 2>/dev/null || echo 1)"
 MAX_CONCURRENT_TASKS="${MANUL_MAX_CONCURRENT_TASKS:-${CFG_MAX_CONCURRENT:-1}}"
@@ -148,7 +157,6 @@ TASK_HISTORY_RETENTION_DAYS="$TASK_RETENTION_DEFAULT_HISTORY_DAYS"
   # poll timeout dynamically instead of assuming a fixed 120s.
   mapfile -t REPOS < <(jq -r '.repositories[]?' "$CONFIG" 2>/dev/null)
 
-log() { echo "[$(date -Is)] $*" >>"$LOG"; }
 validate_dispatch_interval() {
   if ! [[ "$DISPATCH_INTERVAL" =~ ^[0-9]+$ ]] || [ "$DISPATCH_INTERVAL" -lt 1 ]; then
     log "WARN: invalid MANUL_DISPATCH_INTERVAL ($DISPATCH_INTERVAL); defaulting to 1s"
@@ -757,7 +765,7 @@ recover_stale_tasks() {
 
   local stale_tasks
   stale_tasks="$(sqlite3 "$DB" "
-    SELECT commentId, repository, issueNumber, workerPid, leaseExpiresAt, attempts, claimToken,
+    SELECT commentId, repository, issueNumber, workerPid, heartbeatAt, leaseExpiresAt, attempts, claimToken,
            COALESCE(agentStartedAt,''), COALESCE(preExecutionFailures,0),
            CASE
              WHEN heartbeatAt IS NULL
@@ -775,30 +783,58 @@ recover_stale_tasks() {
   fi
 
   local recovered=0
-  while IFS='|' read -r comment_id repo issue_num worker_pid lease_expires attempts claim_token agent_started_at pre_execution_failures lease_stale; do
+  while IFS='|' read -r comment_id repo issue_num worker_pid heartbeat_at lease_expires attempts claim_token agent_started_at pre_execution_failures lease_stale; do
     [ -n "$comment_id" ] || continue
 
     local worker_alive=0
-    if [ -n "$worker_pid" ] && [ "$worker_pid" -gt 0 ] 2>/dev/null && kill -0 "$worker_pid" 2>/dev/null; then
+    if task_process_is_running "$worker_pid"; then
       worker_alive=1
     fi
 
-    # A dead worker is sufficient proof that the running claim cannot progress,
-    # even when the last heartbeat/lease update was recent.
-    if [ "$lease_stale" = "0" ] && [ "$worker_alive" -eq 1 ]; then
+    local heartbeat_alive=0
+    if task_heartbeat_is_alive "$comment_id" "$worker_pid"; then
+      heartbeat_alive=1
+    fi
+
+    # Preserve a task only while its worker, heartbeat child and DB lease all
+    # agree that the same claim is healthy. A live worker PID alone is not
+    # sufficient: the heartbeat can be dead while the worker loop survives.
+    # Before agentStartedAt is recorded the claim may be between the
+    # SQLite claim and start_heartbeat(); a missing heartbeat PID is expected
+    # during that short pre-execution window.
+    if [ "$lease_stale" = "0" ] && [ "$worker_alive" -eq 1 ] && { [ -z "$agent_started_at" ] || [ "$heartbeat_alive" -eq 1 ]; }; then
       continue
     fi
 
-    log "recover_stale_tasks: recovering task $comment_id (worker=$worker_pid alive=$worker_alive lease=$lease_expires stale=$lease_stale agent_started=${agent_started_at:-no} attempts=$attempts pre_execution_failures=$pre_execution_failures)"
-    terminate_task_executor "$comment_id"
+    log "recover_stale_tasks: recovering task $comment_id (worker=$worker_pid alive=$worker_alive heartbeat_alive=$heartbeat_alive lease=$lease_expires stale=$lease_stale agent_started=${agent_started_at:-no} attempts=$attempts pre_execution_failures=$pre_execution_failures)"
 
-    local safe_comment_id safe_claim_token ownership_clause changed
+    local safe_comment_id safe_claim_token ownership_clause heartbeat_clause lease_clause worker_clause snapshot_clause changed recovery_delay
     safe_comment_id="$(sql_escape "$comment_id")"
     if [ -n "$claim_token" ]; then
       safe_claim_token="$(sql_escape "$claim_token")"
-      ownership_clause="AND claimToken='$safe_claim_token'"
+      ownership_clause="AND claimToken='$(sql_escape "$claim_token")'"
     else
       ownership_clause="AND claimToken IS NULL"
+    fi
+    if [ -n "$heartbeat_at" ]; then
+      heartbeat_clause="AND heartbeatAt='$(sql_escape "$heartbeat_at")'"
+    else
+      heartbeat_clause="AND heartbeatAt IS NULL"
+    fi
+    if [ -n "$lease_expires" ]; then
+      lease_clause="AND leaseExpiresAt='$(sql_escape "$lease_expires")'"
+    else
+      lease_clause="AND leaseExpiresAt IS NULL"
+    fi
+    if [[ "$worker_pid" =~ ^[0-9]+$ ]]; then
+      worker_clause="AND workerPid=$worker_pid"
+    else
+      worker_clause="AND workerPid IS NULL"
+    fi
+    snapshot_clause="$ownership_clause $heartbeat_clause $lease_clause $worker_clause"
+    recovery_delay="$RETRY_DELAY_SECONDS"
+    if ! [[ "$recovery_delay" =~ ^[0-9]+$ ]] || [ "$recovery_delay" -lt 15 ]; then
+      recovery_delay=15
     fi
 
     # The claim attempt is incremented before workspace preparation. If the
@@ -819,11 +855,13 @@ recover_stale_tasks() {
             agentStartedAt=NULL,
             processedAt=CASE WHEN '$target_status'='failed' THEN datetime('now') ELSE NULL END,
             heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL,
-            nextAttemptAt=CASE WHEN '$target_status'='queued' THEN datetime('now','+${RETRY_DELAY_SECONDS} seconds') ELSE NULL END
-        WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;
+            nextAttemptAt=CASE WHEN '$target_status'='queued' THEN datetime('now','+${recovery_delay} seconds') ELSE NULL END
+        WHERE commentId='$safe_comment_id' AND status='running' $snapshot_clause;
         SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
 
       if [ "$changed" = "1" ]; then
+        terminate_task_heartbeat_for_claim "$comment_id" "$worker_pid" || true
+        terminate_task_executor "$comment_id"
         recovered=$((recovered + 1))
         if [ "$target_status" = "failed" ]; then
           log "recover_stale_tasks: task $comment_id exhausted pre-execution failures $next_pre_execution_failures/$max_pre_execution_failures; no agent attempt was started"
@@ -847,8 +885,10 @@ recover_stale_tasks() {
     max_attempts="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     if [ "${attempts:-0}" -ge "$max_attempts" ]; then
       log "recover_stale_tasks: marking stale agent execution as failed: $comment_id"
-      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
+      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, workerPid=NULL, leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='running' $snapshot_clause; SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
       if [ "${changed:-0}" -eq 1 ]; then
+        terminate_task_heartbeat_for_claim "$comment_id" "$worker_pid" || true
+        terminate_task_executor "$comment_id"
         recovered=$((recovered + 1))
         lc_log "TASK_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=stale_lease_max_attempts"
         post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "Task exhausted $attempts/$max_attempts agent execution attempts; stale heartbeat/lease recovery stopped the worker (lease=${lease_expires:-missing})." "" "stale_task_recovery" || true
@@ -861,11 +901,13 @@ recover_stale_tasks() {
         UPDATE processed_comments
         SET status='queued', processedAt=NULL, heartbeatAt=NULL, workerPid=NULL,
             leaseExpiresAt=NULL, claimToken=NULL, agentStartedAt=NULL,
-            nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')
-        WHERE commentId='$safe_comment_id' AND status='running' $ownership_clause;
+            nextAttemptAt=datetime('now', '+${recovery_delay} seconds')
+        WHERE commentId='$safe_comment_id' AND status='running' $snapshot_clause;
         SELECT changes();
       " 2>>"$LOG" | tail -n 1)" || changed="0"
       if [ "${changed:-0}" -eq 1 ]; then
+        terminate_task_heartbeat_for_claim "$comment_id" "$worker_pid" || true
+        terminate_task_executor "$comment_id"
         log "recover_stale_tasks: requeued task $comment_id after lost agent execution (agent attempts preserved=$attempts)"
         lc_log "TASK_REQUEUED" "task=$comment_id repo=$repo issue=$issue_num attempts=$attempts reason=stale_lease"
         recovered=$((recovered + 1))
@@ -981,23 +1023,55 @@ start_heartbeat() {
     ownership_sql="AND claimToken IS NULL"
   fi
   (
+    local consecutive_failures=0
+    local safe_comment_id
+    safe_comment_id="$(sql_escape "$comment_id")"
+
     while true; do
       # Heartbeat belongs to this worker process and this exact claim.
       if ! kill -0 "$worker_pid" 2>/dev/null; then
+        log "heartbeat stopped for task $comment_id: worker $worker_pid is no longer alive"
+        lc_log "HEARTBEAT_STOP" "task=$comment_id reason=worker_exited worker=$worker_pid"
         exit 0
       fi
-      local changed
-      changed="$(sqlite3 "$DB" "UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$(sql_escape "$comment_id")' AND status='running' AND workerPid=$worker_pid $ownership_sql; SELECT changes();" 2>/dev/null | tail -n 1)"
-      if [ "${changed:-0}" -ne 1 ]; then
-        # A transient SQLite lock/error must not permanently kill the heartbeat.
-        # Exit only when ownership was actually lost or the task became terminal.
-        local db_state
-        db_state="$(sqlite3 "$DB" "SELECT status || '|' || COALESCE(workerPid,0) || '|' || COALESCE(claimToken,'') FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
-        if [ -n "$db_state" ] && [ "$db_state" != "running|${worker_pid}|${claim_token}" ]; then
-          exit 0
-        fi
+
+      local update_output changed update_rc
+      if update_output="$(sqlite3 -bail "$DB" "PRAGMA busy_timeout=5000; UPDATE processed_comments SET heartbeatAt=datetime('now'), leaseExpiresAt=datetime('now', '+${LEASE_TIMEOUT} seconds') WHERE commentId='$safe_comment_id' AND status='running' AND workerPid=$worker_pid $ownership_sql; SELECT changes();" 2>>"$LOG")"; then
+        update_rc=0
+        changed="$(printf '%s\n' "$update_output" | tail -n 1)"
+      else
+        update_rc=$?
+        changed="error"
+      fi
+
+      if [ "$update_rc" -eq 0 ] && [ "$changed" = "1" ]; then
+        consecutive_failures=0
         sleep "$HEARTBEAT_INTERVAL"
         continue
+      fi
+
+      # A missing row, terminal state or changed claim means this heartbeat
+      # no longer owns the task. A matching row with a failed/no-op UPDATE is
+      # an infrastructure failure and must not loop forever silently.
+      local db_state db_state_rc
+      if db_state="$(sqlite3 -bail "$DB" "PRAGMA busy_timeout=5000; SELECT status || '|' || COALESCE(workerPid,0) || '|' || COALESCE(claimToken,'') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>>"$LOG")"; then
+        db_state_rc=0
+      else
+        db_state_rc=$?
+      fi
+      if [ "$db_state_rc" -eq 0 ] && { [ -z "$db_state" ] || [ "$db_state" != "running|${worker_pid}|${claim_token}" ]; }; then
+        log "heartbeat stopped for task $comment_id: claim ownership changed (state=${db_state:-missing})"
+        lc_log "HEARTBEAT_STOP" "task=$comment_id reason=ownership_lost state=${db_state:-missing}"
+        exit 0
+      fi
+
+      consecutive_failures=$((consecutive_failures + 1))
+      log "WARN: heartbeat update failed for task $comment_id (consecutive=$consecutive_failures/$HEARTBEAT_MAX_CONSECUTIVE_FAILURES sqlite_rc=$update_rc changed=${changed:-missing} state_rc=$db_state_rc)"
+      lc_log "HEARTBEAT_RETRY" "task=$comment_id consecutive=$consecutive_failures max=$HEARTBEAT_MAX_CONSECUTIVE_FAILURES sqlite_rc=$update_rc changed=${changed:-missing} state_rc=$db_state_rc"
+      if [ "$consecutive_failures" -ge "$HEARTBEAT_MAX_CONSECUTIVE_FAILURES" ]; then
+        log "ERROR: heartbeat marked unhealthy for task $comment_id after $consecutive_failures consecutive database update failures"
+        lc_log "HEARTBEAT_UNHEALTHY" "task=$comment_id worker=$worker_pid failures=$consecutive_failures max=$HEARTBEAT_MAX_CONSECUTIVE_FAILURES"
+        exit 1
       fi
       sleep "$HEARTBEAT_INTERVAL"
     done
@@ -1010,137 +1084,6 @@ start_heartbeat() {
   log "started heartbeat for task $comment_id (pid $heartbeat_pid)"
   lc_log "HEARTBEAT_START" "task=$comment_id pid=$heartbeat_pid interval=${HEARTBEAT_INTERVAL}s claim=${claim_token}"
 }
-task_process_is_running() {
-  local pid="$1"
-  local process_state
-  process_state="$(ps -o stat= -p "$pid" 2>/dev/null | awk 'NR == 1 { print $1 }')"
-  [ -n "$process_state" ] && [[ "$process_state" != Z* ]]
-}
-
-# Print every live descendant of a PID from one process-table snapshot. This
-# includes tools such as GNU timeout that put their own children into a
-# different process group, which a group-only signal cannot terminate.
-task_descendant_pids() {
-  local root_pid="$1"
-  ps -axo pid=,ppid= | awk -v root="$root_pid" '
-    {
-      pids[NR] = $1
-      parents[$1] = $2
-      total = NR
-    }
-    END {
-      descendants[root] = 1
-      do {
-        changed = 0
-        for (i = 1; i <= total; i++) {
-          pid = pids[i]
-          if (pid != root && descendants[parents[pid]] && !descendants[pid]) {
-            descendants[pid] = 1
-            changed = 1
-          }
-        }
-      } while (changed)
-      for (i = 1; i <= total; i++) {
-        if (pids[i] != root && descendants[pids[i]]) print pids[i]
-      }
-    }'
-}
-
-# Find a task runner by its explicit context/PID-file arguments when a prior
-# stop removed the PID marker before the isolated process had actually exited.
-find_task_executor_pid() {
-  local comment_id="$1"
-  local expected_context="$(manul_task_file_path "$MANUL_STATE_DIR/tasks" "$comment_id" "ctx.json")"
-  local expected_pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "executor.pid")"
-  local pid cmdline
-
-  while read -r pid cmdline; do
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    [[ "$cmdline" == *agent-task-runner.sh*"$expected_context"*"$expected_pid_file"* ]] || continue
-    printf '%s\n' "$pid"
-    return 0
-  done < <(ps -ww -axo pid=,command= 2>/dev/null)
-  return 1
-}
-
-terminate_task_executor() {
-  local comment_id="$1"
-  local pid_file="$(manul_task_file_path "$MANUL_DIR" "$comment_id" "executor.pid")"
-  local executor_pid="" executor_args="" executor_pgid=""
-  local descendants=() process_pid wait_attempt alive forced=0
-
-  if [ -f "$pid_file" ]; then
-    executor_pid="$(cat "$pid_file" 2>/dev/null || true)"
-  fi
-
-  # Older stop paths removed PID files even though setsid-created executors
-  # survived. Recover the root PID from its task-specific command line.
-  if ! [[ "$executor_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$executor_pid" 2>/dev/null; then
-    executor_pid="$(find_task_executor_pid "$comment_id" 2>/dev/null || true)"
-  fi
-
-  if [[ "$executor_pid" =~ ^[0-9]+$ ]] && [ "$executor_pid" -gt 0 ] && kill -0 "$executor_pid" 2>/dev/null; then
-    executor_args="$(ps -o args= -p "$executor_pid" 2>/dev/null || true)"
-    # A PID file can outlive its process and the OS can reuse the numeric PID.
-    # Never signal a process unless it still identifies the expected task runner.
-    if [[ "$executor_args" != *agent-task-runner.sh* || "$executor_args" != *"$pid_file"* ]]; then
-      local discovered_pid
-      discovered_pid="$(find_task_executor_pid "$comment_id" 2>/dev/null || true)"
-      if [[ "$discovered_pid" =~ ^[0-9]+$ ]] && [ "$discovered_pid" -gt 0 ] && kill -0 "$discovered_pid" 2>/dev/null; then
-        executor_pid="$discovered_pid"
-        executor_args="$(ps -o args= -p "$executor_pid" 2>/dev/null || true)"
-      fi
-    fi
-
-    if [[ "$executor_args" == *agent-task-runner.sh* && "$executor_args" == *"$pid_file"* ]]; then
-      executor_pgid="$(ps -o pgid= -p "$executor_pid" 2>/dev/null | tr -d '[:space:]')"
-      mapfile -t descendants < <(task_descendant_pids "$executor_pid")
-      log "terminating task executor tree for $comment_id (pid=$executor_pid descendants=${#descendants[@]})"
-
-      # Signal descendants before their parents so a child that created a new
-      # session (e.g. timeout -> opencode) cannot survive when its parent exits.
-      for ((wait_attempt=${#descendants[@]} - 1; wait_attempt >= 0; wait_attempt--)); do
-        kill -TERM "${descendants[$wait_attempt]}" 2>/dev/null || true
-      done
-      if [[ "$executor_pgid" =~ ^[0-9]+$ ]] && [ "$executor_pgid" -eq "$executor_pid" ]; then
-        kill -TERM -- "-$executor_pgid" 2>/dev/null || true
-      fi
-      kill -TERM "$executor_pid" 2>/dev/null || true
-
-      alive=1
-      for ((wait_attempt=0; wait_attempt<30; wait_attempt++)); do
-        alive=0
-        for process_pid in "${descendants[@]}" "$executor_pid"; do
-          if task_process_is_running "$process_pid"; then
-            alive=1
-            break
-          fi
-        done
-        [ "$alive" -eq 0 ] && break
-        sleep 0.1
-      done
-
-      if [ "$alive" -eq 1 ]; then
-        forced=1
-        log "WARN: task executor tree for $comment_id did not stop after TERM; sending KILL"
-        for ((wait_attempt=${#descendants[@]} - 1; wait_attempt >= 0; wait_attempt--)); do
-          process_pid="${descendants[$wait_attempt]}"
-          task_process_is_running "$process_pid" && kill -KILL "$process_pid" 2>/dev/null || true
-        done
-        if [[ "$executor_pgid" =~ ^[0-9]+$ ]] && [ "$executor_pgid" -eq "$executor_pid" ]; then
-          kill -KILL -- "-$executor_pgid" 2>/dev/null || true
-        fi
-        kill -KILL "$executor_pid" 2>/dev/null || true
-      fi
-      lc_log "EXECUTOR_KILLED" "task=$comment_id pid=$executor_pid descendants=${#descendants[@]} forced=$forced"
-    else
-      log "WARN: refusing to terminate PID $executor_pid for task $comment_id because it no longer matches the task runner"
-    fi
-  fi
-
-  rm -f "$pid_file" 2>/dev/null || true
-}
-
 # Resolve a flattened artifact filename back to the canonical task ID through
 # SQLite. Never infer the DB identity from a filename because "/" is mapped to
 # "_" for CI task IDs.

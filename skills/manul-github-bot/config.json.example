@@ -103,6 +103,7 @@
     "agentTimeoutSeconds": 43500,
     "opencodeMaxStepLimitContinuations": 3,
     "heartbeatTimeout": 900,
+    "heartbeatMaxConsecutiveFailures": 3,
     "leaseTimeout": 900,
     "maxAttemptsBeforeFail": 3,
     "maxPreExecutionFailures": 8,

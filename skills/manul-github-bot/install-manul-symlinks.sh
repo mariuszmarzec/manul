@@ -110,6 +110,7 @@ SCRIPTS=(
     "manul-failure-utils.sh"
     "manul-env.sh"
     "manul-platform.sh"
+    "task-process-control.sh"
     "openclaw-adapter.sh"
     "opencode-adapter.sh"
     "codex-adapter.sh"
