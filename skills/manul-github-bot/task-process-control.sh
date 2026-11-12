@@ -24,19 +24,26 @@ task_descendant_pids() {
       total = NR
     }
     END {
-      descendants[root] = 1
+      depth[root] = 0
       do {
         changed = 0
         for (i = 1; i <= total; i++) {
           pid = pids[i]
-          if (pid != root && descendants[parents[pid]] && !descendants[pid]) {
-            descendants[pid] = 1
+          parent = parents[pid]
+          if (pid != root && (parent in depth) && !(pid in depth)) {
+            depth[pid] = depth[parent] + 1
+            if (depth[pid] > max_depth) max_depth = depth[pid]
             changed = 1
           }
         }
       } while (changed)
-      for (i = 1; i <= total; i++) {
-        if (pids[i] != root && descendants[pids[i]]) print pids[i]
+
+      # Emit from root toward leaves. Callers signal in reverse order so the
+      # deepest descendants are stopped before their parents.
+      for (level = 1; level <= max_depth; level++) {
+        for (i = 1; i <= total; i++) {
+          if (depth[pids[i]] == level) print pids[i]
+        }
       }
     }'
 }
