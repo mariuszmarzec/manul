@@ -833,7 +833,8 @@ assert_eq "local report source is current before execution" "0" "$(todo_task_sti
 : > "$TODO_MCP_CALL_LOG"
 export TODO_MCP_FAIL_MARK=1
 local_report_rc=0
-local_report_answer=
+local_report_answer=$'Local report answer with exact content.\nSecond line must remain byte-for-byte unchanged.'
+todo_task_report_deliver "$LOCAL_REPORT_SOURCE" todo_local_mcp "$local_report_id" "$local_report_answer" >/dev/null || local_report_rc=$?
 assert_rc "failed completion mutation leaves the report task retryable" "2" "$local_report_rc"
 partial_local_root_status=$(jq -r .[0].isToDo "$TODO_MCP_FIXTURE")
 assert_eq "partial local write leaves root task active" "true" "$partial_local_root_status"
