@@ -152,7 +152,7 @@ parse_command() {
     run)
       action="IMPLEMENT"
       local run_args
-      run_args="$(echo "$cmd" | sed 's/^[^[:space:]]*[[:space:]]*//')"
+      run_args="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
       if [[ "$run_args" == --agent* ]]; then
         if [[ "$run_args" =~ ^--agent[[:space:]]+([^[:space:]]+)([[:space:]]+(.*))?$ ]]; then
           agent="${BASH_REMATCH[1]}"
@@ -169,17 +169,17 @@ parse_command() {
       ;;
     review-fix)
       action="REVIEW_FIX"
-      prompt="$(echo "$cmd" | sed 's/^[^[:space:]]*[[:space:]]*//')"
+      prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
       ;;
     continue)
       action="CONTINUE"
-      prompt="$(echo "$cmd" | sed 's/^[^[:space:]]*[[:space:]]*//')"
+      prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
       ;;
     verify|investigate)
       # "investigate" is an explicit report-only alias for the existing VERIFY
       # action; keep the downstream comment-only delivery contract unchanged.
       action="VERIFY"
-      prompt="$(echo "$cmd" | sed 's/^[^[:space:]]*[[:space:]]*//')"
+      prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
       ;;
     status)
       action="STATUS"
@@ -193,7 +193,7 @@ parse_command() {
       # Try to use first token as a configured role agent.
       if echo "$known_agents" | grep -qw "$first_token"; then
         agent="$first_token"
-        prompt="$(echo "$cmd" | sed 's/^[^[:space:]]*[[:space:]]*//')"
+        prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
         action="IMPLEMENT"
       else
         # Default to IMPLEMENT with full prompt
