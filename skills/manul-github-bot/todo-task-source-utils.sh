@@ -258,7 +258,7 @@ todo_task_strip_verified_report_result() {
   root_id="$(jq -r '.id // empty' <<<"$task_json")"
   [[ "$root_id" =~ ^[0-9]+$ ]] || { printf '%s\n' "$task_json"; return 0; }
   parsed="$(python3 -c '
-import json, re, sys
+import base64, hashlib, json, re, sys
 root_id = int(sys.argv[1])
 root = json.load(sys.stdin)
 candidates = []
@@ -268,14 +268,21 @@ for index, child in enumerate(subtasks):
     if not isinstance(description, str) or not description.startswith("<!-- MANUL_REPORT_RESULT:v1;"):
         continue
     marker, separator, payload = description.partition("\n")
-    match = re.fullmatch(r"<!-- MANUL_REPORT_RESULT:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});sha256=([0-9a-f]{64}) -->", marker)
+    match = re.fullmatch(r"<!-- MANUL_REPORT_RESULT:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});sha256=([0-9a-f]{64})(?:;answerSha256=([0-9a-f]{64});answerBase64=([A-Za-z0-9+/]*={0,2}))? -->", marker)
     if not separator or not match or int(match.group(1)) != root_id:
         continue
     if child.get("parentTaskId") != root_id or child.get("subTasks"):
         continue
-    import hashlib
     if hashlib.sha256(payload.encode("utf-8")).hexdigest() != match.group(3):
         continue
+    if match.group(4) is not None:
+        try:
+            raw_answer = base64.b64decode(match.group(5), validate=True)
+            raw_answer.decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if hashlib.sha256(raw_answer).hexdigest() != match.group(4):
+            continue
     candidate = dict(root)
     candidate["subTasks"] = [item for position, item in enumerate(subtasks) if position != index]
     candidates.append({"task": candidate, "sourceId": match.group(2)})
@@ -605,13 +612,43 @@ sys.stdout.write("\n".join(result))
 '
 }
 
+
+# Read the original answer from a verified report marker. New records carry a
+# separately checksummed base64 payload; legacy records fall back to Markdown.
+todo_task_report_receipt_answer() {
+  printf '%s' "$1" | python3 -c '
+import base64, hashlib, re, sys
+
+description = sys.stdin.read()
+marker, separator, payload = description.partition("\n")
+match = re.fullmatch(
+    r"<!-- MANUL_REPORT_RESULT:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});"
+    r"sha256=([0-9a-f]{64})(?:;answerSha256=([0-9a-f]{64});"
+    r"answerBase64=([A-Za-z0-9+/]*={0,2}))? -->",
+    marker,
+)
+if not separator or not match:
+    raise SystemExit("Todo report result marker is invalid")
+if hashlib.sha256(payload.encode("utf-8")).hexdigest() != match.group(3):
+    raise SystemExit("Todo report Markdown payload digest does not match")
+if match.group(4) is None:
+    sys.stdout.write(payload)
+else:
+    raw_answer = base64.b64decode(match.group(5), validate=True)
+    if hashlib.sha256(raw_answer).hexdigest() != match.group(4):
+        raise SystemExit("Todo report original answer digest does not match")
+    raw_answer.decode("utf-8")
+    sys.stdout.buffer.write(raw_answer)
+'
+}
+
 # Persist an informational answer as a child task. The marker binds the record
 # to the exact source version and payload digest; retries reuse it instead of
 # creating duplicate answers, including after a lost MCP response.
 todo_task_report_deliver() {
   local source_json="$1" source_type="$2" source_id="$3" generated_answer="$4"
   local task_id expected_version tasks_json root_json marker_prefix result_json result_count
-  local result_id result_description result_todo arguments answer digest receipt actual_version formatted_answer
+  local result_id result_description result_todo arguments answer digest receipt actual_version formatted_answer answer_digest answer_base64 answer_with_sentinel
   local manul_user_id=""
   task_id="$(todo_task_id_from_source_id "$source_id")"
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
@@ -654,7 +691,9 @@ todo_task_report_deliver() {
     result_description="$(jq -r '.description // empty' <<<"$result_json")"
   else
     digest="$(printf '%s' "$formatted_answer" | sha256sum | awk '{print $1}')"
-    result_description="${marker_prefix}sha256=${digest} -->"$'\n'"$formatted_answer"
+    answer_digest="$(printf '%s' "$generated_answer" | sha256sum | awk '{print $1}')"
+    answer_base64="$(printf '%s' "$generated_answer" | python3 -c 'import base64, sys; sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))')" || return 1
+    result_description="${marker_prefix}sha256=${digest};answerSha256=${answer_digest};answerBase64=${answer_base64} -->"$'\n'"$formatted_answer"
     case "$source_type" in
       todo_local_mcp)
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
@@ -719,7 +758,10 @@ todo_task_report_deliver() {
     return 1
   }
 
-  answer="${result_description#*$'\n'}"
+  answer_with_sentinel="$(todo_task_report_receipt_answer "$result_description" && printf '\001')" || return 1
+  answer="${answer_with_sentinel%"
+  digest="$(printf '%s' "$answer" | sha256sum | awk '{print $1}')"
+\001'}"
   digest="$(printf '%s' "$answer" | sha256sum | awk '{print $1}')"
   receipt="$(jq -cn \
     --arg sourceId "$source_id" \
