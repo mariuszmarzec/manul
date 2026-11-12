@@ -1096,7 +1096,7 @@ test_verify_command_is_parsed() {
 test_investigate_command_is_parsed() {
   local now output valid action prompt
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "318" --body '/manul investigate inspect the retry logic and report only' --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  output="$(events parse-comment --repo "test/repo" --issue "100" --comment-id "318" --body '/manul Investigate inspect the retry logic and report only' --author "user" --created "$now" --json 2>/dev/null)" || return 1
   valid="$(echo "$output" | jq -r '.command.valid')"
   action="$(echo "$output" | jq -r '.command.action')"
   prompt="$(echo "$output" | jq -r '.command.prompt')"
