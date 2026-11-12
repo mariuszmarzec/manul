@@ -833,8 +833,8 @@ recover_stale_tasks() {
     fi
     snapshot_clause="$ownership_clause $heartbeat_clause $lease_clause $worker_clause"
     recovery_delay="$RETRY_DELAY_SECONDS"
-    if ! [[ "$recovery_delay" =~ ^[0-9]+$ ]] || [ "$recovery_delay" -lt 5 ]; then
-      recovery_delay=5
+    if ! [[ "$recovery_delay" =~ ^[0-9]+$ ]] || [ "$recovery_delay" -lt 15 ]; then
+      recovery_delay=15
     fi
 
     # The claim attempt is incremented before workspace preparation. If the
