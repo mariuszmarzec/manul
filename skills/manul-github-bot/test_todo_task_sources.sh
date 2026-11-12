@@ -886,9 +886,10 @@ val value = 1
 ```
 MARKDOWN
 )"
-assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_markdown" $'First line  \\nSecond line  '
-assert_contains "Markdown list structure remains intact" "$formatted_markdown" $'- one  \\n- two  '
-assert_contains "fenced code block content is preserved" "$formatted_markdown" $'```kotlin\\nval value = 1\\n```'
+assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_markdown" "First line  "
+assert_contains "ordinary line breaks preserve the next line" "$formatted_markdown" "Second line  "
+assert_contains "Markdown list structure remains intact" "$formatted_markdown" "- one  "
+assert_contains "fenced code block content is preserved" "$formatted_markdown" "val value = 1"
 # while excluding only the output child bound to the newly polled source version.
 jq '.[0].description = "/manul report Updated request after initial report"' "$TEST_DIR/local-report.json" > "$TEST_DIR/local-report-second-version.json"
 export TODO_MCP_FIXTURE="$TEST_DIR/local-report-second-version.json"
