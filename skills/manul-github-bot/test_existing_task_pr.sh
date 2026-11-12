@@ -239,6 +239,89 @@ else
   exit 1
 fi
 
+# Case 6: retry recovery can identify a legacy attempt-specific branch even
+# when the PR description does not mention the task id.
+TASK_BRANCH_2="feature/17-manul-issue-6127115709-attempt-2"
+TASK_BRANCH_3="feature/17-manul-issue-6127115709-attempt-3"
+git -C "$WORKDIR" push -q origin "$PR_HEAD_SHA:refs/heads/$TASK_BRANCH_2"
+git -C "$WORKDIR" push -q origin "$PR_HEAD_SHA:refs/heads/$TASK_BRANCH_3"
+write_attempt_pr_fixture() {
+  local branch="$1" state="${2:-OPEN}" number="${3:-20}"
+  jq -cn --argjson number "$number" --arg url "https://github.com/test/repo/pull/$number" \
+    --arg state "$state" --arg branch "$branch" --arg sha "$PR_HEAD_SHA" \
+    '[{number:$number,url:$url,state:$state,baseRefName:"main",headRefName:$branch,body:"Markdown renderer delivery",headRefOid:$sha}]' \
+    >"$FAKE_GH_PR_LIST"
+}
+write_attempt_pr_fixture "$TASK_BRANCH_2"
+VERIFIED_EXISTING_PR_BRANCH=""
+VERIFIED_EXISTING_PR_URL=""
+if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false"; then
+  [ "$VERIFIED_EXISTING_PR_BRANCH" = "$TASK_BRANCH_2" ]
+  [ "$VERIFIED_EXISTING_PR_URL" = "https://github.com/test/repo/pull/20" ]
+  echo "PASS: finds and verifies an earlier-attempt PR by its exact task branch token"
+else
+  echo "FAIL: expected an attempt-specific open PR branch to qualify for retry recovery" >&2
+  exit 1
+fi
+
+# Closed task PRs are historical evidence, not a retry target.
+write_attempt_pr_fixture "$TASK_BRANCH_2" "CLOSED" 21
+if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false"; then
+  echo "FAIL: resumed a closed PR from an earlier attempt" >&2
+  exit 1
+else
+  echo "PASS: closed PRs are not selected for retry recovery"
+fi
+
+# More than one matching open PR is ambiguous; the caller must stop instead
+# of choosing one or creating another PR.
+jq -cn --arg url1 "https://github.com/test/repo/pull/22" \
+  --arg url2 "https://github.com/test/repo/pull/23" \
+  --arg branch1 "$TASK_BRANCH_2" --arg branch2 "$TASK_BRANCH_3" --arg sha "$PR_HEAD_SHA" \
+  '[
+    {number:22,url:$url1,state:"OPEN",baseRefName:"main",headRefName:$branch1,body:"old result",headRefOid:$sha},
+    {number:23,url:$url2,state:"OPEN",baseRefName:"main",headRefName:$branch2,body:"new result",headRefOid:$sha}
+  ]' >"$FAKE_GH_PR_LIST"
+ambiguous_rc=0
+verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" || ambiguous_rc=$?
+if [ "$ambiguous_rc" -eq 2 ]; then
+  echo "PASS: multiple open PRs for one task are rejected as ambiguous"
+else
+  echo "FAIL: expected ambiguous PR recovery to return 2, got $ambiguous_rc" >&2
+  exit 1
+fi
+
+# Case 9: a stable task metadata marker is accepted even if the branch name
+# does not contain the legacy task token.
+MARKED_BRANCH="feature/17-markdown-task"
+git -C "$WORKDIR" push -q origin "$PR_HEAD_SHA:refs/heads/$MARKED_BRANCH"
+jq -cn --arg url "https://github.com/test/repo/pull/24" \
+  --arg branch "$MARKED_BRANCH" --arg sha "$PR_HEAD_SHA" --arg marker "<!-- manul-task:$CURRENT_TASK -->" \
+  '[{number:24,url:$url,state:"OPEN",baseRefName:"main",headRefName:$branch,body:$marker,headRefOid:$sha}]' >"$FAKE_GH_PR_LIST"
+if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false"; then
+  [ "$VERIFIED_EXISTING_PR_BRANCH" = "$MARKED_BRANCH" ]
+  echo "PASS: stable PR task metadata marker correlates a task independently of branch naming"
+else
+  echo "FAIL: expected stable task metadata marker to correlate the PR" >&2
+  exit 1
+fi
+
+# Pre-dispatch recovery must not reuse an open PR belonging to a different,
+# already-completed task on the same issue.
+UNRELATED_BRANCH="feature/17-unrelated-completed-task"
+git -C "$WORKDIR" push -q origin "$PR_HEAD_SHA:refs/heads/$UNRELATED_BRANCH"
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,action,prUrl) VALUES ('$PREVIOUS_TASK','test/repo',17,'https://github.com/test/repo/issues/17','completed','IMPLEMENT','https://github.com/test/repo/pull/25');"
+write_attempt_pr_fixture "$UNRELATED_BRANCH" "OPEN" 25
+unrelated_rc=0
+verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" || unrelated_rc=$?
+if [ "$unrelated_rc" -eq 1 ]; then
+  echo "PASS: pre-dispatch retry does not adopt a different completed task's PR"
+else
+  echo "FAIL: pre-dispatch retry adopted unrelated prior task PR (rc=$unrelated_rc)" >&2
+  exit 1
+fi
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='$PREVIOUS_TASK';"
+
 # Case 6: a prior attempt's result comment can independently prove that work
 # was delivered by a merged PR, even if the feature branch was deleted.
 MERGED_MARKER="<!-- manul-task:${CURRENT_TASK}:attempt:3 -->"

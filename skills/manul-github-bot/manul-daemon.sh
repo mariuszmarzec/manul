@@ -2828,7 +2828,7 @@ pr_auto_create() {
   title="${title:0:120}"
   [ -n "$title" ] || title="$branch"
 
-  body="Automatically created by Manul for task $comment_id."
+  body="<!-- manul-task:$comment_id -->"$'\n\n'"Automatically created by Manul for task $comment_id."
 
   local pr_create_output
   pr_create_output="$(timeout "$GH_API_TIMEOUT" gh pr create --repo "$repo" --base "$base_branch" --head "$branch" --title "$title" --body "$body" 2>>"$LOG")"
@@ -2874,12 +2874,15 @@ pr_auto_create() {
 # completed task for the same repository/issue whose persisted verified PR URL
 # matches this candidate. This supports retries that reach an existing deliverable
 # through a different trigger comment without weakening the normal branch guard.
+# Outputs are intentionally global so both pre-dispatch recovery and the
+# completion evaluator use the same independently verified PR identity.
 VERIFIED_EXISTING_PR_BRANCH=""
 VERIFIED_EXISTING_PR_URL=""
 verify_existing_task_pr() {
   local repo="$1" comment_id="$2" workdir="$3" initial_base_branch="$4"
+  local allow_prior_urls="${5:-true}"
   local safe_comment_id comment_url issue_num safe_repo prior_urls prior_urls_json
-  local pr_json verified verified_head_sha remote_head
+  local pr_json candidates candidate_count verified verified_head_sha remote_head safe_task_token
 
   VERIFIED_EXISTING_PR_BRANCH=""
   VERIFIED_EXISTING_PR_URL=""
@@ -2887,49 +2890,87 @@ verify_existing_task_pr() {
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   issue_num="$(printf '%s' "$comment_url" | grep -oE '/(issues|pull)/[0-9]+' | grep -oE '[0-9]+' | head -n 1)"
   prior_urls_json='[]'
-  if [[ "$issue_num" =~ ^[0-9]+$ ]]; then
+  if [ "$allow_prior_urls" != "false" ] && [[ "$issue_num" =~ ^[0-9]+$ ]]; then
     safe_repo="$(sql_escape "$repo")"
     prior_urls="$(sqlite3 "$DB" "SELECT prUrl FROM processed_comments WHERE repository='$safe_repo' AND status='completed' AND commentId!='$safe_comment_id' AND COALESCE(prUrl,'')!='' AND (issueNumber=$issue_num OR commentUrl LIKE '%/issues/$issue_num#%' OR commentUrl LIKE '%/pull/$issue_num#%' OR commentUrl LIKE '%/issues/$issue_num' OR commentUrl LIKE '%/pull/$issue_num');" 2>/dev/null || true)"
     prior_urls_json="$(printf '%s\n' "$prior_urls" | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null || echo '[]')"
   fi
 
+  # The task token in an attempt-specific branch is a compatibility fallback
+  # for PRs created before the stable task marker was added to PR descriptions.
+  safe_task_token="$(printf '%s' "$comment_id" | tr -cs '[:alnum:]-' '-' | sed -E 's/^-+//; s/-+$//')"
+
   pr_json="$(timeout "$GH_API_TIMEOUT" gh pr list --repo "$repo" --state all --json number,url,state,baseRefName,headRefName,body,headRefOid --limit 100 2>>"$LOG")" || {
     log "ERROR: verify_existing_task_pr: GitHub PR query failed for $repo task=$comment_id"
     lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=api_failure"
-    return 1
+    return 2
   }
+  if ! jq -e 'type == "array"' <<<"$pr_json" >/dev/null 2>&1; then
+    log "ERROR: verify_existing_task_pr: invalid GitHub PR response for $repo task=$comment_id"
+    lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=invalid_response"
+    return 2
+  fi
 
-  # A candidate must identify the current task explicitly, or match the PR URL
-  # persisted by an earlier completed task for this exact repository/issue.
-  verified="$(printf '%s' "$pr_json" | jq -c --arg task "$comment_id" --arg base "$initial_base_branch" --argjson priorUrls "$prior_urls_json" '
-    if type != "array" then empty else
-      map(select(.baseRefName == $base)
-          | select(.headRefName != $base)
-          | select((.headRefOid // "") != "")
-          | select((.url // "") != "")
-          | (.url) as $candidateUrl
-          | select(((.body // "") | contains("task " + $task)) or (($priorUrls | index($candidateUrl)) != null)))
-      | .[0] // empty
-    end' 2>/dev/null)"
-  [ -n "$verified" ] || {
-    log "verify_existing_task_pr: no PR correlated to task=$comment_id issue=${issue_num:-unknown} base=$initial_base_branch"
+  # Only OPEN PRs can be resumed. Correlation is exact task metadata, a legacy
+  # task id in the auto-created PR body, the task id in a historical attempt
+  # branch, or a previously verified PR URL from a completed task on this issue.
+  candidates="$(printf '%s' "$pr_json" | jq -c \
+    --arg task "$comment_id" \
+    --arg taskToken "$safe_task_token" \
+    --argjson priorUrls "$prior_urls_json" '
+      [
+        .[]
+        | select((.state // "" | ascii_upcase) == "OPEN")
+        | (.url // "") as $candidateUrl
+        | select($candidateUrl != "")
+        | select(
+            (((.body // "") | contains("<!-- manul-task:" + $task + " -->"))
+              or ((.body // "") | contains("task " + $task)))
+            or ((.headRefName // "") | test("(^|-)"+$taskToken+"-attempt-[0-9]+$"))
+            or (($priorUrls | index($candidateUrl)) != null)
+          )
+      ]' 2>/dev/null)" || {
+        log "ERROR: verify_existing_task_pr: could not correlate PR candidates for task=$comment_id"
+        return 2
+      }
+  candidate_count="$(jq -r 'length' <<<"$candidates" 2>/dev/null || echo 0)"
+  if [ "$candidate_count" -eq 0 ]; then
+    log "verify_existing_task_pr: no open PR correlated to task=${comment_id} issue=${issue_num:-unknown}"
     return 1
-  }
+  fi
+  if [ "$candidate_count" -ne 1 ]; then
+    log "ERROR: verify_existing_task_pr: found $candidate_count open PRs correlated to task=$comment_id; refusing ambiguous retry"
+    lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=ambiguous_open_candidates count=$candidate_count"
+    return 2
+  fi
 
-  VERIFIED_EXISTING_PR_BRANCH="$(printf '%s' "$verified" | jq -r '.headRefName // empty')"
-  VERIFIED_EXISTING_PR_URL="$(printf '%s' "$verified" | jq -r '.url // empty')"
-  verified_head_sha="$(printf '%s' "$verified" | jq -r '.headRefOid // empty')"
-  [ -n "$VERIFIED_EXISTING_PR_BRANCH" ] && [ -n "$VERIFIED_EXISTING_PR_URL" ] && [ -n "$verified_head_sha" ] || return 1
+  verified="$(jq -c '.[0]' <<<"$candidates")"
+  local verified_base
+  verified_base="$(jq -r '.baseRefName // empty' <<<"$verified")"
+  VERIFIED_EXISTING_PR_BRANCH="$(jq -r '.headRefName // empty' <<<"$verified")"
+  VERIFIED_EXISTING_PR_URL="$(jq -r '.url // empty' <<<"$verified")"
+  verified_head_sha="$(jq -r '.headRefOid // empty' <<<"$verified")"
+  if [ "$verified_base" != "$initial_base_branch" ] ||
+     [ -z "$VERIFIED_EXISTING_PR_BRANCH" ] ||
+     [ "$VERIFIED_EXISTING_PR_BRANCH" = "$verified_base" ] ||
+     [ -z "$verified_head_sha" ]; then
+    log "ERROR: verify_existing_task_pr: correlated PR has invalid base/head metadata for task=$comment_id (base=${verified_base:-missing}, expected=$initial_base_branch)"
+    lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=invalid_pr_metadata base=${verified_base:-missing}"
+    VERIFIED_EXISTING_PR_BRANCH=""
+    VERIFIED_EXISTING_PR_URL=""
+    return 2
+  fi
 
   remote_head="$(git -C "$workdir" ls-remote --heads origin "$VERIFIED_EXISTING_PR_BRANCH" 2>/dev/null | awk 'NR==1 {print $1}')"
   if [ -z "$remote_head" ] || [ "$remote_head" != "$verified_head_sha" ]; then
-    log "verify_existing_task_pr: remote head mismatch for $VERIFIED_EXISTING_PR_BRANCH (remote=${remote_head:-missing} pr=$verified_head_sha)"
+    log "ERROR: verify_existing_task_pr: remote head mismatch for $VERIFIED_EXISTING_PR_BRANCH (remote=${remote_head:-missing} pr=$verified_head_sha)"
+    lc_log "PR_VERIFY_ERROR" "task=$comment_id repo=$repo reason=remote_head_mismatch branch=$VERIFIED_EXISTING_PR_BRANCH"
     VERIFIED_EXISTING_PR_BRANCH=""
     VERIFIED_EXISTING_PR_URL=""
-    return 1
+    return 2
   fi
 
-  log "verify_existing_task_pr: verified existing PR $VERIFIED_EXISTING_PR_URL for task=$comment_id branch=$VERIFIED_EXISTING_PR_BRANCH base=$initial_base_branch"
+  log "verify_existing_task_pr: verified unique open PR $VERIFIED_EXISTING_PR_URL for task=$comment_id branch=$VERIFIED_EXISTING_PR_BRANCH base=$initial_base_branch"
   return 0
 }
 
@@ -3351,7 +3392,7 @@ extract_user_decision_request() {
   [ "$begin_line" -lt "$end_line" ] || return 1
 
   # A user decision is mutually exclusive with completion/failure markers.
-  if grep -qE '^TASK_(DONE|COMPLETED)([[:space:]]|$)|^TASK_FAILED([[:space:]:]|$)' "$stdout_file" 2>/dev/null; then
+  if grep -qE '^TASK_(DONE|COMPLETED)([[:space:]:]|$)|^TASK_FAILED([[:space:]:]|$)' "$stdout_file" 2>/dev/null; then
     return 1
   fi
 
@@ -3535,10 +3576,10 @@ evaluate_task_completion() {
   # A malformed/contradictory user-decision block must not be resurrected as
   # success merely because TASK_DONE/TASK_COMPLETED also appeared in stdout.
   if [ "$USER_DECISION_INVALID" != "true" ] && [ "$rc" -eq 0 ]; then
-    if [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_DONE|TASK_COMPLETED' "$STDOUT_FILE"; then
+    if [ -f "$STDOUT_FILE" ] && grep -qE '^TASK_(DONE|COMPLETED)([[:space:]:]|$)' "$STDOUT_FILE"; then
       SUCCESS="true"
-    elif [ -f "$STDOUT_FILE" ] && grep -qE 'TASK_FAILED:' "$STDOUT_FILE"; then
-      FAIL_REASON="$(grep -E 'TASK_FAILED:' "$STDOUT_FILE" | head -1 | sed -E 's/.*TASK_FAILED: //')"
+    elif [ -f "$STDOUT_FILE" ] && grep -qE '^TASK_FAILED([[:space:]:]|$)' "$STDOUT_FILE"; then
+      FAIL_REASON="$(grep -E '^TASK_FAILED([[:space:]:]|$)' "$STDOUT_FILE" | head -1 | sed -E 's/^TASK_FAILED[[:space:]:]*//')"
     fi
   fi
   
@@ -3801,7 +3842,7 @@ import sys
 from pathlib import Path
 
 output = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
-lines = [line for line in output.splitlines() if not re.match(r"^TASK_(?:DONE|COMPLETED)(?:\s|$)", line)]
+lines = [line for line in output.splitlines() if not re.match(r"^TASK_(?:DONE|COMPLETED)(?:\s|:|$)", line)]
 print("\n".join(lines).strip())
 PY_REPORT_ANSWER
 )" || REPORT_ANSWER=""
@@ -4337,6 +4378,9 @@ dispatch_once() {
     # Determine task type from commentUrl metadata (do NOT call gh pr view)
     local TASK_TYPE="issue"
     local PR_HEAD_BRANCH=""
+    local TASK_PR_NUMBER="N/A"
+    local TASK_PR_RECOVERED="false"
+    local PR_NUM_FROM_URL=""
     if [[ "$COMMENT_URL" == *"/pull/"* ]]; then
       if [[ "$COMMENT_URL" == *"#discussion_r"* ]]; then
         TASK_TYPE="pr_review_comment"
@@ -4347,6 +4391,9 @@ dispatch_once() {
       fi
       # Extract PR number from URL for branch resolution
       PR_NUM_FROM_URL="$(printf '%s' "$COMMENT_URL" | grep -oE 'pull/[0-9]+' | grep -oE '[0-9]+' || echo "")"
+      if [ -n "$PR_NUM_FROM_URL" ]; then
+        TASK_PR_NUMBER="$PR_NUM_FROM_URL"
+      fi
       if [ -n "$PR_NUM_FROM_URL" ] && [ "$PR_NUM_FROM_URL" != "$ISSUE_NUM" ]; then
         ISSUE_NUM="$PR_NUM_FROM_URL"
       fi
@@ -4368,7 +4415,7 @@ You are the Manul implementation agent. Complete ONE task and then emit exactly 
 - Comment URL: __COMMENT_URL__
 - Task Type: __TASK_TYPE__
 - Task Action: __TASK_ACTION__
-- PR Number: __PR_NUMBER__
+- PR Number: __TASK_PR_NUMBER__
 - Original Review Comment ID: __REPLY_TO__
 - Manul Mode: __MANUL_MODE__
 
@@ -4393,6 +4440,19 @@ PROMPT_EOF
 Fiteo root-task share recipient user ID: "${FITEO_MANUL_SHARE_USER_ID}"
 Use this exact value in shares[].userId with permission EDITOR_AND_VIEWER.
 FITEO_RECIPIENT_CONTEXT
+    fi
+
+    if [ "$TASK_ACTION" = "VERIFY" ]; then
+      cat >> "$TASK_PROMPT_FILE" <<'VERIFY_PROMPT'
+## Investigation / verification mode — REPORT ONLY
+
+This task was explicitly submitted as VERIFY or INVESTIGATE. It is a report-only task:
+- Investigate the request, inspect relevant source/docs, and run safe read-only validation when useful.
+- Do NOT edit, create, delete, format, or generate repository files.
+- Do NOT create or switch branches, commit, push, create/update a PR, or change repository state.
+- Post one useful result comment on the source issue/PR using the exact task/attempt marker and then emit TASK_DONE.
+- When the requested outcome would require a code change, report the finding and recommend the change; do not implement it in this task.
+VERIFY_PROMPT
     fi
 
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_EOF'
@@ -4462,7 +4522,9 @@ The completion marker is a protocol message, not progress narration.
 
 A pushed commit is not fully delivered until the GitHub PR description reflects the complete current PR and has been read back from GitHub.
 
-- For a standalone task, immediately after the first successful push, create a real PR with a meaningful, non-empty description. Do not wait for the final implementation phase if the first push is a checkpoint.
+- For a standalone task with no verified existing task PR supplied by Manul, immediately after the first successful push, create a real PR with a meaningful, non-empty description. Do not wait for the final implementation phase if the first push is a checkpoint.
+- When Manul supplied a verified existing task PR above, update that same PR after every push; never create another PR for the same task.
+- Every PR created or updated for this task MUST contain the exact stable correlation line `<!-- manul-task:__COMMENT_ID__ -->` in its description. Preserve exactly one copy of this metadata line across description updates so retries can resume the same PR safely.
 - After EVERY later push to a branch with an open PR—including checkpoint, review-fix, and CI-fix pushes—update the description of that same PR before continuing the task or reporting the push as delivered.
 - Rebuild the body from the cumulative PR diff and current verification results, not just the latest commit. Keep Summary, Changes, Testing, and related-issue references accurate; preserve still-valid issue-closing links. Do not blindly append bullets, which can leave stale or duplicated content.
 - Write the full Markdown body to a temporary file and use `gh pr edit <PR_NUMBER> --body-file "$BODY_FILE"` (or the equivalent safe `--body-file` option for PR creation); never interpolate a body directly into a double-quoted shell argument.
@@ -4795,6 +4857,36 @@ REPORT_ONLY_PROMPT
            return 0
          fi
        fi
+
+       # A retry must resume a single verified PR from an earlier attempt of
+       # this exact task instead of creating another attempt-specific branch.
+       if [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+         local existing_task_pr_rc=0
+         verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$base_branch" "false" || existing_task_pr_rc=$?
+         if [ "$existing_task_pr_rc" -eq 0 ]; then
+           PR_HEAD_BRANCH="$VERIFIED_EXISTING_PR_BRANCH"
+           TASK_PR_RECOVERED="true"
+           TASK_PR_NUMBER="$(printf '%s' "$VERIFIED_EXISTING_PR_URL" | sed -nE 's|.*/pull/([0-9]+)(/.*)?$|\1|p')"
+           if ! [[ "$TASK_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior task PR was identified, but its canonical URL did not contain a valid PR number. Refusing to create a duplicate PR." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
+             return 0
+           fi
+           log "dispatch: resuming existing task PR #$TASK_PR_NUMBER on branch $PR_HEAD_BRANCH for task $COMMENT_ID"
+           if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" "$workspace_path" "$REPO" 2>>"$LOG"; then
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior open PR for this task exists, but its head branch '$PR_HEAD_BRANCH' could not be prepared safely. Manul will not create another PR." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
+             return 0
+           fi
+           local recovered_task_branch
+           recovered_task_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || true)"
+           if [ "$recovered_task_branch" != "$PR_HEAD_BRANCH" ]; then
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Existing task PR branch verification failed (expected '$PR_HEAD_BRANCH', got '${recovered_task_branch:-detached}'). Refusing to create a duplicate PR." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
+             return 0
+           fi
+         elif [ "$existing_task_pr_rc" -gt 1 ]; then
+           handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A PR related to this task exists or GitHub could not be queried, but it could not be resumed unambiguously. Manul will not create another branch/PR until the existing delivery can be verified." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
+           return 0
+         fi
+       fi
      fi
 log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
@@ -4876,10 +4968,27 @@ These limits apply to all delegated/subagents too. Pass the same scope boundary 
 ## Branch Policy
 PROMPT_APPEND
 
-    if [ -n "$PR_HEAD_BRANCH" ]; then
+    if [ "$TASK_PR_RECOVERED" = "true" ]; then
+      # A previous attempt already created the deliverable PR; continue it.
+      if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+        cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+- This Todo task is resuming the existing PR #__TASK_PR_NUMBER__ created by an earlier attempt of this exact task.
+- Existing PR head branch: `__PR_HEAD_BRANCH__` (already checked out and verified by Manul)
+- Continue implementation/recovery on this same branch and update the existing PR #__TASK_PR_NUMBER__.
+- Do NOT create another branch or PR. Keep the Todo task as the delivery source; do not post a GitHub issue result comment.
+PROMPT_APPEND
+      else
+        cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+- This standalone issue task is resuming the existing PR #__TASK_PR_NUMBER__ created by an earlier attempt of this exact task.
+- Existing PR head branch: `__PR_HEAD_BRANCH__` (already checked out and verified by Manul)
+- Continue implementation/recovery on this same branch and update the existing PR #__TASK_PR_NUMBER__.
+- Do NOT create another branch or PR. The source issue remains #__ISSUE_NUM__; post the task result on that issue.
+PROMPT_APPEND
+      fi
+    elif [ -n "$PR_HEAD_BRANCH" ]; then
       # PR-tied task: operate on the PR's head branch
       cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
-- This task is tied to PR #__ISSUE_NUM__
+- This task is tied to PR #__TASK_PR_NUMBER__
 - PR head branch: `__PR_HEAD_BRANCH__`
 - PR head branch `__PR_HEAD_BRANCH__` is already checked out and ready for work
 - Commit and push changes to the same PR head branch
@@ -4909,7 +5018,9 @@ PROMPT_APPEND
   git -C "$WORKDIR" fetch origin "$BASE_BRANCH" &&
     git -C "$WORKDIR" switch --create "$TASK_BRANCH" "origin/$BASE_BRANCH"
   ```
-- Verify `git -C "$WORKDIR" branch --show-current` equals the new task branch before modifying files. If fetching or branch creation fails, do not continue with edits or commits; report the cause. Never overwrite/reuse a stale branch from an earlier attempt; use a unique task/attempt suffix.
+- Before creating a branch, use a verified existing task PR branch supplied above when present; continue on that exact branch and update that same PR.
+- Only when no verified existing task PR branch was supplied, create a new branch using the unique task/attempt suffix below.
+- Verify `git -C "$WORKDIR" branch --show-current` equals the selected branch before modifying files. If fetching or branch preparation fails, do not continue with edits or commits; report the cause. Never overwrite an unverified branch from an earlier attempt.
 - For repository changes: follow repository-local branching guidance or skill content explicitly supplied in the task context; do not inspect global skill directories. Do not read `~/.agents/**` or any global skill directory; the task-access boundary above takes precedence.
 - If the task explicitly requires another branch as the base, including another feature branch, update that exact remote base before creating your branch and reflect that base in the PR.
 - Never commit or push repository changes directly to the prepared/base/default branch
@@ -4944,7 +5055,8 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__TASK_ACTION__/$TASK_ACTION}"
     prompt_content="${prompt_content//__MANUL_MODE__/$MANUL_MODE}"
     prompt_content="${prompt_content//__HUMAN_COMMENT_MAX_LINES__/$CFG_HUMAN_COMMENT_MAX_LINES}"
-    prompt_content="${prompt_content//__PR_NUMBER__/$ISSUE_NUM}"
+    prompt_content="${prompt_content//__PR_NUMBER__/$TASK_PR_NUMBER}"
+    prompt_content="${prompt_content//__TASK_PR_NUMBER__/$TASK_PR_NUMBER}"
     prompt_content="${prompt_content//__REPLY_TO__/$REPLY_TO}"
     prompt_content="${prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
     prompt_content="${prompt_content//__WORKDIR__/$WORKDIR}"

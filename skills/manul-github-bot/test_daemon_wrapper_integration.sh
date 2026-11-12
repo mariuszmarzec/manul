@@ -322,7 +322,7 @@ echo "0" > "$PID_FILE"
 # ─── Test A: rc=0 + TASK_DONE + valid result comment -> COMPLETION_SUCCESS=true ─
 echo "=== Test A: rc=0 + TASK_DONE + valid result -> COMPLETION_SUCCESS=true ==="
 STDOUT_FILE="$TEST_TMPDIR/stdoutA.txt"
-echo "TASK_DONE" > "$STDOUT_FILE"
+echo "TASK_DONE: agent completed successfully" > "$STDOUT_FILE"
 COMPLETION_SUCCESS=""
 FINAL_COMMENT=""
 FAIL_REASON=""

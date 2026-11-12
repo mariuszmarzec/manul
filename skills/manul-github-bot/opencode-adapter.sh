@@ -942,7 +942,7 @@ while true; do
         current_text_events="$(jq -Rr 'try fromjson catch empty | select(.type == "text") | (.part.text // .text // empty)' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null || true)"
     fi
     current_has_control_marker="false"
-    if printf '%s\n' "$current_text_events" | grep -qE '^TASK_DONE([[:space:]]|$)|^TASK_FAILED([[:space:]:]|$)|^TASK_NEEDS_USER_BEGIN([[:space:]]|$)|^TASK_NEEDS_USER_END([[:space:]]|$)'; then
+    if printf '%s\n' "$current_text_events" | grep -qE '^TASK_DONE([[:space:]:]|$)|^TASK_FAILED([[:space:]:]|$)|^TASK_NEEDS_USER_BEGIN([[:space:]]|$)|^TASK_NEEDS_USER_END([[:space:]]|$)'; then
         current_has_control_marker="true"
     fi
 
@@ -1182,11 +1182,11 @@ elif grep -qE '^TASK_NEEDS_USER_BEGIN([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/
 elif grep -qE '^TASK_FAILED([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
     _status="FAILED"
     _summary="OpenCode agent reported TASK_FAILED"
-elif grep -qE '^TASK_DONE([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
+elif grep -qE '^TASK_DONE([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
     if [ "$pr_rc" -eq 0 ]; then
         _status="COMPLETED"
         _exit_code=0
-        _summary="$(grep -oP '(?<=^TASK_DONE\s).+' "$OPT_STDOUT_FILE" 2>/dev/null | head -1 || true)"
+        _summary="$(sed -nE 's/^TASK_DONE([[:space:]:]+)(.*)$/\2/p' "$OPT_STDOUT_FILE" 2>/dev/null | head -1 || true)"
         : "${_summary:=Agent completed}"
     else
         _status="FAILED"

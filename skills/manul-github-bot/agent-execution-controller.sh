@@ -77,7 +77,7 @@ AgentExecutionController.execute() {
             stdout_file="$(manul_task_file_path "$MANUL_TASKS_DIR" "$task_id" "stdout")"
         fi
         local check_file="$stdout_file"
-        if [ -f "$check_file" ] && grep -qE '^TASK_DONE' "$check_file" 2>/dev/null; then
+        if [ -f "$check_file" ] && grep -qE '^TASK_DONE([[:space:]:]|$)' "$check_file" 2>/dev/null; then
             # The agent posted TASK_DONE before the outer timeout — treat as success.
             result="$(printf '%s' "$result" | jq -c '. + {status: "COMPLETED", exit_code: 0, summary: "Completed despite timeout wrapper (TASK_DONE already present)"}')"
             AgentExecutionController_SessionId="$session_id"

@@ -142,18 +142,17 @@ parse_command() {
   fi
 
   # Known actions
-  local known_actions="run review-fix continue verify status close"
+  local known_actions="run review-fix continue verify investigate status close"
 
   # First token is the action
   local first_token
-  first_token="$(echo "$cmd" | awk '{print $1}')"
+  first_token="$(echo "$cmd" | awk '{print tolower($1)}')"
 
   case "$first_token" in
     run)
       action="IMPLEMENT"
       local run_args
-      run_args="${cmd#run}"
-      run_args="${run_args#"${run_args%%[![:space:]]*}"}"
+      run_args="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
       if [[ "$run_args" == --agent* ]]; then
         if [[ "$run_args" =~ ^--agent[[:space:]]+([^[:space:]]+)([[:space:]]+(.*))?$ ]]; then
           agent="${BASH_REMATCH[1]}"
@@ -170,15 +169,17 @@ parse_command() {
       ;;
     review-fix)
       action="REVIEW_FIX"
-      prompt="$(echo "$cmd" | sed 's/^review-fix[[:space:]]*//')"
+      prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
       ;;
     continue)
       action="CONTINUE"
-      prompt="$(echo "$cmd" | sed 's/^continue[[:space:]]*//')"
+      prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
       ;;
-    verify)
+    verify|investigate)
+      # "investigate" is an explicit report-only alias for the existing VERIFY
+      # action; keep the downstream comment-only delivery contract unchanged.
       action="VERIFY"
-      prompt="$(echo "$cmd" | sed 's/^verify[[:space:]]*//')"
+      prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
       ;;
     status)
       action="STATUS"
@@ -192,7 +193,7 @@ parse_command() {
       # Try to use first token as a configured role agent.
       if echo "$known_agents" | grep -qw "$first_token"; then
         agent="$first_token"
-        prompt="$(echo "$cmd" | sed "s/^${first_token}[[:space:]]*//")"
+        prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
         action="IMPLEMENT"
       else
         # Default to IMPLEMENT with full prompt

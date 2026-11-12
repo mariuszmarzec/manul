@@ -24,6 +24,7 @@ Issue/PR comments beginning with `/manul` are parsed as:
 | `/manul review-fix <prompt>` | `REVIEW_FIX` | Create a task for PR review feedback |
 | `/manul continue <answer>` | `CONTINUE` | Resume a task blocked on user input |
 | `/manul verify <prompt>` | `VERIFY` | Create a verification task |
+| `/manul investigate <prompt>` | `VERIFY` | Case-insensitive investigation/report-only alias; do not modify repository files |
 | `/manul status` | `STATUS` | Query conversation status |
 | `/manul close` | `CLOSE` | Close a conversation |
 
