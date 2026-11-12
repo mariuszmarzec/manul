@@ -2880,6 +2880,7 @@ VERIFIED_EXISTING_PR_BRANCH=""
 VERIFIED_EXISTING_PR_URL=""
 verify_existing_task_pr() {
   local repo="$1" comment_id="$2" workdir="$3" initial_base_branch="$4"
+  local allow_prior_urls="${5:-true}"
   local safe_comment_id comment_url issue_num safe_repo prior_urls prior_urls_json
   local pr_json candidates candidate_count verified verified_head_sha remote_head safe_task_token
 
@@ -2889,7 +2890,7 @@ verify_existing_task_pr() {
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   issue_num="$(printf '%s' "$comment_url" | grep -oE '/(issues|pull)/[0-9]+' | grep -oE '[0-9]+' | head -n 1)"
   prior_urls_json='[]'
-  if [[ "$issue_num" =~ ^[0-9]+$ ]]; then
+  if [ "$allow_prior_urls" != "false" ] && [[ "$issue_num" =~ ^[0-9]+$ ]]; then
     safe_repo="$(sql_escape "$repo")"
     prior_urls="$(sqlite3 "$DB" "SELECT prUrl FROM processed_comments WHERE repository='$safe_repo' AND status='completed' AND commentId!='$safe_comment_id' AND COALESCE(prUrl,'')!='' AND (issueNumber=$issue_num OR commentUrl LIKE '%/issues/$issue_num#%' OR commentUrl LIKE '%/pull/$issue_num#%' OR commentUrl LIKE '%/issues/$issue_num' OR commentUrl LIKE '%/pull/$issue_num');" 2>/dev/null || true)"
     prior_urls_json="$(printf '%s\n' "$prior_urls" | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null || echo '[]')"
@@ -3391,7 +3392,7 @@ extract_user_decision_request() {
   [ "$begin_line" -lt "$end_line" ] || return 1
 
   # A user decision is mutually exclusive with completion/failure markers.
-  if grep -qE '^TASK_(DONE|COMPLETED)([[:space:]]|$)|^TASK_FAILED([[:space:]:]|$)' "$stdout_file" 2>/dev/null; then
+  if grep -qE '^TASK_(DONE|COMPLETED)([[:space:]:]|$)|^TASK_FAILED([[:space:]:]|$)' "$stdout_file" 2>/dev/null; then
     return 1
   fi
 
@@ -4508,7 +4509,8 @@ The completion marker is a protocol message, not progress narration.
 
 A pushed commit is not fully delivered until the GitHub PR description reflects the complete current PR and has been read back from GitHub.
 
-- For a standalone task, immediately after the first successful push, create a real PR with a meaningful, non-empty description. Do not wait for the final implementation phase if the first push is a checkpoint.
+- For a standalone task with no verified existing task PR supplied by Manul, immediately after the first successful push, create a real PR with a meaningful, non-empty description. Do not wait for the final implementation phase if the first push is a checkpoint.
+- When Manul supplied a verified existing task PR above, update that same PR after every push; never create another PR for the same task.
 - Every PR created or updated for this task MUST contain the exact stable correlation line `<!-- manul-task:__COMMENT_ID__ -->` in its description. Preserve exactly one copy of this metadata line across description updates so retries can resume the same PR safely.
 - After EVERY later push to a branch with an open PR—including checkpoint, review-fix, and CI-fix pushes—update the description of that same PR before continuing the task or reporting the push as delivered.
 - Rebuild the body from the cumulative PR diff and current verification results, not just the latest commit. Keep Summary, Changes, Testing, and related-issue references accurate; preserve still-valid issue-closing links. Do not blindly append bullets, which can leave stale or duplicated content.
@@ -4847,11 +4849,11 @@ REPORT_ONLY_PROMPT
        # this exact task instead of creating another attempt-specific branch.
        if [ "$TASK_ACTION" = "IMPLEMENT" ]; then
          local existing_task_pr_rc=0
-         verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$base_branch" || existing_task_pr_rc=$?
+         verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$base_branch" "false" || existing_task_pr_rc=$?
          if [ "$existing_task_pr_rc" -eq 0 ]; then
            PR_HEAD_BRANCH="$VERIFIED_EXISTING_PR_BRANCH"
            TASK_PR_RECOVERED="true"
-           TASK_PR_NUMBER="$(printf '%s' "$VERIFIED_EXISTING_PR_URL" | sed -nE 's|.*/pull/([0-9]+)(/.*)?$|\\1|p')"
+           TASK_PR_NUMBER="$(printf '%s' "$VERIFIED_EXISTING_PR_URL" | sed -nE 's|.*/pull/([0-9]+)(/.*)?$|\1|p')"
            if ! [[ "$TASK_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
              handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior task PR was identified, but its canonical URL did not contain a valid PR number. Refusing to create a duplicate PR." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
              return 0
