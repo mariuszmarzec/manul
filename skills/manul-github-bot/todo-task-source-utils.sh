@@ -758,8 +758,8 @@ todo_task_report_deliver() {
     return 1
   }
 
-  answer_with_sentinel="$(todo_task_report_receipt_answer "$result_description" && printf '\\001')" || return 1
-  answer="${answer_with_sentinel%$'\\001'}"
+  answer_with_sentinel="$(todo_task_report_receipt_answer "$result_description" && printf '\001')" || return 1
+  answer="${answer_with_sentinel%$'\001'}"
   digest="$(printf '%s' "$answer" | sha256sum | awk '{print $1}')"
   receipt="$(jq -cn \
     --arg sourceId "$source_id" \
