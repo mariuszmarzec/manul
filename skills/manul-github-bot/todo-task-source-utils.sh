@@ -909,3 +909,158 @@ todo_task_report_deliver() {
     '{sourceId:$sourceId,rootTaskId:$rootTaskId,resultTaskId:$resultTaskId,answerSha256:$answerSha256,verifiedAt:$verifiedAt,answer:$answer}')"
   printf '%s\n' "$receipt"
 }
+\n'"${marker_prefix}sha256=${digest};answerSha256=${answer_digest};answerBase64=${answer_base64} -->"
+    case "$source_type" in
+      todo_local_mcp)
+        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
+        todo_mcp_source_call "$source_json" "$source_type" create_task "$arguments" >/dev/null || return $? ;;
+      todo_remote_mcp)
+        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}}')"
+        todo_mcp_source_call "$source_json" "$source_type" todo_create_task "$arguments" >/dev/null || return $? ;;
+    esac
+    tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
+    root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+    result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
+      [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | contains($prefix))]
+    ' <<<"$root_json")" || return 1
+    result_count="$(jq -r 'length' <<<"$result_json")"
+    [ "$result_count" -eq 1 ] || {
+      echo "Todo report create did not produce exactly one readable result subtask" >&2
+      return 1
+    }
+    result_json="$(jq -c '.[0]' <<<"$result_json")"
+    result_id="$(jq -r '.id // empty' <<<"$result_json")"
+    result_description="$(jq -r '.description // empty' <<<"$result_json")"
+  fi
+
+  [[ "$result_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
+  [ "$actual_version" = "$expected_version" ] || {
+    echo "Todo report result read-back failed source-version verification" >&2
+    return 1
+  }
+  result_todo="$(jq -r 'if .isToDo == null then "true" else (.isToDo|tostring) end' <<<"$result_json")"
+  if [ "$result_todo" != "false" ]; then
+    case "$source_type" in
+      todo_local_mcp)
+        arguments="$(jq -cn --argjson taskId "$result_id" '{taskIds:[$taskId]}')"
+        todo_mcp_source_call "$source_json" "$source_type" mark_tasks_done "$arguments" >/dev/null || return $? ;;
+      todo_remote_mcp)
+        arguments="$(jq -cn --argjson id "$result_id" '{id:$id,task:{isToDo:false}}')"
+        todo_mcp_source_call "$source_json" "$source_type" todo_update_task "$arguments" >/dev/null || return $? ;;
+    esac
+  fi
+
+  # Read the provider state again after mutation. Exact text, parent, completed
+  # flag, unique receipt and unchanged source structure are all required.
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
+  root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
+    [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | contains($prefix))]
+  ' <<<"$root_json")" || return 1
+  [ "$(jq -r 'length' <<<"$result_json")" -eq 1 ] || return 1
+  result_json="$(jq -c '.[0]' <<<"$result_json")"
+  [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
+  [ "$(jq -r '.isToDo' <<<"$result_json")" = "false" ] || return 1
+  [ "$(jq -r '.description // empty' <<<"$result_json")" = "$result_description" ] || return 1
+  if [ "$source_type" = "todo_remote_mcp" ] &&
+     ! todo_task_has_remote_share "$root_json" "$manul_user_id"; then
+    echo "Todo report parent is no longer shared with Manul" >&2
+    return 1
+  fi
+  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
+  [ "$actual_version" = "$expected_version" ] || {
+    echo "Todo source changed while the report result was being verified" >&2
+    return 1
+  }
+
+  answer_with_sentinel="$(todo_task_report_receipt_answer "$result_description" && printf '\001')" || return 1
+  answer="${answer_with_sentinel%$'\001'}"
+  digest="$(printf '%s' "$answer" | sha256sum | awk '{print $1}')"
+  receipt="$(jq -cn \
+    --arg sourceId "$source_id" \
+    --argjson rootTaskId "$task_id" \
+    --argjson resultTaskId "$result_id" \
+    --arg answerSha256 "$digest" \
+    --arg verifiedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg answer "$answer" \
+    '{sourceId:$sourceId,rootTaskId:$rootTaskId,resultTaskId:$resultTaskId,answerSha256:$answerSha256,verifiedAt:$verifiedAt,answer:$answer}')"
+  printf '%s\n' "$receipt"
+}\n'"${marker_prefix}"sha256=${digest};answerSha256=${answer_digest};answerBase64=${answer_base64} -->"
+    case "$source_type" in
+      todo_local_mcp)
+        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
+        todo_mcp_source_call "$source_json" "$source_type" create_task "$arguments" >/dev/null || return $? ;;
+      todo_remote_mcp)
+        arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}}')"
+        todo_mcp_source_call "$source_json" "$source_type" todo_create_task "$arguments" >/dev/null || return $? ;;
+    esac
+    tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
+    root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+    result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
+      [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | contains($prefix))]
+    ' <<<"$root_json")" || return 1
+    result_count="$(jq -r 'length' <<<"$result_json")"
+    [ "$result_count" -eq 1 ] || {
+      echo "Todo report create did not produce exactly one readable result subtask" >&2
+      return 1
+    }
+    result_json="$(jq -c '.[0]' <<<"$result_json")"
+    result_id="$(jq -r '.id // empty' <<<"$result_json")"
+    result_description="$(jq -r '.description // empty' <<<"$result_json")"
+  fi
+
+  [[ "$result_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
+  [ "$actual_version" = "$expected_version" ] || {
+    echo "Todo report result read-back failed source-version verification" >&2
+    return 1
+  }
+  result_todo="$(jq -r 'if .isToDo == null then "true" else (.isToDo|tostring) end' <<<"$result_json")"
+  if [ "$result_todo" != "false" ]; then
+    case "$source_type" in
+      todo_local_mcp)
+        arguments="$(jq -cn --argjson taskId "$result_id" '{taskIds:[$taskId]}')"
+        todo_mcp_source_call "$source_json" "$source_type" mark_tasks_done "$arguments" >/dev/null || return $? ;;
+      todo_remote_mcp)
+        arguments="$(jq -cn --argjson id "$result_id" '{id:$id,task:{isToDo:false}}')"
+        todo_mcp_source_call "$source_json" "$source_type" todo_update_task "$arguments" >/dev/null || return $? ;;
+    esac
+  fi
+
+  # Read the provider state again after mutation. Exact text, parent, completed
+  # flag, unique receipt and unchanged source structure are all required.
+  tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
+  root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
+  result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
+    [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | contains($prefix))]
+  ' <<<"$root_json")" || return 1
+  [ "$(jq -r 'length' <<<"$result_json")" -eq 1 ] || return 1
+  result_json="$(jq -c '.[0]' <<<"$result_json")"
+  [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
+  [ "$(jq -r '.isToDo' <<<"$result_json")" = "false" ] || return 1
+  [ "$(jq -r '.description // empty' <<<"$result_json")" = "$result_description" ] || return 1
+  if [ "$source_type" = "todo_remote_mcp" ] &&
+     ! todo_task_has_remote_share "$root_json" "$manul_user_id"; then
+    echo "Todo report parent is no longer shared with Manul" >&2
+    return 1
+  fi
+  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
+  [ "$actual_version" = "$expected_version" ] || {
+    echo "Todo source changed while the report result was being verified" >&2
+    return 1
+  }
+
+  answer_with_sentinel="$(todo_task_report_receipt_answer "$result_description" && printf '\001')" || return 1
+  answer="${answer_with_sentinel%$'\001'}"
+  digest="$(printf '%s' "$answer" | sha256sum | awk '{print $1}')"
+  receipt="$(jq -cn \
+    --arg sourceId "$source_id" \
+    --argjson rootTaskId "$task_id" \
+    --argjson resultTaskId "$result_id" \
+    --arg answerSha256 "$digest" \
+    --arg verifiedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg answer "$answer" \
+    '{sourceId:$sourceId,rootTaskId:$rootTaskId,resultTaskId:$resultTaskId,answerSha256:$answerSha256,verifiedAt:$verifiedAt,answer:$answer}')"
+  printf '%s\n' "$receipt"
+}
