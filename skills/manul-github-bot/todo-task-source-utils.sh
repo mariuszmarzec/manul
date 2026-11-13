@@ -635,8 +635,8 @@ sys.stdout.write("\n".join(result))
 }
 
 
-# Read the original answer from a verified report marker. New records carry a
-# separately checksummed base64 payload; legacy records fall back to Markdown.
+# Build a readable Markdown report while keeping the first line usable as
+# the Todo task-list preview.
 todo_task_report_markdown() {
   local generated_answer="$1" source_type="$2" root_json="$3"
   local formatted_answer source_label task_description
