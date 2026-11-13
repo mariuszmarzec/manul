@@ -713,7 +713,7 @@ todo_task_report_deliver() {
   local manul_user_id=""
   task_id="$(todo_task_id_from_source_id "$source_id")"
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
-  [[ "$task_id" =~ ^[0-9]+$d*$d*$ ]] || return 1
+  [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
 
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
   root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
@@ -754,7 +754,7 @@ todo_task_report_deliver() {
     digest="$(printf '%s' "$formatted_answer" | sha256sum | awk '{print $1}')"
     answer_digest="$(printf '%s' "$generated_answer" | sha256sum | awk '{print $1}')"
     answer_base64="$(printf '%s' "$generated_answer" | python3 -c 'import base64, sys; sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))')" || return 1
-    result_description="${formatted_answer}"$'$n'"${marker_prefix}sha256=${digest};answerSha256=${answer_digest};answerBase64=${answer_base64} -->"
+    result_description="${formatted_answer}"$'\n'"${marker_prefix}sha256=${digest};answerSha256=${answer_digest};answerBase64=${answer_base64} -->"
     case "$source_type" in
       todo_local_mcp)
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
@@ -819,16 +819,9 @@ todo_task_report_deliver() {
     return 1
   }
 
-  answer_with_sentinel="$(todo_task_report_receipt_answer "$result_description" && printf '$001')" || return 1
-  answer="${answer_with_sentinel%$'$001'}"
+  answer_with_sentinel="$(todo_task_report_receipt_answer "$result_description" && printf '\001')" || return 1
+  answer="${answer_with_sentinel%$'\001'}"
   digest="$(printf '%s' "$answer" | sha256sum | awk '{print $1}')"
-  receipt="$(jq -cn $
-    --arg sourceId "$source_id" $
-    --argjson rootTaskId "$task_id" $
-    --argjson resultTaskId "$result_id" $
-    --arg answerSha256 "$digest" $
-    --arg verifiedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" $
-    --arg answer "$answer" $
-    '{sourceId:$sourceId,rootTaskId:$rootTaskId,resultTaskId:$resultTaskId,answerSha256:$answerSha256,verifiedAt:$verifiedAt,answer:$answer}')"
-  printf '%s$n' "$receipt"
+  receipt="$(jq -cn --arg sourceId "$source_id" --argjson rootTaskId "$task_id" --argjson resultTaskId "$result_id" --arg answerSha256 "$digest" --arg verifiedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg answer "$answer" '{sourceId:$sourceId,rootTaskId:$rootTaskId,resultTaskId:$resultTaskId,answerSha256:$answerSha256,verifiedAt:$verifiedAt,answer:$answer}')"
+  printf '%s\n' "$receipt"
 }
