@@ -85,10 +85,11 @@ run_adapter() {
   OPENCODE_BIN="$BIN_DIR/opencode" \
   MANUL_DIR="$TMP/runtime" \
   MANUL_WORKSPACE="$TMP/runtime/workspace" \
+  MANUL_TASK_WORKSPACE_ROOT="$TMP/runtime/workspace/ws-caracal" \
   MOCK_CARACAL_PROOF_FILE="$PROOF" \
   MOCK_CARACAL_MODE="$mode" \
   bash "$SCRIPT_DIR/opencode-adapter.sh" \
-    --task-id "$task_id" --prompt "$PROMPT" --workspace "$TMP" \
+    --task-id "$task_id" --prompt "$PROMPT" --workspace "$TMP/runtime/workspace/ws-caracal" \
     --attempt 1 --timeout 30 --session-id "" \
     --stdout-file "$stdout" --stderr-file "$stderr" 2>/dev/null
 }
@@ -116,7 +117,7 @@ pass "Manul blocks model startup when configured Caracal MCP is disconnected"
 mv "$PROVIDER" "$PROVIDER.disabled"
 out="$(run_adapter caracal-provider-missing connected)" || true
 [ "$(printf '%s' "$out" | jq -r '.status')" = "FAILED" ] || fail "missing Caracal provider did not fail: $out"
-[ "$(printf '%s' "$out" | jq -r '.failure_code')" = "CARACAL_MCP_UNAVAILABLE" ] || fail "missing provider failure code is missing: $out"
+[ "$(printf '%s' "$out" | jq -r '.failure_code')" = "PRE_EXECUTION_FAILURE" ] || fail "missing provider failure code is missing: $out"
 [ ! -s "$PROOF" ] || fail "OpenCode was invoked without the configured Caracal provider"
 pass "Manul fails with an actionable preflight error when the configured provider is missing"
 
