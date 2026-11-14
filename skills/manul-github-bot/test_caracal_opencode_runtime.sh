@@ -12,14 +12,15 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
 HOME_DIR="$TMP/home"
-CONFIG="$HOME_DIR/.config/opencode/opencode.json"
+CONFIG="$HOME_DIR/.config/opencode/opencode.jsonc"
 PROVIDER="$HOME_DIR/.caracal/env.sh"
 BIN_DIR="$TMP/bin"
 PROOF="$TMP/opencode-proof.txt"
 PROMPT="$TMP/prompt.md"
 mkdir -p "$HOME_DIR/.config/opencode" "$HOME_DIR/.caracal" "$BIN_DIR"
-cat >"$CONFIG" <<'JSON'
+cat >"$CONFIG" <<'JSONC'
 {
+  // Operator-owned static MCP entry; Manul must not rewrite this file.
   "mcp": {
     "servers": {
       "caracal-rag": {
@@ -34,7 +35,7 @@ cat >"$CONFIG" <<'JSON'
     }
   }
 }
-JSON
+JSONC
 cat >"$PROVIDER" <<'PROVIDER'
 if [ "${CARACAL_RESOLVE_LIVE:-}" != "1" ]; then
   echo "CARACAL_RESOLVE_LIVE was not set by the runtime loader" >&2
