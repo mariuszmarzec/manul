@@ -35,6 +35,10 @@ expect_sdd_route() {
   local out; out="$(check_json)"
   [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "specification-driven" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "orchestrator" ]
 }
+expect_sdd_agent_route() {
+  local out; out="$(check_json)"
+  [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "specification-driven" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "sdd" ]
+}
 run_case "repo without config stays on standard workflow" expect_standard
 AGENT=sdd; PROMPT="Add a feature"
 run_case "SDD agent without config fails instead of bootstrapping" expect_blocked
@@ -53,7 +57,7 @@ EOF
 AGENT=""; PROMPT=""
 run_case "ordinary task in SDD repo routes through orchestrator" expect_sdd_route
 AGENT=sdd; PROMPT="Change requirement behavior"
-run_case "explicit SDD role stays on the SDD agent" expect_sdd_route
+run_case "explicit SDD role stays on the SDD agent" expect_sdd_agent_route
 ACTION=REVIEW_FIX; AGENT=""; PROMPT="Fix review feedback"
 run_case "review-fix in SDD repo stays behind SDD routing" expect_sdd_route
 ACTION=IMPLEMENT; AGENT=coder; PROMPT="Implement a feature"
