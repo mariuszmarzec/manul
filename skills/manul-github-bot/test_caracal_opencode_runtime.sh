@@ -77,7 +77,8 @@ printf '%s\n' "Verify Caracal integration" >"$PROMPT"
 CONFIG_HASH="$(sha256sum "$CONFIG" | awk '{print $1}')"
 
 run_adapter() {
-  local task_id="$1" mode="$2" stdout="$TMP/$task_id.stdout" stderr="$TMP/$task_id.stderr"
+  local task_id="$1" mode="$2"
+  local stdout="$TMP/$task_id.stdout" stderr="$TMP/$task_id.stderr"
   HOME="$HOME_DIR" \
   PATH="$BIN_DIR:/usr/bin:/bin" \
   OPENCODE_BIN="$BIN_DIR/opencode" \
@@ -104,15 +105,15 @@ grep -Fq 'command=run' "$PROOF" || fail "adapter did not start the model after C
 pass "Manul refreshes Caracal provider env per task, verifies connection, and keeps credentials process-scoped"
 
 : >"$PROOF"
-out="$(run_adapter caracal-disconnected disconnected)"
+out="$(run_adapter caracal-disconnected disconnected)" || true
 [ "$(printf '%s' "$out" | jq -r '.status')" = "FAILED" ] || fail "disconnected Caracal did not fail closed: $out"
 [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "CARACAL_MCP_UNAVAILABLE" ] || fail "disconnected Caracal failure code is missing: $out"
-! grep -q '^command=run$' "$PROOF" || fail "agent started despite a disconnected mandatory Caracal MCP"
+! grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent started despite a disconnected mandatory Caracal MCP"
 pass "Manul blocks model startup when configured Caracal MCP is disconnected"
 
 : >"$PROOF"
 mv "$PROVIDER" "$PROVIDER.disabled"
-out="$(run_adapter caracal-provider-missing connected)"
+out="$(run_adapter caracal-provider-missing connected)" || true
 [ "$(printf '%s' "$out" | jq -r '.status')" = "FAILED" ] || fail "missing Caracal provider did not fail: $out"
 [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "CARACAL_MCP_UNAVAILABLE" ] || fail "missing provider failure code is missing: $out"
 [ ! -s "$PROOF" ] || fail "OpenCode was invoked without the configured Caracal provider"
