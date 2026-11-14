@@ -751,3 +751,14 @@ Check:
 - the Manul agent prompt/config is valid.
 
 The long-term design should isolate these runtime-specific checks inside the OpenClaw adapter.
+
+
+### Review-fix tasks in SDD repositories
+
+A review-fix task on an SDD implementation PR remains inside the approved
+specification scope. The Orchestrator delegates the fix through the SDD agent,
+which checks the review feedback against the approved requirement IDs and
+specification commit. A fix that only corrects conformance or implementation
+quality may proceed under that approval. If the feedback exposes a missing,
+ambiguous, or changed product behavior requirement, return to the Specification
+PR gate before changing behavior. Review-fix is not a bypass around SDD.

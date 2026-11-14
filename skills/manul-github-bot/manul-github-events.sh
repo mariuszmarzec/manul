@@ -140,6 +140,9 @@ parse_command() {
   if [ -z "$known_agents" ]; then
     known_agents="architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer"
   fi
+  # Keep SDD entrypoints parseable even before an existing installation has
+  # run the config migration. The dispatcher fails closed if not enabled.
+  known_agents="$known_agents orchestrator sdd"
 
   # Known actions
   local known_actions="run review-fix continue verify investigate status close"

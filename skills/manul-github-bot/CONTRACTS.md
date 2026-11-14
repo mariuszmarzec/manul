@@ -11,6 +11,8 @@ Supported commands parsed from a `/manul` command are:
 | `/manul run <task>` | `IMPLEMENT` using the automatic runtime entry point |
 | `/manul run --agent <role> <task>` | `IMPLEMENT` using an explicit canonical role |
 | `/manul <role> <task>` | `IMPLEMENT` using the explicit-role shorthand |
+| `/manul sdd bootstrap` | Explicit SDD Baseline initialization; never inferred |
+| `/manul sdd <task>` | SDD task; requires an existing approved SDD baseline |
 | `/manul review-fix <prompt>` | `REVIEW_FIX` |
 | `/manul continue <answer>` | resume a `blocked_user` task |
 | `/manul verify <prompt>` | `VERIFY` |
@@ -841,3 +843,43 @@ checkout and deploys its scripts into the existing runtime:
   workers, or edit leases/locks. A running daemon may retain functions loaded
   before deployment; any restart is a separate operator action after active
   task and lease ownership has been inspected.
+
+
+## Specification-driven repository policy
+
+An optional root file `.specification/config.yaml` opts a repository into
+`mode: specification-driven`. Absence of that file means the standard
+workflow. Manul never creates the file implicitly.
+
+- `/manul sdd bootstrap` is the only initialization path. It performs a
+  baseline audit and opens a Baseline PR containing specification and config,
+  but no product-code changes. SDD becomes active only after the Baseline PR
+  is merged.
+- `/manul sdd <task>` requires an initialized repository; without the config
+  it fails before model invocation.
+- Ordinary implementation and review-fix tasks in an SDD repository are routed
+  through the Orchestrator and SDD agent. Direct Coder/Architect role commands
+  cannot bypass the specification gate.
+- Before model invocation, Manul validates the config, the `agents[]`
+  allow-list, canonical `sdd` and `orchestrator` definitions, and the shared
+  SDD skill. Native OpenCode roles are verified as well. Missing prerequisites
+  fail closed; the default runtime agent is never substituted.
+- Specification PR and Implementation PR are separate. The implementation
+  task is pinned to the approved specification commit and requirement IDs.
+- Review-fix work must remain within the approved requirements. A new or
+  changed behavior requirement returns to the Specification PR gate.
+
+### Durable workflow checkpoints
+
+Agents may emit a bounded
+`MANUL_WORKFLOW_STATE_BEGIN` / `MANUL_WORKFLOW_STATE_END` JSON block.
+The daemon validates and stores it in `workflow_instances` and the
+append-only `workflow_events` tables in `manul.db`. Checkpoints are bound to
+the task's trusted repository, secret-like fields are redacted, and replayed
+events are idempotent. The next task in the same conversation receives the
+latest checkpoint as prompt context. Agents never access Manul's DB directly.
+
+The workflow registry is additive to the task/lease/runtime-session state. It
+is generic across workflow types and does not introduce a graph engine.
+GitHub PR merge state, approved spec commits and repository artifacts remain
+the authority for approval and recovery decisions.

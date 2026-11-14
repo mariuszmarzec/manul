@@ -109,7 +109,7 @@ AgentExecutor.execute() {
         local allowed_agents_json
         allowed_agents_json="$(jq -c '.agents // []' "$MANUL_CONFIG" 2>/dev/null || printf '[]')"
         if ! jq -e 'type == "array" and length > 0' <<<"$allowed_agents_json" >/dev/null 2>&1; then
-            allowed_agents_json='["architect","coder","coder-cheap","coder-strong","coder-expert","reviewer","reviewer-expert","reviewer-adversarial","debugger","debugger-expert","researcher","tester","security","performance","refactorer"]'
+            allowed_agents_json='["orchestrator","sdd","architect","coder","coder-cheap","coder-strong","coder-expert","reviewer","reviewer-expert","reviewer-adversarial","debugger","debugger-expert","researcher","tester","security","performance","refactorer"]'
         fi
         if ! jq -e --arg agent "$agent" 'type == "array" and index($agent) != null' <<<"$allowed_agents_json" >/dev/null 2>&1; then
             local routing_error
@@ -117,6 +117,35 @@ AgentExecutor.execute() {
             jq -cn --arg taskId "$task_id" --arg summary "$routing_error" \
               '{status:"FAILED",task_id:$taskId,exit_code:1,summary:$summary,session_id:"",duration_s:0}'
             AgentExecutor_ExitCode=1
+            return 1
+        fi
+    fi
+
+
+    local sdd_policy
+    sdd_policy="$(jq -r '.sddPolicy // false' "$ctx_file" 2>/dev/null || echo false)"
+    if [ "$agent" = "sdd" ] || [ "$sdd_policy" = "true" ]; then
+        local role_dir skill_dir required_role
+        role_dir="${MANUL_AGENT_DEFINITIONS_DIR:-$HOME/.agents/agents}"
+        skill_dir="${MANUL_AGENT_SKILLS_DIR:-$HOME/.agents/skills}"
+        for required_role in sdd orchestrator; do
+            if [ ! -r "$role_dir/$required_role.md" ]; then
+                jq -cn --arg taskId "$task_id" --arg path "$role_dir/$required_role.md" \
+                  '{status:"FAILED",task_id:$taskId,exit_code:66,summary:("Required SDD agent definition missing: " + $path),failure_code:"SDD_PREREQUISITE_MISSING",diagnostics:{stage:"sdd_prerequisite"}}'
+                AgentExecutor_ExitCode=66
+                return 1
+            fi
+        done
+        if [ ! -r "$skill_dir/specification-driven-development/SKILL.md" ]; then
+            jq -cn --arg taskId "$task_id" --arg path "$skill_dir/specification-driven-development/SKILL.md" \
+              '{status:"FAILED",task_id:$taskId,exit_code:66,summary:("Required SDD skill missing: " + $path),failure_code:"SDD_PREREQUISITE_MISSING",diagnostics:{stage:"sdd_prerequisite"}}'
+            AgentExecutor_ExitCode=66
+            return 1
+        fi
+        if [ "$sdd_policy" = "true" ] && [ "$agent" != "orchestrator" ] && [ "$agent" != "sdd" ]; then
+            jq -cn --arg taskId "$task_id" --arg role "$agent" \
+              '{status:"FAILED",task_id:$taskId,exit_code:65,summary:("SDD policy requires orchestrator/sdd entrypoint; refusing direct role: " + $role),failure_code:"SDD_POLICY_BYPASS",diagnostics:{stage:"sdd_policy"}}'
+            AgentExecutor_ExitCode=65
             return 1
         fi
     fi

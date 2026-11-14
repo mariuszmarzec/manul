@@ -110,3 +110,30 @@ The initial standalone source was extracted from
 `f4d69f9f300b90b7fbdf68bad144cff792d061e4`. The operator-specific
 `config.json` was intentionally not copied; use the example and keep runtime
 configuration outside version control.
+
+
+## Specification-Driven Development (SDD)
+
+Manul supports an opt-in, resumable SDD workflow shared with Globalskills.
+A repository enables SDD by merging a root
+`/.specification/config.yaml` with `mode: specification-driven`. No config
+means the normal Manul workflow. Bootstrap must be explicit:
+
+```text
+/manul sdd bootstrap
+/manul sdd <request>
+```
+
+Ordinary implementation and review-fix tasks in an SDD repository are
+automatically routed through the existing Orchestrator to the SDD agent.
+Manul blocks direct coding roles from bypassing the specification gate and
+fails closed if the SDD agent, Orchestrator role, or skill is missing.
+
+Baseline and Specification PRs contain requirements/configuration only and
+require human approval before implementation. The Implementation PR is
+separate and pinned to the approved specification commit and requirement IDs.
+Manul persists workflow checkpoints in SQLite and restores the latest
+checkpoint into the next task in the same conversation, independently of the
+LLM runtime session.
+
+See the [Globalskills SDD workflow and architecture](https://github.com/mariuszmarzec/globalskills#specification-driven-development-sdd).

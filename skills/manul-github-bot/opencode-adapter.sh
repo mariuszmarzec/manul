@@ -753,6 +753,10 @@ if [ -n "$OPT_AGENT" ]; then
     ProcessRunner_TmpStdout=""
     ProcessRunner_TmpStderr=""
     if [ "$_agent_check_rc" != "0" ]; then
+        if [ "$OPT_AGENT" = "sdd" ]; then
+            jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:66,summary:"Required native OpenCode agent sdd is unavailable; synchronize Globalskills before running SDD.",failure_code:"SDD_PREREQUISITE_MISSING",diagnostics:{stage:"sdd_agent_preflight"}}'
+            exit 66
+        fi
         log "OpenCode agent '$OPT_AGENT' is unavailable; using configured default_agent or built-in build"
         OPT_AGENT=""
     fi
