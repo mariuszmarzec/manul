@@ -79,6 +79,9 @@ status="$(python3 "$STATE" --db "$DB" status --workflow-id "sdd:test/repo:issue-
 [ "$(jq -r '.workflow.state.data.token' <<<"$status")" = "[REDACTED]" ] || { echo "FAIL: secret-like field not redacted"; FAIL=$((FAIL+1)); }
 events="$(jq -r '.workflow.events | length' <<<"$status")"
 if [ "$events" = "1" ]; then echo "PASS: workflow checkpoint persisted"; PASS=$((PASS+1)); else echo "FAIL: event count $events"; FAIL=$((FAIL+1)); fi
+context="$(python3 "$STATE" --db "$DB" context --repo "test/repo" --conversation-id "conv-1" --workflow-type sdd)"
+[ "$(jq -r '.found' <<<"$context")" = "true" ] && [ "$(jq -r '.workflow.phase' <<<"$context")" = "specification_pr_ready" ] || { echo "FAIL: workflow context could not be restored"; FAIL=$((FAIL+1)); }
+if [ "$(jq -r '.found' <<<"$context")" = "true" ]; then echo "PASS: durable workflow context can be resumed by conversation"; PASS=$((PASS+1)); fi
 python3 "$STATE" --db "$DB" record-output --output "$OUTPUT" --repo "test/repo" --task-id "task-1" --conversation-id "conv-1" >/dev/null
 status="$(python3 "$STATE" --db "$DB" status --workflow-id "sdd:test/repo:issue-42")"
 events="$(jq -r '.workflow.events | length' <<<"$status")"

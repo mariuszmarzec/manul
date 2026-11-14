@@ -122,6 +122,28 @@ def get_status(args):
     finally:
         db.close()
 
+
+def get_context(args):
+    db=connect(args.db)
+    try:
+        row=db.execute("""SELECT * FROM workflow_instances
+        WHERE repository=? AND conversationId=? AND workflowType=?
+        ORDER BY updatedAt DESC LIMIT 1""",
+        (args.repo,args.conversation_id,args.workflow_type)).fetchone()
+        if not row:
+            print(json.dumps({"found":False,"repo":args.repo,"conversationId":args.conversation_id}))
+            return 0
+        events=db.execute("""SELECT id,taskId,phase,status,payloadJson,createdAt
+        FROM workflow_events WHERE workflowId=? ORDER BY id DESC LIMIT 20""",
+        (row["workflowId"],)).fetchall()
+        workflow=dict(row)
+        workflow["state"]=json.loads(workflow.pop("stateJson"))
+        workflow["events"]=[{**dict(event),"payload":json.loads(event["payloadJson"])} for event in reversed(events)]
+        print(json.dumps({"found":True,"workflow":workflow},ensure_ascii=False))
+        return 0
+    finally:
+        db.close()
+
 def listing(args):
     db=connect(args.db)
     try:
@@ -141,6 +163,11 @@ def main():
     record.add_argument("--task-id",default=""); record.add_argument("--conversation-id",default="")
     record.set_defaults(func=record_output)
     status=subs.add_parser("status"); status.add_argument("--workflow-id",required=True); status.set_defaults(func=get_status)
+    context=subs.add_parser("context")
+    context.add_argument("--repo",required=True)
+    context.add_argument("--conversation-id",required=True)
+    context.add_argument("--workflow-type",default="sdd")
+    context.set_defaults(func=get_context)
     show=subs.add_parser("list"); show.add_argument("--repo",default=""); show.set_defaults(func=listing)
     args=parser.parse_args()
     if not args.db:

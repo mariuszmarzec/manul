@@ -79,8 +79,8 @@ def inspect(args):
     skills_dir=Path(args.skills_dir).expanduser()
     prompt=args.prompt.strip()
     first=prompt.split(maxsplit=1)[0].lower() if prompt else ""
-    bootstrap=args.agent=="sdd" and first=="bootstrap"
-    if args.action!="IMPLEMENT":
+    bootstrap=args.action=="IMPLEMENT" and args.agent=="sdd" and first=="bootstrap"
+    if args.action not in {"IMPLEMENT","REVIEW_FIX"}:
         return emit(True,mode="standard",route_agent=args.agent,reason="non-implementation task")
     try:
         initialized,mode=read_config(root/".specification"/"config.yaml")

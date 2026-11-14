@@ -5059,7 +5059,7 @@ PROMPT_APPEND
     # may initialize a repository. Policy failures are terminal, with no fallback.
     local SDD_POLICY_MODE="standard" SDD_POLICY_ACTIVE=false SDD_POLICY_OUTPUT=""
     local SDD_POLICY_OK="true" SDD_POLICY_ROUTE="" SDD_POLICY_ERROR=""
-    if [ "$TASK_EXECUTION_KIND" = "repository" ] && [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+    if [ "$TASK_EXECUTION_KIND" = "repository" ] && [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "REVIEW_FIX" ]]; then
       SDD_POLICY_OUTPUT="$(python3 "$DAEMON_SCRIPT_DIR/sdd-policy.py" inspect \
         --repo-root "$WORKDIR" \
         --agent "${AGENT:-}" \
@@ -5104,7 +5104,7 @@ For each meaningful SDD lifecycle milestone, emit a machine-readable checkpoint 
 
 MANUL_WORKFLOW_STATE_BEGIN
 {
-  "workflowId": "sdd:<owner/repo>:<stable-source-id>",
+  "workflowId": "sdd:<owner/repo>:<conversation-id>",
   "workflowType": "sdd",
   "repository": "<owner/repo>",
   "phase": "<phase_slug>",
@@ -5127,6 +5127,18 @@ SDD_CHECKPOINT_PROTOCOL
           fail_sdd_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not load the required SDD skill into task context." "${PR_NUM_FROM_URL:-}"
           return 0
         }
+        # Restore the latest durable workflow checkpoint for this conversation.
+        # It is independent of the runtime session pointer and survives model/runtime changes.
+        SDD_PREVIOUS_STATE="$(python3 "$DAEMON_SCRIPT_DIR/workflow-state.py" --db "$DB" context \
+          --repo "$REPO" --conversation-id "$CONVERSATION_ID" --workflow-type sdd 2>>"$LOG" || true)"
+        if [ "$(printf '%s' "$SDD_PREVIOUS_STATE" | jq -r '.found // false' 2>/dev/null || echo false)" = "true" ]; then
+          {
+            printf '\n\n--- Durable SDD workflow checkpoint (Manul SQLite) ---\n'
+            printf '%s\n' "$SDD_PREVIOUS_STATE" | jq .
+            printf '\nUse this checkpoint as the resumable workflow state. Verify referenced PRs/commits against GitHub before acting.\n'
+          } >> "$TASK_PROMPT_FILE"
+          lc_log "SDD_WORKFLOW_RESUMED" "task=$COMMENT_ID repo=$REPO conversation=$CONVERSATION_ID"
+        fi
         log "dispatch: SDD policy active for $REPO; selected role=${AGENT:-sdd}"
         lc_log "SDD_POLICY_ACTIVE" "task=$COMMENT_ID repo=$REPO mode=$SDD_POLICY_MODE agent=${AGENT:-sdd}"
       fi
