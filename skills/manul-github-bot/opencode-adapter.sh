@@ -219,8 +219,11 @@ trap cleanup_opencode_task_config EXIT HUP INT TERM
 # recognise either default filename; OpenCode remains responsible for loading it.
 _OPENCODE_BASE_CONFIG="${OPENCODE_CONFIG:-}"
 if [ -z "$_OPENCODE_BASE_CONFIG" ]; then
-    for _candidate in "$HOME/.config/opencode/opencode.json" "$HOME/.config/opencode/opencode.jsonc"; do
-        if [ -f "$_candidate" ]; then _OPENCODE_BASE_CONFIG="$_candidate"; break; fi
+    for _config_root in "${OPENCODE_CONFIG_DIR:-}" "$HOME/.config/opencode"; do
+        [ -n "$_config_root" ] || continue
+        for _candidate in "$_config_root/opencode.json" "$_config_root/opencode.jsonc"; do
+            if [ -f "$_candidate" ]; then _OPENCODE_BASE_CONFIG="$_candidate"; break 2; fi
+        done
     done
 fi
 _TASK_WORKSPACE_ROOT_INPUT="${MANUL_TASK_WORKSPACE_ROOT:-}"
