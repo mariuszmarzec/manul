@@ -82,8 +82,13 @@ def inspect(args):
     bootstrap=args.action=="IMPLEMENT" and args.agent=="sdd" and first=="bootstrap"
     if args.action not in {"IMPLEMENT","REVIEW_FIX"}:
         return emit(True,mode="standard",route_agent=args.agent,reason="non-implementation task")
+    spec_dir=root/".specification"
+    if spec_dir.is_symlink():
+        return emit(False,mode="invalid",error="Invalid SDD configuration: .specification directory must not be a symlink")
+    if spec_dir.exists() and not spec_dir.is_dir():
+        return emit(False,mode="invalid",error="Invalid SDD configuration: .specification must be a directory")
     try:
-        initialized,mode=read_config(root/".specification"/"config.yaml")
+        initialized,mode=read_config(spec_dir/"config.yaml")
     except (OSError,UnicodeError,ValueError) as exc:
         return emit(False,mode="invalid",error=f"Invalid SDD configuration: {exc}")
     if not initialized:

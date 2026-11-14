@@ -52,13 +52,20 @@ policy:
 EOF
 AGENT=""; PROMPT=""
 run_case "ordinary task in SDD repo routes through orchestrator" expect_sdd_route
-AGENT=coder; PROMPT="Implement a feature"
+AGENT=sdd; PROMPT="Change requirement behavior"
+run_case "explicit SDD role stays on the SDD agent" expect_sdd_route
+ACTION=REVIEW_FIX; AGENT=""; PROMPT="Fix review feedback"
+run_case "review-fix in SDD repo stays behind SDD routing" expect_sdd_route
+ACTION=IMPLEMENT; AGENT=coder; PROMPT="Implement a feature"
 run_case "direct Coder bypass is blocked" expect_blocked
 AGENT=sdd; PROMPT="bootstrap"
 run_case "bootstrap cannot overwrite initialized baseline" expect_blocked
 rm -f "$ROLE_DIR/sdd.md"; AGENT=""; PROMPT=""
 run_case "missing SDD agent fails closed" expect_blocked
 printf '# SDD agent\n' > "$ROLE_DIR/sdd.md"
+printf '{"agents":["sdd","coder"]}\n' > "$MANUL_CONFIG"
+run_case "missing orchestrator allow-list entry fails closed" expect_blocked
+printf '{"agents":["orchestrator","sdd","coder"]}\n' > "$MANUL_CONFIG"
 rm -f "$SKILLS_DIR/specification-driven-development/SKILL.md"
 run_case "missing SDD skill fails closed" expect_blocked
 printf '# SDD skill\n' > "$SKILLS_DIR/specification-driven-development/SKILL.md"

@@ -1137,6 +1137,29 @@ test_shorthand_agent_routes_explicit_role() {
   [ "$agent" = "coder" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "add unit tests" ]
 }
 
+# Test 50: /manul sdd <task> is parsed as the reserved SDD role, even on legacy allowlists
+test_sdd_command_is_parsed() {
+  local now output agent selection prompt action
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "102" --comment-id "319" --body "/manul sdd update freezer requirements" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  agent="$(echo "$output" | jq -r '.command.agent // empty')"
+  selection="$(echo "$output" | jq -r '.command.agentSelection // empty')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  action="$(echo "$output" | jq -r '.command.action // empty')"
+  [ "$agent" = "sdd" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "update freezer requirements" ] && [ "$action" = "IMPLEMENT" ]
+}
+
+# Test 51: explicit bootstrap is parsed without implicit initialization
+test_sdd_bootstrap_is_parsed() {
+  local now output agent selection prompt
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "102" --comment-id "320" --body "/manul sdd bootstrap" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  agent="$(echo "$output" | jq -r '.command.agent // empty')"
+  selection="$(echo "$output" | jq -r '.command.agentSelection // empty')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  [ "$agent" = "sdd" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "bootstrap" ]
+}
+
 # Test 42: unknown role supplied through --agent is preserved for fail-closed validation
 test_unknown_agent_flag_is_not_silently_discarded() {
   local now output agent selection prompt
@@ -1240,6 +1263,8 @@ run_test "Test 41: shorthand role routes explicitly" test_shorthand_agent_routes
 run_test "Test 42: unknown --agent is preserved for fail-closed validation" test_unknown_agent_flag_is_not_silently_discarded
 run_test "Test 43: --auto before run is parsed and stripped" test_auto_flag_before_run_is_parsed
 run_test "Test 44: --auto with --agent is parsed and stripped" test_auto_flag_with_explicit_agent_is_parsed
+run_test "Test 50: /manul sdd command is parsed" test_sdd_command_is_parsed
+run_test "Test 51: /manul sdd bootstrap is parsed explicitly" test_sdd_bootstrap_is_parsed
 
 # End-to-end test
 echo ""
