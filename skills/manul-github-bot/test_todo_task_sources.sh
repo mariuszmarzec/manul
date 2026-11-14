@@ -846,7 +846,9 @@ assert_eq "partial local write keeps one result subtask" "1" "$partial_local_chi
 partial_local_child_status=$(jq -r .[0].subTasks[0].isToDo "$TODO_MCP_FIXTURE")
 assert_eq "partial local write leaves result subtask pending" "true" "$partial_local_child_status"
 partial_local_description="$(jq -r .[0].subTasks[0].description "$TODO_MCP_FIXTURE")"
-assert_eq "local report's first line is the user-facing short answer" "Local report answer with exact content." "$(head -n 1 <<<"$partial_local_description")"
+local_report_first_line="$(head -n 1 <<<"$partial_local_description")"
+assert_eq "local report's first line is the user-facing short answer" "Local report answer with exact content." "${local_report_first_line%  }"
+assert_eq "local report's first line retains its Markdown hard-break marker" "  " "${local_report_first_line: -2}"
 assert_not_contains "local report marker is not the first description line" "$(head -n 1 <<<"$partial_local_description")" "<!-- MANUL_REPORT_RESULT"
 assert_contains "local report includes a task-context section" "$partial_local_description" "## Kontekst zadania"
 assert_contains "local report identifies Todo Local as its source" "$partial_local_description" "**Źródło:** Todo Local"
