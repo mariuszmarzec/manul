@@ -17,7 +17,7 @@ PROVIDER="$HOME_DIR/.caracal/env.sh"
 BIN_DIR="$TMP/bin"
 PROOF="$TMP/opencode-proof.txt"
 PROMPT="$TMP/prompt.md"
-mkdir -p "$HOME_DIR/.config/opencode" "$HOME_DIR/.caracal" "$BIN_DIR"
+mkdir -p "$HOME_DIR/.config/opencode" "$HOME_DIR/.caracal" "$BIN_DIR" "$TMP/runtime/workspace/ws-caracal"
 cat >"$CONFIG" <<'JSONC'
 {
   // Operator-owned static MCP entry; Manul must not rewrite this file.
@@ -108,7 +108,7 @@ pass "Manul refreshes Caracal provider env per task, verifies connection, and ke
 : >"$PROOF"
 out="$(run_adapter caracal-disconnected disconnected)" || true
 [ "$(printf '%s' "$out" | jq -r '.status')" = "FAILED" ] || fail "disconnected Caracal did not fail closed: $out"
-[ "$(printf '%s' "$out" | jq -r '.failure_code')" = "CARACAL_MCP_UNAVAILABLE" ] || fail "disconnected Caracal failure code is missing: $out"
+[ "$(printf '%s' "$out" | jq -r '.failure_code')" = "PRE_EXECUTION_FAILURE" ] || fail "disconnected Caracal failure code is missing: $out"
 ! grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent started despite a disconnected mandatory Caracal MCP"
 pass "Manul blocks model startup when configured Caracal MCP is disconnected"
 
