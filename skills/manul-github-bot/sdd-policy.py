@@ -91,7 +91,16 @@ def inspect(args):
             return emit(True,mode="standard",route_agent=args.agent,reason="no SDD config")
         if not bootstrap:
             return emit(False,mode="missing",error="SDD is not initialized. No files were changed. Run /manul sdd bootstrap explicitly.")
+        try:
+            manul_config=json.loads(Path(args.manul_config).read_text(encoding="utf-8"))
+        except (OSError,UnicodeError,json.JSONDecodeError) as exc:
+            return emit(False,mode="bootstrap",error=f"Cannot read Manul role configuration: {exc}")
+        allowed=manul_config.get("agents",[])
+        if not isinstance(allowed,list):
+            return emit(False,mode="bootstrap",error="Manul agents configuration is not an array")
         for role in ("sdd","orchestrator"):
+            if role not in allowed:
+                return emit(False,mode="bootstrap",error=f"Manul role '{role}' is not enabled in config.json agents[]; update Manul configuration")
             error=require_role(role,agent_dir,args.runtime,root)
             if error:
                 return emit(False,mode="bootstrap",error=f"SDD prerequisite missing: {error}")
