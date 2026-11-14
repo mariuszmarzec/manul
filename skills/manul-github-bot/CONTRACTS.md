@@ -656,13 +656,21 @@ The poller records a distinct success or error for each enabled provider in
 providers or the daemon from continuing. Missing standalone transport files
 are an explicit provider error, never a successful silent skip.
 
-Manul does not depend on Caracal and does not read Caracal endpoint/token
-secrets, inject a Caracal MCP entry, or run a Caracal connectivity preflight.
-OpenCode operator configuration is loaded by OpenCode itself. Manul preserves
-`OPENCODE_CONFIG` and operator JSON/JSONC files, contributes only a temporary
-`OPENCODE_CONFIG_CONTENT` overlay, and injects Manul-owned MCP names only when
-they do not collide with known operator entries. Optional MCP connectivity
-never blocks OpenCode task startup.
+Caracal remains operator-owned. If the operator's static effective OpenCode
+configuration enables `caracal-rag`, the OpenCode adapter refreshes its live
+provider URL/token from `~/.caracal/env.sh` for each task, passes them only to
+the child OpenCode process, and verifies that Caracal is connected using the
+same binary and effective configuration that will run the agent. Configured
+Caracal failures block agent startup as pre-execution infrastructure failures.
+The provider secrets are never copied into `~/.manul/.env`, task artifacts or
+logs. Manul does not inject or rewrite the Caracal MCP entry or modify
+operator JSON/JSONC files. If the static entry is absent or disabled, Caracal
+is not loaded or required. OpenCode operator configuration is loaded by
+OpenCode itself. Manul preserves `OPENCODE_CONFIG` and operator JSON/JSONC
+files, contributes only a temporary `OPENCODE_CONFIG_CONTENT` overlay, and
+injects Manul-owned MCP names only when they do not collide with known
+operator entries. Other optional MCP connectivity never blocks OpenCode task
+startup.
 
 A Todo root is queued once with its complete subtask tree. Descendants are ordered
 implementation steps, not separate queue entries. The adapter preserves the
