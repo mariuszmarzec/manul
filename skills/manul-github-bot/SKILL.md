@@ -633,9 +633,17 @@ user-owned and mode `700`, and redact credentials before sharing artifacts.
 The operator `.env` is runtime-owned and mode 600. It carries only explicitly
 supported provider variables, including custom backend paths and
 `OPENCODE_CONFIG`, plus credentials explicitly named by enabled task sources.
-Caracal is not a Manul dependency: Manul does not read Caracal secrets, persist
-Caracal endpoint/token values, inject a `caracal-rag` MCP server, or perform a
-Caracal preflight.
+Caracal remains operator-owned; its URL and token are never copied into
+`~/.manul/.env` or task artifacts. When the operator's static effective
+OpenCode configuration enables `mcp.servers.caracal-rag`, the OpenCode adapter
+loads the current provider environment from `~/.caracal/env.sh` for that task
+(with `CARACAL_RESOLVE_LIVE=1`), passes the values only to the OpenCode process,
+and verifies `caracal-rag` through that same binary/configuration before agent
+startup. A missing provider or disconnected configured Caracal server is a
+pre-execution infrastructure failure. Manul does not inject or rewrite the
+Caracal MCP entry or modify operator JSON/JSONC files. If Caracal is absent or
+disabled in the operator's static config, the adapter does not load its
+provider or require Caracal.
 
 OpenCode loads the operator's JSON or JSONC configuration itself. Manul leaves
 `OPENCODE_CONFIG` and all operator config files untouched, then supplies a
