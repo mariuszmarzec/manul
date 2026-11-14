@@ -863,7 +863,7 @@ if [ "$CARACAL_CONFIGURED" = "1" ]; then
     _caracal_probe_rc="${_caracal_probe_header%%|*}"
     ProcessRunner_TmpStdout=""
     ProcessRunner_TmpStderr=""
-    if ! grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag' "$_caracal_probe_stdout"; then
+    if ! grep -Eiq '(^|[[:space:]])caracal-rag[[:space:]]+connected([[:space:]]|$)|(^|[[:space:]])connected[[:space:]]+caracal-rag([[:space:]]|$)' "$_caracal_probe_stdout"; then
         append_redacted_stderr "$_caracal_probe_stderr"
         log "OpenCode Caracal MCP preflight failed (mcp list exit ${_caracal_probe_rc:-unknown}); agent was not started"
         jq -cn --arg task_id "$OPT_TASK_ID" \
