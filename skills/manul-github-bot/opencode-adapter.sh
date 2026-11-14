@@ -841,6 +841,34 @@ if [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ]; then
     log "optional Manul local Todo MCP is configured when its reserved server name is free"
 fi
 
+# Validate Caracal through the same OpenCode binary, global static config,
+# task-scoped overlay and process environment that will execute the agent.
+# Ignore mcp-list's aggregate exit code when Caracal itself is connected, since
+# an unrelated optional MCP (for example Fiteo) may be offline.
+if [ "$CARACAL_CONFIGURED" = "1" ]; then
+    _caracal_probe_timeout="${MANUL_CARACAL_MCP_PROBE_TIMEOUT_SECONDS:-45}"
+    if ! [[ "$_caracal_probe_timeout" =~ ^[0-9]+$ ]] || [ "$_caracal_probe_timeout" -lt 1 ] || [ "$_caracal_probe_timeout" -gt 180 ]; then
+        _caracal_probe_timeout=45
+    fi
+    _caracal_probe_stdout="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stdout"
+    _caracal_probe_stderr="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
+    ProcessRunner_TmpStdout="$_caracal_probe_stdout"
+    ProcessRunner_TmpStderr="$_caracal_probe_stderr"
+    _caracal_probe_result="$(ProcessRunner.run --timeout "$_caracal_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" mcp list)"
+    _caracal_probe_header="$(printf '%s\n' "$_caracal_probe_result" | head -n 1)"
+    _caracal_probe_rc="${_caracal_probe_header%%|*}"
+    ProcessRunner_TmpStdout=""
+    ProcessRunner_TmpStderr=""
+    if ! grep -Eiq 'caracal-rag[[:space:]].*connected|connected.*caracal-rag' "$_caracal_probe_stdout"; then
+        append_redacted_stderr "$_caracal_probe_stderr"
+        log "OpenCode Caracal MCP preflight failed (mcp list exit ${_caracal_probe_rc:-unknown}); agent was not started"
+        jq -cn --arg task_id "$OPT_TASK_ID" \
+            '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"OpenCode did not report caracal-rag as connected. Check the static OpenCode MCP entry and the Caracal provider endpoint/authentication.",failure_code:"CARACAL_MCP_UNAVAILABLE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
+        exit 78
+    fi
+    log "OpenCode reports caracal-rag connected using the task's effective configuration"
+fi
+
 # The preflight contract checks that the selected OpenCode binary and the
 # task-scoped config can start. Optional MCP servers never gate agent startup.
 if [ "$OPT_PREFLIGHT_ONLY" = "true" ]; then
