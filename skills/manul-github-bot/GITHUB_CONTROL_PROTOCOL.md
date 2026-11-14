@@ -253,3 +253,29 @@ bash skills/manul-github-bot/test_github_control_integration.sh
 ```
 
 For behavioural changes, also run the relevant daemon/concurrency/review workflow tests.
+
+
+## SDD routing and prerequisites
+
+A repository opts into SDD only by merging the root
+`/.specification/config.yaml` with `mode: specification-driven`. Missing
+configuration leaves the standard workflow unchanged.
+
+- Only explicit `/manul sdd bootstrap` may initialize a repository.
+- `/manul sdd <task>` fails when configuration is missing; it does not
+  bootstrap implicitly.
+- Ordinary `IMPLEMENT` and `REVIEW_FIX` tasks in an initialized SDD
+  repository are routed to the Orchestrator with the SDD skill context.
+  The Orchestrator delegates the lifecycle to the `sdd` agent.
+- Direct implementation-role shorthand is blocked for these tasks.
+- Manul verifies the `agents[]` allow-list, canonical role files and the
+  shared SDD skill before model invocation. OpenCode native role availability
+  is checked as well. Missing prerequisites fail closed, with no default-agent
+  fallback.
+- The same SDD agent and skill are used by local OpenCode and Manul. The agent
+  must not depend on Manul's runtime session or database.
+
+The task dispatcher persists SDD checkpoint blocks in Manul's SQLite workflow
+registry. Checkpoints are keyed by workflow ID and conversation, and the latest
+state is added to subsequent task context. Human approval remains a GitHub
+PR/merge event and must be independently revalidated before progressing.

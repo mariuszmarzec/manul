@@ -265,3 +265,51 @@ Because the external orchestrator uses the same Manul task interface, changes to
 ## Runtime note
 
 `MANUL_DIR` defaults to `~/.manul`. That path is an implementation detail; do not encode the current filesystem path into new orchestration APIs.
+
+ 
+## Generic workflow persistence
+
+Manul has two separate kinds of durable state:
+
+- Task execution state in `processed_comments` and `conversations`: queue
+  status, attempts, leases, workspace ownership, blocked-user state and
+  runtime `session_id`.
+- Domain-neutral workflow checkpoints in `workflow_instances` and
+  `workflow_events` inside the same `manul.db`.
+
+A workflow owner emits a machine-readable checkpoint block in the task output.
+The daemon validates the block against the trusted task repository, redacts
+secret-like fields, deduplicates replayed events and persists the latest
+snapshot plus append-only history. Agents never read or write the DB. This is
+an additive state registry, not a second task queue or a graph engine.
+
+The next task in the same repository conversation receives the latest stored
+workflow snapshot in its prompt. This makes phases and handoffs resumable after
+runtime/model changes, user pauses or Manul restarts, without depending on the
+previous LLM session. The session pointer remains a separate optimization for
+runtimes that can explicitly continue.
+
+Inspect workflows:
+
+```bash
+python3 skills/manul-github-bot/workflow-state.py list --repo OWNER/REPO
+python3 skills/manul-github-bot/workflow-state.py status --workflow-id WORKFLOW_ID
+python3 skills/manul-github-bot/workflow-state.py context --repo OWNER/REPO --conversation-id CONVERSATION_ID --workflow-type sdd
+```
+
+GitHub remains authoritative for approvals and PR state. A checkpoint is a
+resume hint, not proof that a PR was merged or a requirement was approved.
+New workflow types can use this registry without changing the normal Manul
+task lifecycle.
+
+## SDD command and routing
+
+- `/manul sdd bootstrap` explicitly creates the initial Baseline PR. It is
+  blocked if the command is not explicit, if the repository config already
+  exists, or if the SDD role/skill is unavailable.
+- `/manul sdd <request>` starts an SDD change and requires an existing
+  `.specification/config.yaml`.
+- Ordinary implementation and review-fix tasks in a configured SDD repository
+  are routed by Manul to the Orchestrator, which delegates the product-change
+  lifecycle to SDD. Direct coding-role requests cannot bypass the gate.
+- Repositories without the config retain the standard workflow.
