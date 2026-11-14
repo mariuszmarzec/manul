@@ -2345,6 +2345,45 @@ post_task_failure_feedback() {
   return 1
 }
 
+
+# SDD policy failures are deterministic and terminal. Missing roles/skills,
+# invalid configuration, and prohibited direct coding roles cannot be repaired
+# by retrying an agent execution.
+fail_sdd_policy_task() {
+  local comment_id="$1" safe_comment_id="$2" claim_token="$3" repo="$4" issue_num="$5"
+  local workspace_id="$6" reply_to="$7" reason="$8" pr_number="${9:-}"
+  local changed
+  changed="$(sqlite3 "$DB" "
+    UPDATE processed_comments
+    SET status='failed',
+        attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+        processedAt=datetime('now'),
+        agentStartedAt=NULL,
+        heartbeatAt=NULL,leaseExpiresAt=NULL,workerPid=NULL,claimToken=NULL,
+        nextAttemptAt=NULL,session_id=NULL
+    WHERE commentId='$(sql_escape "$safe_comment_id")'
+      AND status='running'
+      AND claimToken='$(sql_escape "$claim_token")';
+    SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
+  if [ "$changed" != "1" ]; then
+    log "ERROR: could not finalize SDD policy failure for $comment_id (changes=${changed:-unknown})"
+    lc_log "SDD_POLICY_FINALIZATION_FAILED" "task=$comment_id"
+    release_task_lock
+    return 1
+  fi
+  stop_heartbeat "$comment_id"
+  if [ -n "$workspace_id" ]; then
+    workspace_release "$workspace_id" "$comment_id" || log "WARN: workspace release after SDD policy failure did not match task $comment_id"
+  fi
+  release_task_repo_lock "$repo"
+  release_task_lock
+  set_activity "none" "idle"
+  log "dispatch: task $comment_id blocked before agent start by SDD policy: $reason"
+  lc_log "SDD_POLICY_BLOCKED" "task=$comment_id repo=$repo reason=$reason"
+  post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "$reason" "$pr_number" "sdd_policy" || true
+  return 0
+}
+
 # Finish a pre-execution failure through the same attempt/ownership state machine
 # as agent failures. This prevents early workspace/repository errors from leaving
 # tasks running until the watchdog silently marks them failed.
@@ -5014,6 +5053,85 @@ PROMPT_APPEND
 
     fi
 
+
+    # Apply repository-level SDD policy before any model/runtime invocation.
+    # Missing config keeps the ordinary workflow; only explicit "sdd bootstrap"
+    # may initialize a repository. Policy failures are terminal, with no fallback.
+    local SDD_POLICY_MODE="standard" SDD_POLICY_ACTIVE=false SDD_POLICY_OUTPUT=""
+    local SDD_POLICY_OK="true" SDD_POLICY_ROUTE="" SDD_POLICY_ERROR=""
+    if [ "$TASK_EXECUTION_KIND" = "repository" ] && [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+      SDD_POLICY_OUTPUT="$(python3 "$DAEMON_SCRIPT_DIR/sdd-policy.py" inspect \
+        --repo-root "$WORKDIR" \
+        --agent "${AGENT:-}" \
+        --prompt "$TASK_PROMPT" \
+        --action "$TASK_ACTION" \
+        --runtime "$AGENT_RUNTIME" \
+        --manul-config "$CONFIG" \
+        --role-dir "${MANUL_AGENT_DEFINITIONS_DIR:-$HOME/.agents/agents}" \
+        --skills-dir "${MANUL_AGENT_SKILLS_DIR:-$HOME/.agents/skills}" 2>>"$LOG")" || true
+      SDD_POLICY_OK="$(printf '%s' "$SDD_POLICY_OUTPUT" | jq -r '.ok // false' 2>/dev/null || echo false)"
+      SDD_POLICY_MODE="$(printf '%s' "$SDD_POLICY_OUTPUT" | jq -r '.mode // "invalid"' 2>/dev/null || echo invalid)"
+      SDD_POLICY_ROUTE="$(printf '%s' "$SDD_POLICY_OUTPUT" | jq -r '.route_agent // ""' 2>/dev/null || true)"
+      SDD_POLICY_ERROR="$(printf '%s' "$SDD_POLICY_OUTPUT" | jq -r '.error // "SDD policy inspection failed"' 2>/dev/null || echo "SDD policy inspection failed")"
+      if [ "$SDD_POLICY_OK" != "true" ]; then
+        fail_sdd_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$SDD_POLICY_ERROR" "${PR_NUM_FROM_URL:-}"
+        return 0
+      fi
+      if [ "$SDD_POLICY_MODE" = "specification-driven" ] || [ "$SDD_POLICY_MODE" = "bootstrap" ]; then
+        SDD_POLICY_ACTIVE=true
+        if [ -n "$SDD_POLICY_ROUTE" ]; then AGENT="$SDD_POLICY_ROUTE"; fi
+        cat >> "$TASK_PROMPT_FILE" <<'SDD_ROUTING_CONTEXT'
+
+## Enforced repository policy: Specification-Driven Development
+
+This repository is in an SDD workflow (or is in an explicitly requested bootstrap).
+The canonical SDD skill is supplied below as trusted task context.
+
+- Follow the SDD skill lifecycle and its human approval gates.
+- In an initialized SDD repository, if you are the Orchestrator, delegate the product-change lifecycle to the sdd agent. Do not send implementation to Coder before a Specification PR is approved and merged.
+- For an explicit bootstrap, perform only the baseline audit and Baseline PR; do not implement product code.
+- Preserve workflow ownership in delegated prompts with workflow_owner: sdd to avoid recursive routing.
+- Never bypass missing prerequisites or fall back to a default agent.
+
+SDD_ROUTING_CONTEXT
+        SDD_SKILL_FILE="${MANUL_AGENT_SKILLS_DIR:-$HOME/.agents/skills}/specification-driven-development/SKILL.md"
+        {
+          printf '\n\n--- Canonical specification-driven-development skill ---\n'
+          cat "$SDD_SKILL_FILE"
+          printf '\n\n--- SDD workflow checkpoint protocol ---\n'
+          cat <<'SDD_CHECKPOINT_PROTOCOL'
+For each meaningful SDD lifecycle milestone, emit a machine-readable checkpoint block in the final task output before TASK_DONE or TASK_NEEDS_USER:
+
+MANUL_WORKFLOW_STATE_BEGIN
+{
+  "workflowId": "sdd:<owner/repo>:<stable-source-id>",
+  "workflowType": "sdd",
+  "repository": "<owner/repo>",
+  "phase": "<phase_slug>",
+  "status": "<active|waiting_human|blocked|completed>",
+  "data": {
+    "sourceIssue": "<issue-or-task>",
+    "baselinePr": "<optional PR number>",
+    "specificationPr": "<optional PR number>",
+    "approvedSpecificationCommit": "<optional SHA>",
+    "implementationTask": "<optional task ID>",
+    "implementationPr": "<optional PR number>",
+    "requirementIds": ["REQ-..."]
+  }
+}
+MANUL_WORKFLOW_STATE_END
+
+Emit only non-secret metadata. The daemon validates and persists checkpoints. Do not access Manul databases or runtime files.
+SDD_CHECKPOINT_PROTOCOL
+        } >> "$TASK_PROMPT_FILE" || {
+          fail_sdd_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not load the required SDD skill into task context." "${PR_NUM_FROM_URL:-}"
+          return 0
+        }
+        log "dispatch: SDD policy active for $REPO; selected role=${AGENT:-sdd}"
+        lc_log "SDD_POLICY_ACTIVE" "task=$COMMENT_ID repo=$REPO mode=$SDD_POLICY_MODE agent=${AGENT:-sdd}"
+      fi
+    fi
+
 # 6. Invoke implementation agent via AgentExecutor / AgentExecutionController.
      # The daemon never calls adapter scripts directly; the controller owns
      # timeout enforcement, session continuation, and result mapping.
@@ -5062,13 +5180,14 @@ PROMPT_APPEND
        --arg executionKind "$TASK_EXECUTION_KIND" \
        --arg agent "${AGENT:-}" \
        --arg agentSelection "$AGENT_SELECTION" \
+       --argjson sddPolicy "$SDD_POLICY_ACTIVE" \
        --argjson autoAccept "$TASK_AUTO_ACCEPT" \
        --argjson attempt "$current_attempt" \
        --argjson timeout "$AGENT_TIMEOUT" \
        --arg sessionId "$prev_session_id" \
        --arg stdoutFile "$STDOUT_FILE" \
        --arg stderrFile "$STDERR_FILE" \
-       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, workspaceRoot: $workspaceRoot, workdir: $workdir, executionKind: $executionKind, agent: $agent, agentSelection: $agentSelection, autoAccept: $autoAccept, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
+       '{taskId: $taskId, prompt: $prompt, workspace: $workspace, workspaceRoot: $workspaceRoot, workdir: $workdir, executionKind: $executionKind, agent: $agent, agentSelection: $agentSelection, sddPolicy: $sddPolicy, autoAccept: $autoAccept, attempt: $attempt, timeout: $timeout, session_id: $sessionId, stdout_file: $stdoutFile, stderr_file: $stderrFile}' \
        > "$EXEC_CTX_FILE"
 
      # Validate the selected runtime before advertising TASK_STARTED. The
@@ -5181,6 +5300,15 @@ PROMPT_APPEND
       exec_failure_code="$(printf '%s' "$executor_output" | jq -r '.failure_code // ""' 2>/dev/null)"
       exec_failure_stage="$(printf '%s' "$executor_output" | jq -r '.diagnostics.stage // ""' 2>/dev/null)"
       exec_raw_stderr="$(printf '%s' "$executor_output" | jq -r '.diagnostics.raw_stderr // ""' 2>/dev/null)"
+     # Record agent-emitted generic workflow checkpoints. The agent never
+     # accesses Manul's database; the daemon validates and persists its events.
+     if [ -s "$STDOUT_FILE" ] && [ -f "$DAEMON_SCRIPT_DIR/workflow-state.py" ]; then
+       if ! python3 "$DAEMON_SCRIPT_DIR/workflow-state.py" --db "$DB" record-output \
+          --output "$STDOUT_FILE" --repo "$REPO" --task-id "$COMMENT_ID" \
+          --conversation-id "$CONVERSATION_ID" >>"$LOG" 2>&1; then
+         log "WARN: workflow checkpoint persistence failed for task $COMMENT_ID"
+       fi
+     fi
      # Retain a runtime session only when the adapter explicitly requests
      # continuation. Completion, ordinary failures, and malformed continuation
      # results clear stale session state while preserving the workspace mapping.
