@@ -69,7 +69,7 @@ fi
 CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 export MANUL_CANONICAL_DIR="$CANONICAL_DIR"
 
-for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh manul-env.sh \
+for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh migrate-sdd-agent-config.sh sdd-policy.py workflow-state.py manul-env.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
              manul-shell.zsh update-manul.sh opencode-permissions.sh manul-daemon.sh task-process-control.sh manul-status.sh manul-query.sh manul-operator-context.py; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then
@@ -136,6 +136,12 @@ fi
 
 if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
     fail "Invalid JSON in $RUNTIME_DIR/config.json"
+fi
+
+# Add SDD and Orchestrator entrypoints to existing role allow-lists. Preserve
+# every operator role and config value; the migration backs up the original.
+if ! bash "$CANONICAL_DIR/migrate-sdd-agent-config.sh" "$RUNTIME_DIR/config.json"; then
+    fail "SDD agent allow-list migration failed"
 fi
 
 SELECTED_AGENT_RUNTIME="$(jq -r '.automation.agentRuntime // "openclaw"' "$RUNTIME_DIR/config.json")"

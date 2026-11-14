@@ -70,6 +70,9 @@ SCRIPTS=(
     # historical reference for the original OpenClaw-only invocation path.
     "manul-comments-remove.sh"
     "migrate-repository-config.sh"
+    "migrate-sdd-agent-config.sh"
+    "sdd-policy.py"
+    "workflow-state.py"
     "manul-conversation-linker.sh"
     "manul-conversation.sh"
     "manul-daemon.sh"

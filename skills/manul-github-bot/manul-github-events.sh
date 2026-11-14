@@ -138,8 +138,11 @@ parse_command() {
   local known_agents
   known_agents="$(jq -r '.agents[]?' "$CONFIG" 2>/dev/null | paste -sd ' ' -)"
   if [ -z "$known_agents" ]; then
-    known_agents="orchestrator sdd architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer"
+    known_agents="architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer"
   fi
+  # Keep SDD entrypoints parseable even before an existing installation has
+  # run the config migration. The dispatcher fails closed if not enabled.
+  known_agents="$known_agents orchestrator sdd"
 
   # Known actions
   local known_actions="run review-fix continue verify investigate status close"
