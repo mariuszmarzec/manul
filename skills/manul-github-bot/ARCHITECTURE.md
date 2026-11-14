@@ -108,11 +108,14 @@ The shared Todo MCP transport and local endpoint resolver are owned by
 globalskills/aicode and passed to Manul through exported environment paths.
 Manul does not carry duplicate client/resolver implementations; if the shared
 helper is absent, optional Todo source polling is skipped without preventing
-GitHub Issues or other source providers from running. Manul does not depend on
-Caracal, mutate OpenCode operator config, install Node/npm packages, or install
-the retired Fiteo task-creation plugin. OpenCode task settings are delivered via
-a temporary OPENCODE_CONFIG_CONTENT overlay while operator JSON/JSONC files
-remain untouched.
+GitHub Issues or other source providers from running. Caracal remains an
+operator-owned OpenCode MCP: when its static config entry is enabled, the
+OpenCode adapter refreshes the provider environment per task and validates
+connectivity before model startup without persisting secrets or mutating the
+operator config. Manul does not install Node/npm packages or the retired Fiteo
+task-creation plugin. OpenCode task settings are delivered via a temporary
+OPENCODE_CONFIG_CONTENT overlay while operator JSON/JSONC files remain
+untouched.
 
 The top-level `.repositories` array is authoritative both with and without explicit `.taskSources`. The installer removes legacy top-level `repositoryAllowlist` and nested `.taskSources[].repositories` duplicates without merging them into the global list.
 ## Task execution plane
