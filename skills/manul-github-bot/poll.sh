@@ -147,7 +147,7 @@ SIG="— manul 🐈"
 # in the prompt and the orchestrator decides (default coder).
 mapfile -t AGENTS < <(jq -r '.agents[]?' "$CONFIG" 2>/dev/null)
 if [ "${#AGENTS[@]}" -eq 0 ]; then
-  AGENTS=(architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer)
+  AGENTS=(orchestrator sdd architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer)
 fi
 AGENTS_JSON="$(printf '%s\n' "${AGENTS[@]}" | jq -R . | jq -sc .)"
 

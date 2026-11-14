@@ -138,7 +138,7 @@ parse_command() {
   local known_agents
   known_agents="$(jq -r '.agents[]?' "$CONFIG" 2>/dev/null | paste -sd ' ' -)"
   if [ -z "$known_agents" ]; then
-    known_agents="architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer"
+    known_agents="orchestrator sdd architect coder coder-cheap coder-strong coder-expert reviewer reviewer-expert reviewer-adversarial debugger debugger-expert researcher tester security performance refactorer"
   fi
 
   # Known actions

@@ -10,6 +10,8 @@
   "pollInterval": 60,
   "trigger": "/manul",
   "agents": [
+    "orchestrator",
+    "sdd",
     "architect",
     "coder",
     "coder-cheap",
