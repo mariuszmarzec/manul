@@ -309,6 +309,7 @@ if [ -n "$_workdir_real" ]; then export MANUL_TASK_WORKDIR="$_workdir_real"; fi
 # so refresh the provider's live URL/token in this task process only. Never
 # copy these credentials into ~/.manul/.env or the task-scoped config overlay.
 CARACAL_CONFIGURED=0
+_mcp_preflight_stage="caracal_mcp_preflight"
 if [ "$_TASK_EXECUTION_KIND_INPUT" != "operator_query" ]; then
     _caracal_config_state="$(python3 - "${_OPENCODE_BASE_CONFIG:-}" "${OPENCODE_CONFIG_CONTENT:-}" <<'PY_CARACAL_CONFIG'
 import json
