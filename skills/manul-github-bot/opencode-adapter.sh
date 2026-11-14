@@ -391,7 +391,7 @@ PY_CARACAL_CONFIG
         _caracal_env_diagnostics="$OPENCODE_TASK_CONFIG_DIR/caracal-provider.stderr"
         if [ ! -r "$CARACAL_ENV_FILE" ]; then
             jq -cn --arg task_id "$OPT_TASK_ID" --arg path "$CARACAL_ENV_FILE" \
-                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:("Caracal MCP is configured in OpenCode, but its provider environment is unavailable: " + $path),failure_code:"CARACAL_MCP_UNAVAILABLE",diagnostics:{stage:"caracal_provider_preflight",agent_started:false}}'
+                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:("Caracal MCP is configured in OpenCode, but its provider environment is unavailable: " + $path),failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
             exit 78
         fi
         export CARACAL_HOME CARACAL_RESOLVE_LIVE=1
@@ -399,7 +399,7 @@ PY_CARACAL_CONFIG
             unset CARACAL_RESOLVE_LIVE
             append_redacted_stderr "$_caracal_env_diagnostics"
             jq -cn --arg task_id "$OPT_TASK_ID" \
-                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"Caracal provider environment could not be loaded or its live endpoint check failed.",failure_code:"CARACAL_MCP_UNAVAILABLE",diagnostics:{stage:"caracal_provider_preflight",agent_started:false}}'
+                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"Caracal provider environment could not be loaded or its live endpoint check failed.",failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
             exit 78
         fi
         unset CARACAL_RESOLVE_LIVE
@@ -408,7 +408,7 @@ PY_CARACAL_CONFIG
            [[ "$CARACAL_MCP_URL" == *"{env:"* || "$CARACAL_MCP_URL" == *"127.0.0.1:0"* ]]; then
             append_redacted_stderr "$_caracal_env_diagnostics"
             jq -cn --arg task_id "$OPT_TASK_ID" \
-                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"Caracal provider did not supply a valid live HTTP(S) MCP URL and access token.",failure_code:"CARACAL_MCP_UNAVAILABLE",diagnostics:{stage:"caracal_provider_preflight",agent_started:false}}'
+                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"Caracal provider did not supply a valid live HTTP(S) MCP URL and access token.",failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
             exit 78
         fi
         export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
@@ -866,7 +866,7 @@ if [ "$CARACAL_CONFIGURED" = "1" ]; then
         append_redacted_stderr "$_caracal_probe_stderr"
         log "OpenCode Caracal MCP preflight failed (mcp list exit ${_caracal_probe_rc:-unknown}); agent was not started"
         jq -cn --arg task_id "$OPT_TASK_ID" \
-            '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"OpenCode did not report caracal-rag as connected. Check the static OpenCode MCP entry and the Caracal provider endpoint/authentication.",failure_code:"CARACAL_MCP_UNAVAILABLE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
+            '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"OpenCode did not report caracal-rag as connected. Check the static OpenCode MCP entry and the Caracal provider endpoint/authentication.",failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
         exit 78
     fi
     log "OpenCode reports caracal-rag connected using the task's effective configuration"
