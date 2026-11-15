@@ -20,9 +20,9 @@ set -euo pipefail
 printf 'mode=<%s> args=<%s>\\n' "${MOCK_OPENCODE_MODE-unset}" "$*" >> "$MOCK_TRACE_FILE"
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   case "${MOCK_OPENCODE_MODE:-v2-found}" in
-    v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]' ;;
-    v2-missing-sdd) printf '%s\n' '[{"id":"orchestrator"}]' ;;
-    v2-malformed) printf '%s\n' 'not-json' ;;
+    v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
+    v2-missing-sdd) printf '%s\n' '[{"id":"orchestrator"}]'; exit 0 ;;
+    v2-malformed) printf '%s\n' 'not-json'; exit 0 ;;
     v2-error) printf '%s\n' 'OpenCode server unavailable' >&2; exit 7 ;;
     v1-found|v1-missing-sdd) printf '%s\n' 'ERROR: Unknown subcommand "agents" for "opencode debug"' >&2; exit 1 ;;
     *) exit 64 ;;
