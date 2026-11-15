@@ -886,24 +886,65 @@ if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
     OPT_AGENT="manul-operator-query"
 fi
 
-# A missing native OpenCode agent definition is optional. Let OpenCode use the
-# operator's default_agent setting, or its built-in build agent when unset.
+# OpenCode V2 lists native agents as a JSON array via `debug agents`.
+# V1 compatibility falls back to the old singular `debug agent <name>`
+# command only when the plural command itself is unsupported.
+opencode_agent_discovery() {
+    local role="$1" stdout_file="$2" stderr_file="$3"
+    local result header rc
+
+    ProcessRunner_TmpStdout="$stdout_file"
+    ProcessRunner_TmpStderr="$stderr_file"
+    result="$(ProcessRunner.run --timeout 15 --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents)"
+    header="$(printf '%s\n' "$result" | head -n 1)"
+    rc="${header%%|*}"
+
+    if [ "$rc" = "0" ]; then
+        ProcessRunner_TmpStdout=""
+        ProcessRunner_TmpStderr=""
+        if ! jq -e 'type == "array" and all(.[]; type == "object" and (.id | type == "string"))' "$stdout_file" >/dev/null 2>&1; then
+            printf '%s' "error"
+        elif jq -e --arg role "$role" 'any(.[]; .id == $role)' "$stdout_file" >/dev/null 2>&1; then
+            printf '%s' "found"
+        else
+            printf '%s' "missing"
+        fi
+        return
+    fi
+
+    # Fall back only for the V1 CLI's unsupported plural command. A real V2
+    # server/runtime failure must remain a probe error, not a false missing role.
+    if ! grep -Eiq 'unknown (subcommand|command)|no command named|unrecognized command' "$stderr_file" "$stdout_file" 2>/dev/null; then
+        ProcessRunner_TmpStdout=""
+        ProcessRunner_TmpStderr=""
+        printf '%s' "error"
+        return
+    fi
+
+    result="$(ProcessRunner.run --timeout 15 --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agent "$role")"
+    header="$(printf '%s\n' "$result" | head -n 1)"
+    rc="${header%%|*}"
+    ProcessRunner_TmpStdout=""
+    ProcessRunner_TmpStderr=""
+    if [ "$rc" = "0" ]; then printf '%s' "found"; else printf '%s' "error"; fi
+}
+
+# A missing native OpenCode agent definition is optional for ordinary roles.
+# SDD is fail-closed because the policy requires its exact native agent.
 if [ -n "$OPT_AGENT" ]; then
     _agent_check_stdout="$OPENCODE_TASK_CONFIG_DIR/agent-check.stdout"
     _agent_check_stderr="$OPENCODE_TASK_CONFIG_DIR/agent-check.stderr"
-    ProcessRunner_TmpStdout="$_agent_check_stdout"
-    ProcessRunner_TmpStderr="$_agent_check_stderr"
-    _agent_check_result="$(ProcessRunner.run --timeout 15 --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agent "$OPT_AGENT")"
-    _agent_check_header="$(printf '%s\n' "$_agent_check_result" | head -n 1)"
-    _agent_check_rc="${_agent_check_header%%|*}"
-    ProcessRunner_TmpStdout=""
-    ProcessRunner_TmpStderr=""
-    if [ "$_agent_check_rc" != "0" ]; then
+    _agent_check_status="$(opencode_agent_discovery "$OPT_AGENT" "$_agent_check_stdout" "$_agent_check_stderr")"
+    if [ "$_agent_check_status" != "found" ]; then
         if [ "$OPT_AGENT" = "sdd" ]; then
-            jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:66,summary:"Required native OpenCode agent sdd is unavailable; synchronize Globalskills before running SDD.",failure_code:"SDD_PREREQUISITE_MISSING",diagnostics:{stage:"sdd_agent_preflight"}}'
+            if [ "$_agent_check_status" = "missing" ]; then
+                jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:66,summary:"Required native OpenCode agent sdd was not listed by OpenCode. Check its definition and discovery paths.",failure_code:"SDD_PREREQUISITE_MISSING",diagnostics:{stage:"sdd_agent_preflight"}}'
+            else
+                jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:66,summary:"Could not verify native OpenCode agent sdd with the available OpenCode CLI discovery commands.",failure_code:"SDD_AGENT_DISCOVERY_FAILED",diagnostics:{stage:"sdd_agent_preflight"}}'
+            fi
             exit 66
         fi
-        log "OpenCode agent '$OPT_AGENT' is unavailable; using configured default_agent or built-in build"
+        log "OpenCode agent '$OPT_AGENT' could not be verified ($_agent_check_status); using configured default_agent or built-in build"
         OPT_AGENT=""
     fi
 fi

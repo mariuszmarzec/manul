@@ -210,7 +210,7 @@ All tasks -> AGENT_RUNTIME -> OpenClaw / OpenCode / Codex / Claude Code
 Role selection -> adapter input, never a second runtime selector
 ```
 
-This means a plain `/manul run <task>` uses the configured backend (OpenClaw by default), and `/manul run --agent coder <task>` uses that same backend when its role definition is available. OpenCode uses its native `--agent` option only when `opencode debug agent <role>` confirms that the native agent exists; otherwise Manul omits the flag so OpenCode uses the operator's `default_agent` or built-in `build`. OpenClaw, Codex, and Claude Code prepend the role definition from `~/.agents/agents/<role>.md` when it exists. If that optional file is missing, the selected backend's default is used (OpenClaw's configured `main`). A role name that is not allowed by Manul's `agents[]` configuration is still rejected. This is direct CLI execution through the selected adapter, not an ACP session spawned by OpenClaw.
+This means a plain `/manul run <task>` uses the configured backend (OpenClaw by default), and `/manul run --agent coder <task>` uses that same backend when its role definition is available. OpenCode uses its native `--agent` option when `opencode debug agents` returns a JSON entry whose `id` matches the role. If the plural command is unsupported, Manul falls back to OpenCode V1's `opencode debug agent <role>` probe. A malformed list or runtime/probe error is not treated as proof that the agent is missing. OpenClaw, Codex, and Claude Code prepend the role definition from `~/.agents/agents/<role>.md` when it exists. If that optional file is missing, the selected backend's default is used (OpenClaw's configured `main`). A role name that is not allowed by Manul's `agents[]` configuration is still rejected. This is direct CLI execution through the selected adapter, not an ACP session spawned by OpenClaw.
 
 Use `/manul --auto run <task>` to run one task directly through OpenCode's
 native `opencode run --auto` option. Manul persists this per-task choice in
@@ -745,9 +745,10 @@ Check that the role is present in `agents[]` in
 `automation.agentRuntime`. A role not allowed by `agents[]` is rejected. If
 its optional definition file is missing, OpenClaw, Codex, and Claude Code use
 the selected backend's default behavior; OpenClaw uses `main`. OpenCode
-checks the native role with `opencode debug agent` and omits `--agent` when
-it is unavailable, allowing the operator's `default_agent` or built-in
-`build` to be used.
+checks native roles with `opencode debug agents` and passes `--agent` only
+when the JSON agent list contains the requested ID. It uses the singular
+`debug agent <name>` command only as a compatibility fallback when the
+plural command is unsupported by OpenCode V1.
 
 ### OpenClaw execution failure
 

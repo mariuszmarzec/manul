@@ -56,6 +56,66 @@ def opencode_binary():
              "/usr/local/bin/opencode","/usr/bin/opencode"]
     return next((p for p in options if p and Path(p).is_file() and os.access(p,os.X_OK)),None)
 
+def probe_opencode_agent(binary, role, root):
+    """Return (status, detail) using OpenCode V2 discovery, with a V1 fallback.
+
+    OpenCode V2 exposes the complete native-agent catalog as JSON through
+    `debug agents`. V1 used the singular `debug agent <name>` command.
+    A successful V2 response is authoritative: a missing ID is not retried
+    through the legacy command.
+    """
+    try:
+        result = subprocess.run(
+            [binary, "debug", "agents"],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "error", "OpenCode V2 agent discovery command could not be completed"
+
+    if result.returncode == 0:
+        try:
+            agents = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return "error", "OpenCode debug agents returned invalid JSON"
+        if not isinstance(agents, list) or any(
+            not isinstance(agent, dict) or not isinstance(agent.get("id"), str)
+            for agent in agents
+        ):
+            return "error", "OpenCode debug agents returned an unexpected JSON structure"
+        if any(agent["id"] == role for agent in agents):
+            return "found", ""
+        return "missing", f"native OpenCode agent '{role}' is not listed by OpenCode"
+
+    command_error = f"{result.stdout}\n{result.stderr}".lower()
+    if not re.search(
+        r"unknown (?:subcommand|command)|no command named|unrecognized command",
+        command_error,
+    ):
+        return "error", f"OpenCode debug agents failed with exit code {result.returncode}"
+
+    # OpenCode V1 compatibility: its singular command is the only discovery
+    # interface available there. Do not use it to second-guess a valid V2 list.
+    try:
+        legacy = subprocess.run(
+            [binary, "debug", "agent", role],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "error", "OpenCode V1 agent discovery command could not be completed"
+    if legacy.returncode == 0:
+        return "found", ""
+    return "error", f"OpenCode V1 agent discovery failed with exit code {legacy.returncode}"
+
+
 def require_role(role,role_dir,runtime,root):
     role_file=role_dir/(role+".md")
     if role_file.is_symlink() or not role_file.is_file() or not os.access(role_file,os.R_OK):
@@ -64,13 +124,11 @@ def require_role(role,role_dir,runtime,root):
         binary=opencode_binary()
         if not binary:
             return "OpenCode runtime is selected but its CLI cannot be resolved"
-        try:
-            result=subprocess.run([binary,"debug","agent",role],cwd=root,
-                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
-        except (OSError,subprocess.TimeoutExpired):
-            return f"could not verify native OpenCode agent '{role}'"
-        if result.returncode:
-            return f"native OpenCode agent '{role}' is unavailable; synchronize Globalskills first"
+        status, detail = probe_opencode_agent(binary, role, root)
+        if status == "missing":
+            return detail
+        if status != "found":
+            return f"could not verify native OpenCode agent '{role}': {detail}"
     return None
 
 def inspect(args):

@@ -464,9 +464,10 @@ MOCK_OPENCLAW
   cat >"$tmp/bin/opencode" <<'MOCK_OPENCODE'
 #!/usr/bin/env bash
 set -euo pipefail
-if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agent" ]; then
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   printf '%s\n' "$*" > "$MOCK_OPENCODE_AGENT_CHECK"
-  exit 1
+  printf '%s\n' '[{"id":"orchestrator"}]'
+  exit 0
 fi
 printf '%s\n' "$*" > "$MOCK_OPENCODE_ARGS"
 cat > "$MOCK_OPENCODE_PROMPT"
@@ -482,9 +483,9 @@ MOCK_OPENCODE
       --timeout 30 --session-id "" --stdout-file "$tmp/opencode.stdout" \
       --stderr-file "$tmp/opencode.stderr" 2>/dev/null)"
   assert_json_status "$out" "COMPLETED" "OpenCode falls back when a native role is unavailable"
-  [ -s "$tmp/opencode-agent-check" ] \
-    && ok "OpenCode checks native agent availability" \
-    || fail "OpenCode did not check native agent availability"
+  grep -Fxq 'debug agents' "$tmp/opencode-agent-check" \
+    && ok "OpenCode checks native agents through the V2 discovery command" \
+    || fail "OpenCode did not use the V2 native-agent discovery command"
   ! grep -q -- '--agent coder' "$tmp/opencode.args" \
     && ok "OpenCode omits an unavailable native agent and preserves configured default_agent" \
     || fail "OpenCode passed a missing native agent to the runtime"
@@ -710,6 +711,10 @@ test_opencode_success() {
   mkdir -p "$tmp/bin" "$tmp/src"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
+  printf '%s\n' '[{"id":"build"}]'
+  exit 0
+fi
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
 printf '%s\n' "$PWD" > "$MOCK_CWD_FILE"
 if [ -n "${MOCK_STDIN_FILE:-}" ]; then cat > "$MOCK_STDIN_FILE"; else cat >/dev/null; fi
@@ -842,6 +847,10 @@ PROJECT_JSONC
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
+  printf '%s\n' '[{"id":"coder"}]'
+  exit 0
+fi
 [ "${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.jsonc" ] || {
   echo "OPENCODE_CONFIG was replaced" >&2; exit 65;
 }
@@ -1459,8 +1468,8 @@ test_opencode_continuation() {
   printf '%s\n' '{"automation":{"opencodeMaxStepLimitContinuations":0}}' >"$tmp/runtime/config.json"
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
-if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agent" ]; then
-  printf '%s\n' 'coder'
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
+  printf '%s\n' '[{"id":"coder"}]'
   exit 0
 fi
 printf '%s\n' "$*" >> "$MOCK_ARGS_FILE"
@@ -1683,6 +1692,10 @@ HELPER
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
+  printf '%s\n' '[{"id":"coder"}]'
+  exit 0
+fi
 jq -e '
   .mcp.servers["manul-todo-local"].url == "http://127.0.0.1:8765/mcp"
   and .tools["manul_todo_local_*"] == true
