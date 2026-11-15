@@ -17,6 +17,7 @@ mkdir -p "$TEST_DIR/bin"
 cat > "$TEST_DIR/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+printf 'DEBUG mock invocation: mode=<%s> args=<%s>\\n' "${MOCK_OPENCODE_MODE-unset}" "$*" >&2
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   case "${MOCK_OPENCODE_MODE:-v2-found}" in
     v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]' ;;
