@@ -55,15 +55,24 @@ expect_standard() {
 expect_blocked() { local out; out="$(check_json)"; [ "$(jq -r '.ok' <<<"$out")" = "false" ]; }
 expect_bootstrap() {
   local out; out="$(check_json)"
-  [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "bootstrap" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "sdd" ]
+  if ! { [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "bootstrap" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "sdd" ]; }; then
+    echo "DEBUG bootstrap output: $out" >&2
+    return 1
+  fi
 }
 expect_sdd_route() {
   local out; out="$(check_json)"
-  [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "specification-driven" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "orchestrator" ]
+  if ! { [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "specification-driven" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "orchestrator" ]; }; then
+    echo "DEBUG SDD orchestrator route output: $out (mock mode=$MOCK_OPENCODE_MODE)" >&2
+    return 1
+  fi
 }
 expect_sdd_agent_route() {
   local out; out="$(check_json)"
-  [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "specification-driven" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "sdd" ]
+  if ! { [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "specification-driven" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "sdd" ]; }; then
+    echo "DEBUG SDD agent route output: $out (mock mode=$MOCK_OPENCODE_MODE)" >&2
+    return 1
+  fi
 }
 run_case "repo without config stays on standard workflow" expect_standard
 AGENT=sdd; PROMPT="Add a feature"
