@@ -17,7 +17,7 @@ mkdir -p "$TEST_DIR/bin"
 cat > "$TEST_DIR/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-printf 'DEBUG mock invocation: mode=<%s> args=<%s>\\n' "${MOCK_OPENCODE_MODE-unset}" "$*" >&2
+printf 'mode=<%s> args=<%s>\\n' "${MOCK_OPENCODE_MODE-unset}" "$*" >> "$MOCK_TRACE_FILE"
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   case "${MOCK_OPENCODE_MODE:-v2-found}" in
     v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]' ;;
@@ -39,6 +39,8 @@ MOCK
 chmod +x "$TEST_DIR/bin/opencode"
 export OPENCODE_BIN="$TEST_DIR/bin/opencode"
 export MOCK_OPENCODE_MODE="v2-found"
+export MOCK_TRACE_FILE="$TEST_DIR/opencode.trace"
+: > "$MOCK_TRACE_FILE"
 
 check_json() {
   python3 "$POLICY" inspect --repo-root "$REPO_ROOT" --agent "$AGENT" --prompt "$PROMPT" \
@@ -58,6 +60,7 @@ expect_bootstrap() {
   local out; out="$(check_json)"
   if ! { [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "bootstrap" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "sdd" ]; }; then
     echo "DEBUG bootstrap output: $out" >&2
+    cat "$MOCK_TRACE_FILE" >&2
     return 1
   fi
 }
@@ -65,6 +68,7 @@ expect_sdd_route() {
   local out; out="$(check_json)"
   if ! { [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "specification-driven" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "orchestrator" ]; }; then
     echo "DEBUG SDD orchestrator route output: $out (mock mode=$MOCK_OPENCODE_MODE)" >&2
+    cat "$MOCK_TRACE_FILE" >&2
     return 1
   fi
 }
@@ -72,6 +76,7 @@ expect_sdd_agent_route() {
   local out; out="$(check_json)"
   if ! { [ "$(jq -r '.ok' <<<"$out")" = "true" ] && [ "$(jq -r '.mode' <<<"$out")" = "specification-driven" ] && [ "$(jq -r '.route_agent' <<<"$out")" = "sdd" ]; }; then
     echo "DEBUG SDD agent route output: $out (mock mode=$MOCK_OPENCODE_MODE)" >&2
+    cat "$MOCK_TRACE_FILE" >&2
     return 1
   fi
 }
