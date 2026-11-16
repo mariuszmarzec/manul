@@ -70,7 +70,8 @@ Duplicate submission claims are serialized in SQLite. A queued duplicate reuses 
 ```bash
 manul-status.sh --status STATUS
 manul-status.sh --task TASK_ID
-manul-status.sh --list
+manul-status.sh --list                 # compact, terminal-friendly list (default)
+manul-status.sh --list --wide          # full diagnostic table
 manul-status.sh --history
 manul-status.sh --log --tail 200
 ```
