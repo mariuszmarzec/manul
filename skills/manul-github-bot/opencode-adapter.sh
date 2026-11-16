@@ -273,6 +273,19 @@ if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -n "$_OPENCODE_BASE_CONFIG" ]; then
             printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned operator query workspace is not a direct scratch directory under MANUL_WORKSPACE/operator-query","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
             exit 66
         fi
+    elif [ "$_TASK_EXECUTION_KIND_INPUT" = "slack_intake" ]; then
+        _slack_intake_root="$_workspace_base_real/slack-intake"
+        _slack_intake_root_real=""
+        if [ ! -L "$_slack_intake_root" ] && [ -d "$_slack_intake_root" ]; then
+            _slack_intake_root_real="$(realpath -e -- "$_slack_intake_root" 2>/dev/null || true)"
+        fi
+        if [ -z "$_slack_intake_root_real" ] ||
+           [ "$_slack_intake_root_real" != "$_slack_intake_root" ] ||
+           [ "$_workspace_parent" != "$_slack_intake_root_real" ] ||
+           [[ "$_workspace_name" != si-* ]]; then
+            printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned Slack intake workspace is not a direct scratch directory under MANUL_WORKSPACE/slack-intake","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
+            exit 66
+        fi
     elif [ "$_workspace_parent" != "$_workspace_base_real" ] || [[ "$_workspace_name" != ws-* ]]; then
         printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned workspace is not a direct lease under the configured MANUL_WORKSPACE","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
         exit 66
@@ -726,12 +739,12 @@ permissions = operator_permissions + [
 # Never permit the raw operator Fiteo create tool inside a Manul task.
 # Task creation is only available through the dedicated Manul-authenticated
 # MCP connection below; the user's global Fiteo server remains untouched.
-if execution_kind == "operator_query":
-    # No optional Manul MCP is injected for this turn, even if the daemon
-    # inherited credentials/endpoints from its long-lived environment.
+if execution_kind in ("operator_query", "slack_intake"):
+    # Tool-free queries and Slack intake never inherit the operator's Fiteo credentials.
     fiteo_url = ""
     fiteo_pat = ""
-    todo_url = ""
+    if execution_kind == "operator_query":
+        todo_url = ""
 
 operator_agent_config = {}
 if execution_kind == "operator_query":
@@ -748,6 +761,26 @@ if execution_kind == "operator_query":
     }
     tools = {pattern: False for pattern in tool_rule_patterns}
     tools["*"] = False
+elif execution_kind == "slack_intake":
+    operator_agent_name = "manul-slack-intake"
+    if operator_agent_name in agent_names:
+        print("reserved OpenCode agent 'manul-slack-intake' already exists; refusing Slack intake to preserve isolation", file=sys.stderr)
+        raise SystemExit(2)
+    # Only Todo Local list/get/create tools are allowed; no shell, filesystem,
+    # browser, Fiteo, GitHub or unrelated MCP capabilities are available.
+    operator_agent_config = {
+        operator_agent_name: {
+            "mode": "primary",
+            "description": "Sphinx Slack intake. Only Todo Local list/get/create tools are permitted; never send Slack messages or modify existing Todo tasks.",
+            "tools": {
+                "*": False,
+                "manul_todo_local_todo_list_tasks": True,
+                "manul_todo_local_todo_get_task": True,
+                "manul_todo_local_todo_create_task": True,
+            },
+        }
+    }
+    tools = {"fiteo_todo_create_task": False}
 else:
     tools = {"fiteo_todo_create_task": False}
 if fiteo_url and fiteo_pat:
@@ -779,15 +812,9 @@ if fiteo_url and fiteo_pat:
 if todo_url:
     if "manul-todo-local" in names:
         print("operator MCP 'manul-todo-local' already exists; leaving it untouched", file=sys.stderr)
-    elif any(fnmatch.fnmatchcase("manul_todo_local_todo_list_tasks", pattern) for pattern in tool_rule_patterns):
-        print("an operator tool rule already matches the Manul local Todo tools; preserving it without adding an override", file=sys.stderr)
-        servers["manul-todo-local"] = {
-            "type": "remote",
-            "url": todo_url,
-            "oauth": False,
-            "disabled": False,
-        }
-        permissions.append({"action": "manul_todo_local_*", "resource": "*", "effect": "allow"})
+        if execution_kind == "slack_intake":
+            # Do not borrow an operator MCP with a matching name.
+            operator_agent_config["manul-slack-intake"]["tools"] = {"*": False}
     elif scan_ok:
         servers["manul-todo-local"] = {
             "type": "remote",
@@ -795,10 +822,18 @@ if todo_url:
             "oauth": False,
             "disabled": False,
         }
-        permissions.append({"action": "manul_todo_local_*", "resource": "*", "effect": "allow"})
-        tools["manul_todo_local_*"] = True
+        if execution_kind == "slack_intake":
+            for tool_name in (
+                "manul_todo_local_todo_list_tasks",
+                "manul_todo_local_todo_get_task",
+                "manul_todo_local_todo_create_task",
+            ):
+                permissions.append({"action": tool_name, "resource": "*", "effect": "allow"})
+        else:
+            permissions.append({"action": "manul_todo_local_*", "resource": "*", "effect": "allow"})
+            tools["manul_todo_local_*"] = True
     else:
-        print("could not safely inspect all OpenCode config layers; skipping optional Manul Todo MCP", file=sys.stderr)
+        print("could not safely inspect all OpenCode config layers; skipping optional Manul local Todo MCP", file=sys.stderr)
 
 overlay = {
     "permissions": permissions,
@@ -824,7 +859,7 @@ fi
 chmod 600 "$_OVERLAY_JSON_FILE"
 OPENCODE_CONFIG_CONTENT="$(cat "$_OVERLAY_JSON_FILE")"
 export OPENCODE_CONFIG_CONTENT
-if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
+if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "slack_intake" ]; then
     # Keep variables defined for nounset-safe diagnostics below, but blank
     # their exported values so OpenCode cannot inherit operator credentials.
     FITEO_BASE_URL=""
@@ -884,6 +919,8 @@ fi
 # Operator queries always use a reserved, task-local agent whose tool set is empty.
 if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
     OPT_AGENT="manul-operator-query"
+elif [ "$_TASK_EXECUTION_KIND_INPUT" = "slack_intake" ]; then
+    OPT_AGENT="manul-slack-intake"
 fi
 
 # OpenCode V2 lists native agents as a JSON array via `debug agents`.
