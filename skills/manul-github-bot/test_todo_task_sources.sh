@@ -212,6 +212,7 @@ cat > "$TEST_DIR/project-repositories.json" <<'JSON'
     {"name":"owner/fiteo-app","aliases":["fiteo app"],"description":"Fiteo mobile app","skills":[]},
     {"name":"owner/manul","aliases":["manul","manul bot"],"description":"Manul task orchestrator","skills":[]},
     {"name":"owner/test-manul-e2e","aliases":[],"description":"Manul end-to-end test repository","skills":[]},
+    {"name":"owner/test-manul-e2e","aliases":[],"description":"Manul end-to-end test repository","skills":[]},
     {"name":"owner/ambiguous-a","aliases":["shared module"],"description":"Ambiguous project A","skills":[]},
     {"name":"owner/ambiguous-b","aliases":["shared module"],"description":"Ambiguous project B","skills":[]}
   ]
