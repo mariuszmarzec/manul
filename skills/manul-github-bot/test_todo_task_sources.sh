@@ -211,6 +211,7 @@ cat > "$TEST_DIR/project-repositories.json" <<'JSON'
     {"name":"owner/fiteo","aliases":["fiteo"],"description":"Fiteo backend","skills":[]},
     {"name":"owner/fiteo-app","aliases":["fiteo app"],"description":"Fiteo mobile app","skills":[]},
     {"name":"owner/manul","aliases":["manul","manul bot"],"description":"Manul task orchestrator","skills":[]},
+    {"name":"owner/test-manul-e2e","aliases":[],"description":"Manul end-to-end test repository","skills":[]},
     {"name":"owner/ambiguous-a","aliases":["shared module"],"description":"Ambiguous project A","skills":[]},
     {"name":"owner/ambiguous-b","aliases":["shared module"],"description":"Ambiguous project B","skills":[]}
   ]
@@ -474,7 +475,7 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
 ]
 JSON
 
-LOCAL_SOURCE='{"type":"todo_local_mcp","repositories":["owner/local","owner/link-target","owner/fiteo-app"],"tokenEnv":"ignored-legacy-setting"}'
+LOCAL_SOURCE='{"type":"todo_local_mcp","repositories":["owner/local","owner/link-target","owner/fiteo-app","owner/manul","owner/test-manul-e2e"],"tokenEnv":"ignored-legacy-setting"}'
 REMOTE_SOURCE='{"type":"todo_remote_mcp","repositories":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp"}'
 remote_resolved_config="$(todo_source_remote_config "$REMOTE_SOURCE")"
 assert_eq "remote URL expands the Fiteo base URL environment placeholder" "https://fiteo.example.test/mcp" "$(jq -r '.url' <<<"$remote_resolved_config")"
@@ -555,6 +556,10 @@ assert_eq "explicit URL is identified as the routing source" "explicit_github_ur
 specific_source='{"repositories":["owner/fiteo","owner/fiteo-app"]}'
 specific_resolution="$(todo_task_resolve_repository "$specific_source" '{"id":93,"description":"/manul Update the Fiteo App"}')"
 assert_eq "longest matching alias distinguishes Fiteo App from Fiteo backend" "owner/fiteo-app" "$(jq -r '.repository' <<<"$specific_resolution")"
+
+e2e_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":96,"description":"/manul zrob w test-manul-e2e repo PR z helloworld w elixir"}')"
+assert_eq "hyphenated repository slug wins over embedded Manul alias" "owner/test-manul-e2e" "$(jq -r '.repository' <<<"$e2e_resolution")"
+assert_eq "repository slug is available as an implicit matched alias" "test-manul-e2e" "$(jq -r '.matchedAlias' <<<"$e2e_resolution")"
 
 resolution_rc=0
 todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":94,"description":"/manul Update the shared module"}' 2>"$TEST_DIR/ambiguous.log" >/dev/null || resolution_rc=$?
