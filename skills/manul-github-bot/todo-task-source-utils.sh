@@ -70,10 +70,10 @@ todo_task_resolve_repository() {
     # metacharacter (dot) before constructing whole-token patterns.
     owner_pattern="${configured_owner//./\\.}"
     slug_pattern="${configured_slug//./\\.}"
-    if grep -Eiq "(^|[^[:alnum:]_.-])${owner_pattern}/${slug_pattern}([.]git)?([^[:alnum:]_.-]|$)" <<<"$description"; then
+    if grep -Eiq "(^|[^[:alnum:]_.-])${owner_pattern}/${slug_pattern}([.]git)?([^[:alnum:]_.-]|[.]([[:space:]]|$)|$)" <<<"$description"; then
       configured_method="explicit_repository_name"
       matched_alias=""
-    elif grep -Eiq "(^|[^[:alnum:]_.-])(repo|repository)[[:space:]:=]+${slug_pattern}([^[:alnum:]_.-]|$)" <<<"$description"; then
+    elif grep -Eiq "(^|[^[:alnum:]_.-])(repo|repository)[[:space:]:=]+${slug_pattern}([^[:alnum:]_.-]|[.]([[:space:]]|$)|$)" <<<"$description"; then
       configured_method="configured_repository_slug"
       matched_alias="$configured_slug"
     else
@@ -171,7 +171,7 @@ todo_task_resolve_repository() {
     ' <<<"$catalog_json")" || return 2
     candidate_count="$(jq -r 'length' <<<"$matches_json")"
     if [ "$candidate_count" -eq 0 ]; then
-      echo "no configured repository name or project alias matched the Todo task tree" >&2
+      echo "no project alias matched and no configured repository name was present in the Todo task tree" >&2
       # No project reference remains the informational/report-only fallback.
       # Ambiguous and disallowed repository targets fail closed above/below.
       return 3
