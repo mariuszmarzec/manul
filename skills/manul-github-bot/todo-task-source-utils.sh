@@ -36,9 +36,9 @@ todo_task_repository_catalog_path() {
   printf '%s\n' "$HOME/.agents/skills/globalskills-repository/project-repositories.json"
 }
 
-# Resolve a task target only from the curated project catalog. Explicit GitHub
-# URLs win; otherwise the longest unambiguous whole-phrase alias wins. A
-# The operator's global .repositories list is the allowlist; the catalog only maps names and skills.
+# Resolve Todo task targets from the complete task tree. The global
+# .repositories list is both the allowlist and the source of configured
+# owner/repo names and short repository slugs; the catalog adds optional aliases.
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
@@ -48,12 +48,13 @@ todo_task_resolve_repository() {
   # Inspect the complete Todo tree: the repository may be named in any
   # root/child/grandchild description, not necessarily on the root.
   description="$(jq -r '
+    def strip_trigger:
+      gsub("(?m)^[[:space:]]*/manul([[:space:]]+report)?([[:space:]]+|$)"; "");
     def task_descriptions:
-      (.description // ""),
+      ((.description // "") | strip_trigger),
       (.subTasks[]? | task_descriptions);
-    [task_descriptions] | join("\n")
+    [task_descriptions] | join("\\n")
   ' <<<"$task_json")" || return 2
-  description="$(todo_strip_manul_trigger "$description")"
 
   # The top-level .repositories list is the allowlist and also the source of
   # configured short names. "repo todo" selects mariuszmarzec/todo without
