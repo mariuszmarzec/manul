@@ -673,7 +673,7 @@ cat > "$TEST_DIR/local-nested-trigger.json" <<'JSON'
 [
   {
     "id": 491,
-    "description": "Parent task without a local trigger",
+    "description": "Parent task without a trigger",
     "addedTime": "2026-10-01T10:00:00",
     "modifiedTime": "2026-10-01T10:00:00",
     "parentTaskId": null,
