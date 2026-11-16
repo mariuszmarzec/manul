@@ -590,46 +590,46 @@ trigger or task-selection rule:
 - `todo_remote_mcp` selects active unscheduled root tasks whose `shares`
   contain the configured `manulUserId` with `EDITOR_AND_VIEWER` permission.
 
-For both Todo providers, a normal \`/manul <request>\` trigger is routed from
+For both Todo providers, a normal `/manul <request>` trigger is routed from
 the complete task tree: the root description and every nested subtask
 description are considered together. A GitHub repository URL, an exact
-configured \`owner/repo\` reference, a configured short name written as
-\`repo <name>\` or \`repository <name>\`, or one unambiguous catalog alias selects
+configured `owner/repo` reference, a configured short name written as
+`repo <name>` or `repository <name>`, or one unambiguous catalog alias selects
 repository-backed execution. Short names are matched only against the final
-segment of the top-level \`.repositories\` allowlist; for example, \`repo todo\`
-selects \`mariuszmarzec/todo\` when that is the unique configured repository
-ending in \`todo\`. The project catalog is not needed for URL, full-name, or
-configured short-name routing. The legacy \`/manul report <question>\` spelling
+segment of the top-level `.repositories` allowlist; for example, `repo todo`
+selects `mariuszmarzec/todo` when that is the unique configured repository
+ending in `todo`. The project catalog is not needed for URL, full-name, or
+configured short-name routing. The legacy `/manul report <question>` spelling
 remains an explicit informational-mode alias.
 
 A missing project reference remains informational/report-only. Multiple
 different repository references in one task tree, duplicate configured short
 names, ambiguous catalog aliases, and repositories outside the global
-\`.repositories\` allowlist fail closed and are not queued. The common poller
-accepts \`execution.kind=report_only\` only for the two Todo source types; all
+`.repositories` allowlist fail closed and are not queued. The common poller
+accepts `execution.kind=report_only` only for the two Todo source types; all
 other unsupported execution kinds fail closed.
 
 Todo providers do not select a configured default repository. For each active
 root, routing searches the complete tree and gives explicit GitHub URLs and
 configured repository names precedence over catalog aliases. Otherwise, the
 longest whole-phrase alias in the optional project catalog
-(\`~/.agents/skills/globalskills-repository/project-repositories.json\`) must
-identify exactly one canonical \`owner/repo\`. The catalog supplies aliases and
-optional mapped project skills. The top-level \`.repositories\` list remains the
+(`~/.agents/skills/globalskills-repository/project-repositories.json`) must
+identify exactly one canonical `owner/repo`. The catalog supplies aliases and
+optional mapped project skills. The top-level `.repositories` list remains the
 only access allowlist. Mapped skill files are read only from
-\`~/.agents/skills/<skill>/SKILL.md\`; a missing skill file is skipped.
+`~/.agents/skills/<skill>/SKILL.md`; a missing skill file is skipped.
 
 The top-level `.repositories` array in `~/.manul/config.json` is the single
 operator-controlled repository list for all task sources. GitHub Issues polling
-uses it directly; Todo Local and Todo Remote require the resolved project to be
-present in it. Per-source repository lists and `repositoryAllowlist` fields are
-not configuration inputs and cannot widen or narrow this list. The curated
-catalog supplies aliases and mapped project skills, but does not grant access.
-A missing alias, multiple equally-specific project matches, or a repository
-outside the global list is fail-closed. An explicit URL needs no catalog entry
-but must still be in the global list. A Todo task with neither an explicit URL
-nor a usable alias is classified as report-only. The route already stored with
-a queued task is reused across retries; changing the catalog does not silently
+uses it directly; Todo Local and Todo Remote use it both to recognize configured
+repository names and as the access allowlist. Per-source repository lists and
+`repositoryAllowlist` fields are not configuration inputs and cannot widen or
+narrow this list. The curated catalog supplies optional aliases and mapped
+project skills, but does not grant access. Direct URLs, configured full names,
+configured short names, and catalog aliases must all resolve to a repository in
+the global list. A missing project reference is informational/report-only;
+ambiguous or disallowed targets are not queued. The route already stored with a
+queued task is reused across retries; changing the catalog does not silently
 retarget existing queue rows.
 
 The two Todo providers are separate adapters with different MCP tool names and
