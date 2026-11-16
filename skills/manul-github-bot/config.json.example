@@ -73,7 +73,8 @@
     "mariuszmarzec/cheatDay",
     "mariuszmarzec/fiteoApp",
     "mariuszmarzec/QuickMVI",
-    "mariuszmarzec/manul"
+    "mariuszmarzec/manul",
+    "mariuszmarzec/test-manul-e2e"
   ],
   "retryConfig": {
     "maxAttempts": 3,
