@@ -827,6 +827,9 @@ if todo_url:
                 "manul_todo_local_todo_list_tasks",
                 "manul_todo_local_todo_get_task",
                 "manul_todo_local_todo_create_task",
+                "manul_todo_local_list_tasks",
+                "manul_todo_local_get_task",
+                "manul_todo_local_create_task",
             ):
                 permissions.append({"action": tool_name, "resource": "*", "effect": "allow"})
         else:
@@ -834,6 +837,10 @@ if todo_url:
             tools["manul_todo_local_*"] = True
     else:
         print("could not safely inspect all OpenCode config layers; skipping optional Manul local Todo MCP", file=sys.stderr)
+
+if execution_kind == "slack_intake" and not todo_url:
+    # No confirmed local endpoint means no tools at all, never a different Todo identity.
+    operator_agent_config["manul-slack-intake"]["tools"] = {"*": False}
 
 overlay = {
     "permissions": permissions,
