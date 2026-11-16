@@ -396,7 +396,7 @@ test_status() {
     fail "Single-task JSON exposes recovery diagnostics" "preExecutionFailures=3 and agentStartedAt timestamp" "$OUTPUT"
   fi
 
-  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list --wide 2>&1)
   if printf '%s' "$OUTPUT" | grep -q "PRE-EXEC" \
     && printf '%s' "$OUTPUT" | grep -q "AGENT-STARTED" \
     && printf '%s' "$OUTPUT" | grep -q "2026-10-30T14:00:00Z"; then
@@ -479,6 +479,19 @@ test_status() {
     pass "Text list shows Todo Local/Remote and their provider task IDs"
   else
     fail "Text list shows Todo Local/Remote and their provider task IDs" "Todo Local 420 and Todo Remote 421" "$OUTPUT"
+  fi
+
+  # Compact default output must stay readable in an 80-column terminal.
+  log "Compact list stays within terminal width"
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
+  if printf '%s\\n' "$OUTPUT" | awk 'length($0) > 80 { exit 1 }' \
+    && ! printf '%s' "$OUTPUT" | grep -q "$LONG_TASK_ID" \
+    && printf '%s' "$OUTPUT" | grep -q "STATE" \
+    && printf '%s' "$OUTPUT" | grep -q "T-L" \
+    && printf '%s' "$OUTPUT" | grep -q "T-R"; then
+    pass "Default --list is compact, truncates long IDs, and keeps source hints"
+  else
+    fail "Default --list is compact, truncates long IDs, and keeps source hints" "all lines <= 80 columns with shortened IDs" "$OUTPUT"
   fi
 
   # Regression: long identifiers and repository/source IDs must not shift columns.
