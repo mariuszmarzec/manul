@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # Keep the normal operator query tool-free. Slack intake is a separate,
 # narrowly-scoped action mode with a dedicated Todo Local-only OpenCode agent.
 if [[ " $* " == *" --todo-local "* ]]; then
-  exec "$SCRIPT_DIR/manul-slack-intake.sh" "$@"
+  exec bash "$SCRIPT_DIR/manul-slack-intake.sh" "$@"
 fi
 
 source "$SCRIPT_DIR/manul-platform.sh"
