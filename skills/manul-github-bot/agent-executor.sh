@@ -72,7 +72,7 @@ AgentExecutor.execute() {
 
     # Validate inputs before dispatching
     case "$execution_kind" in
-        repository|report_only|operator_query) ;;
+        repository|report_only|operator_query|slack_intake) ;;
         *)
             printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unsupported task execution kind","session_id":"","duration_s":0}\n' "$task_id"
             AgentExecutor_ExitCode=1
@@ -105,7 +105,21 @@ AgentExecutor.execute() {
     # Every task uses the same configured backend. A selected role changes the
     # adapter's role handling, never the runtime chosen for execution.
     local execution_runtime="$AGENT_RUNTIME"
-    if [ -n "$agent" ] && [ "$agent" != "main" ]; then
+    if [ "$execution_kind" = "slack_intake" ]; then
+        if [ "$agent" != "manul-slack-intake" ]; then
+            jq -cn --arg taskId "$task_id" \
+              '{status:"FAILED",task_id:$taskId,exit_code:65,summary:"Slack intake requires the dedicated manul-slack-intake role",failure_code:"SLACK_INTAKE_ROLE_INVALID"}'
+            AgentExecutor_ExitCode=65
+            return 1
+        fi
+    elif [ "$agent" = "manul-slack-intake" ]; then
+        jq -cn --arg taskId "$task_id" \
+          '{status:"FAILED",task_id:$taskId,exit_code:65,summary:"The manul-slack-intake role is reserved for Slack intake execution",failure_code:"SLACK_INTAKE_ROLE_INVALID"}'
+        AgentExecutor_ExitCode=65
+        return 1
+    fi
+
+    if [ -n "$agent" ] && [ "$agent" != "main" ] && [ "$agent" != "manul-slack-intake" ]; then
         local allowed_agents_json
         allowed_agents_json="$(jq -c '.agents // []' "$MANUL_CONFIG" 2>/dev/null || printf '[]')"
         if ! jq -e 'type == "array" and length > 0' <<<"$allowed_agents_json" >/dev/null 2>&1; then

@@ -82,6 +82,7 @@ SCRIPTS=(
     "manul-result.sh"
     "manul-status.sh"
     "manul-query.sh"
+    "manul-slack-intake.sh"
     "manul-operator-context.py"
     "manul-submit.sh"
     "manul-wait.sh"

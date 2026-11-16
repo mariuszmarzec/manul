@@ -5,6 +5,14 @@ set -euo pipefail
 if [ -z "${MANUL_DIR:-}" ]; then MANUL_DIR="$HOME/.manul"; fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
+# Keep the normal operator query tool-free. Slack intake is a separate,
+# narrowly-scoped action mode with a dedicated Todo Local-only OpenCode agent.
+for argument in "$@"; do
+  if [ "$argument" = "--todo-local" ]; then
+    exec bash "$SCRIPT_DIR/manul-slack-intake.sh" "$@"
+  fi
+done
+
 source "$SCRIPT_DIR/manul-platform.sh"
 manul_platform_prepare || exit 1
 manul_platform_reexec_if_needed "$SCRIPT_DIR/manul-query.sh" "$@"

@@ -506,6 +506,28 @@ The question may also be supplied through stdin. Optional flags are
 tool-disabled execution policies. Codex fails closed until its adapter can
 guarantee a zero-tool execution mode.
 
+### Restricted Sphinx Slack intake action
+
+Sphinx uses a separate local command:
+
+```bash
+manul --prompt "" --todo-local --json < slack-event.json
+```
+
+This action mode is available only when `automation.agentRuntime=opencode`.
+It uses a dedicated `manul-slack-intake` primary agent and the Manul-owned
+`manul-todo-local` MCP connection. Its tool allowlist is limited to Todo
+Local list/get/create operations: it may find a matching active task, create
+one review task and one child draft-reply task. It cannot use shell,
+filesystem, browser, Fiteo, GitHub, other MCP servers, or Slack sending tools.
+The Slack event is read from stdin, not command-line arguments.
+
+The normal `manul --prompt` mode remains tool-free and read-only. If Todo
+Local is unavailable or its reserved MCP name is occupied, the Slack intake
+agent is launched without tools and must return `TODO_UNAVAILABLE`; the
+caller is responsible for retaining the complete event in its local fallback
+log. This mode never adds an item to Manul's own task queue.
+
 This is a local shell entrypoint provided by `manul-shell.zsh`, not a
 `/manul prompt` chat command and not a tool available to an agent running
 inside a task workspace. It is available in a Zsh session after the canonical
