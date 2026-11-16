@@ -42,7 +42,7 @@ todo_task_repository_catalog_path() {
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
-  local catalog_json="" catalog_valid=false matches_json match_json entry_json="" repositories_json skills_json="[]"
+  local catalog_json="" catalog_valid=false matches_json match_json entry_json="" repositories_json canonical_repository skills_json="[]"
   local configured_matches_json direct_matches_json direct_match_count
 
   # Inspect the complete Todo tree: the repository may be named in any
@@ -199,7 +199,7 @@ todo_task_resolve_repository() {
       | first // empty
     ' <<<"$catalog_json")" || return 2
   fi
-  canonical_repository="$(jq -r '.name // empty' <<<"\${entry_json:-}")"
+  canonical_repository="$(jq -r '.name // empty' <<<"${entry_json:-}")"
   [ -n "$canonical_repository" ] || canonical_repository="$repository"
 
   if ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$repositories_json" >/dev/null 2>&1; then
