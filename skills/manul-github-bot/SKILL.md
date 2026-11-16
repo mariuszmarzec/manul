@@ -267,8 +267,10 @@ the optional project catalog, provided that repository is present in the global
 `.repositories` allowlist. Without an explicit URL, the longest whole-phrase
 alias in `~/.agents/skills/globalskills-repository/project-repositories.json`
 must identify exactly one catalog entry. The catalog supplies aliases and
-optional mapped project skills. If the catalog is missing, alias routing is
-disabled; the task is treated as informational/report-only. Missing mapped
+optional mapped project skills; each repository slug is also an implicit alias,
+so hyphenated names such as `test-manul-e2e` are matched as a whole phrase.
+If the catalog is missing, alias routing is disabled; the task is treated as
+informational/report-only. Missing mapped
 skill files are skipped rather than blocking execution. Manul reads mapped
 skills only from `~/.agents/skills/<skill>/SKILL.md`.
 
