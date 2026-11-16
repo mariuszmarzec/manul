@@ -74,8 +74,9 @@ todo_task_resolve_repository() {
           | ($repository | norm) as $full_phrase
           | ($slug | norm) as $slug_phrase
           | ((" " + $task_text + " ") | contains(" " + $full_phrase + " ")) as $has_full_name
-          | ((" " + $task_text + " ") | contains(" repo " + $slug_phrase + " ")
-              or contains(" repository " + $slug_phrase + " ")) as $has_short_name
+          | (" " + $task_text + " ") as $padded_task_text
+          | (($padded_task_text | contains(" repo " + $slug_phrase + " "))
+              or ($padded_task_text | contains(" repository " + $slug_phrase + " "))) as $has_short_name
           | select($has_full_name or $has_short_name)
           | {
               repository: $repository,
