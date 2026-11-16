@@ -243,19 +243,19 @@ Current provider types:
 - `todo_local_mcp` — separate Todo Desktop MCP source. It selects active root tasks whose description or any nested subtask contains a line beginning with `/manul`; the complete parent tree is queued once. The Streamable HTTP client and endpoint resolver are bundled with Manul, so local polling does not require globalskills/aicode.
 - `todo_remote_mcp` — separate Fiteo backend MCP source. Its `url` accepts `{env:VARIABLE}` placeholders (for example `"{env:FITEO_BASE_URL}/mcp"`). Set `manulUserIdEnv` to the name of an environment variable containing the positive numeric ID of the Manul Fiteo account; legacy numeric `manulUserId` remains supported. Sharing with that account and `EDITOR_AND_VIEWER` grants visibility; execution additionally requires a `/manul` command in the root description or any nested subtask. A nested trigger queues the complete parent tree once.
 
-For either Todo provider, every ordinary \`/manul <request>\` is routed
+For either Todo provider, every ordinary `/manul <request>` is routed
 automatically using the complete Todo task tree, including root, child, and
-grandchild descriptions. A GitHub URL, an exact configured \`owner/repo\`
-reference, a configured short name written as \`repo <name>\` or
-\`repository <name>\`, or one unambiguous project alias selects
+grandchild descriptions. A GitHub URL, an exact configured `owner/repo`
+reference, a configured short name written as `repo <name>` or
+`repository <name>`, or one unambiguous project alias selects
 repository-backed execution. Short names are matched against the final path
-segment of the top-level \`.repositories\` allowlist; for example, \`repo todo\`
-selects \`mariuszmarzec/todo\` when it is the only configured repository named
-\`todo\`. Direct URLs and configured repository names/short names work even
+segment of the top-level `.repositories` allowlist; for example, `repo todo`
+selects `mariuszmarzec/todo` when it is the only configured repository named
+`todo`. Direct URLs and configured repository names/short names work even
 when the optional project catalog is unavailable. When the request has no
 repository reference, Manul treats it as informational automatically — no
-\`report\` keyword and no \`allowReportOnly\` opt-in are needed. The old
-\`/manul report <question>\` spelling remains accepted as a compatibility alias.
+`report` keyword and no `allowReportOnly` opt-in are needed. The old
+`/manul report <question>` spelling remains accepted as a compatibility alias.
 
 Informational tasks do not need a project alias or repository URL: the daemon
 skips repository locks, checkouts, branches, PRs, and the GitHub result-comment
@@ -267,23 +267,25 @@ so original user task structure remains intact.
 
 Todo sources do not have a fixed project repository. Each Todo root resolves its
 execution target independently from the full task tree. Explicit GitHub URLs
-and exact configured \`owner/repo\`/short-name matches take precedence over
+and exact configured `owner/repo`/short-name matches take precedence over
 catalog aliases. Multiple distinct repository targets in one task tree,
 duplicate configured short names, ambiguous aliases, and targets outside the
 global list fail closed and are not queued. The project catalog
-(\`~/.agents/skills/globalskills-repository/project-repositories.json\`) supplies
-aliases and optional mapped project skills; the top-level \`.repositories\`
+(`~/.agents/skills/globalskills-repository/project-repositories.json`) supplies
+aliases and optional mapped project skills; the top-level `.repositories`
 array remains the only access allowlist. Missing mapped skill files are skipped
 rather than blocking execution. Manul reads mapped skills only from
-\`~/.agents/skills/<skill>/SKILL.md\`.
+`~/.agents/skills/<skill>/SKILL.md`.
 
 The top-level `.repositories` array in `~/.manul/config.json` is the only
 operator-configured repository list. GitHub Issues polling and both Todo sources
 use that same list; provider-local repository lists and `repositoryAllowlist`
-are obsolete and ignored. The catalog does not grant access: explicit URLs and
-catalog aliases must resolve to a repository in the global list. Ambiguous
-aliases and targets outside the global list are logged and not queued. Manul
-must never fall back to a hardcoded Todo repository.
+are obsolete and ignored. The catalog does not grant access: explicit URLs,
+configured full names/short names, and catalog aliases must resolve to a
+repository in the global list. Ambiguous aliases, multiple distinct targets in
+one Todo tree, duplicate configured short names, and targets outside the global
+list are logged and not queued. Manul must never fall back to a hardcoded Todo
+repository.
 
 The local adapter connects to Todo Desktop through the shared endpoint resolver
 and Streamable HTTP client exported by `globalskills/aicode`. The remote adapter
