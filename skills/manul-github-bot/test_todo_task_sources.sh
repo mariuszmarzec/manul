@@ -564,7 +564,7 @@ assert_eq "repository slug is available as an implicit matched alias" "test-manu
 
 # Configured repository names are routable without a project-catalog entry,
 # including the concise "repo <slug>" form and references in nested subtasks.
-short_repo_task='{"id":101,"description":"/manul Implement the requested change","subTasks":[{"id":102,"description":"Implementation details","subTasks":[{"id":103,"description":"repo todo"}]}]}'
+short_repo_task='{"id":101,"description":"/manul Implement the requested change","subTasks":[{"id":102,"description":"Implementation details","subTasks":[{"id":103,"description":"repo todo."}]}]}'
 short_repo_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$short_repo_task")"
 assert_eq "configured short repository name resolves from a grandchild description" "mariuszmarzec/todo" "$(jq -r '.repository' <<<"$short_repo_resolution")"
 assert_eq "configured short repository name records its routing method" "configured_repository_slug" "$(jq -r '.method' <<<"$short_repo_resolution")"
