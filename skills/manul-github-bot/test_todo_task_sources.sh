@@ -585,6 +585,10 @@ todo_task_resolve_repository "$ambiguous_short_source" '{"id":104,"description":
 assert_rc "duplicate configured repository slugs are rejected instead of guessed" "1" "$resolution_rc"
 assert_contains "ambiguous short repository name lists the candidates" "$(cat "$TEST_DIR/ambiguous-short-name.log")" "org-one/todo, org-two/todo"
 
+slug_boundary_source='{"repositories":["org/todo","org/todo-app"]}'
+slug_boundary_resolution="$(todo_task_resolve_repository "$slug_boundary_source" '{"id":108,"description":"/manul Implement this in repo todo-app"}')"
+assert_eq "short repository matching requires a whole slug and does not match a shorter prefix" "org/todo-app" "$(jq -r '.repository' <<<"$slug_boundary_resolution")"
+
 resolution_rc=0
 conflicting_tree='{"id":105,"description":"/manul Implement the change in repo todo","subTasks":[{"id":106,"description":"Another target: owner/local"}]}'
 todo_task_resolve_repository "$LOCAL_SOURCE" "$conflicting_tree" 2>"$TEST_DIR/conflicting-tree.log" >/dev/null || resolution_rc=$?
