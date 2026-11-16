@@ -53,7 +53,7 @@ todo_task_resolve_repository() {
     def task_descriptions:
       ((.description // "") | strip_trigger),
       (.subTasks[]? | task_descriptions);
-    [task_descriptions] | join("\\n")
+    [task_descriptions] | join("\n")
   ' <<<"$task_json")" || return 2
 
   # The top-level .repositories list is the allowlist and also the source of
