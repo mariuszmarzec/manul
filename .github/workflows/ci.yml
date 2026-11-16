@@ -28,6 +28,8 @@ jobs:
         run: python3 skills/manul-github-bot/test_todo_mcp_client.py
       - name: Test read-only operator context snapshot
         run: python3 skills/manul-github-bot/test_manul_operator_context.py
+      - name: Test Sphinx Slack intake security contract
+        run: python3 skills/manul-github-bot/test_slack_intake_contract.py
       - name: Run hermetic Manul shell tests
         run: |
           set -euo pipefail
