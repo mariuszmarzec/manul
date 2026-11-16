@@ -89,7 +89,7 @@ todo_task_resolve_repository() {
       ($description | norm) as $task_text
       | [
           .repositories[] as $repo
-          | ((($repo.aliases // []) + [(($repo.name // "") | split("/") | last))][]) as $alias
+          | (($repo.aliases // []) + [(($repo.name // "") | split("/") | last)])[] as $alias
           | ($alias | norm) as $normalized_alias
           | select($normalized_alias != "")
           | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
