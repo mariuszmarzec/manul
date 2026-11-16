@@ -506,7 +506,7 @@ test_status() {
   else
     fail "Default --list is compact, truncates long IDs, and keeps source hints" "all lines <= 80 columns with shortened IDs" "$OUTPUT"
   fi
-  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list --wide 2>&1)
   if printf '%s\n' "$OUTPUT" | awk \
     -v task_id="$LONG_TASK_ID" \
     -v repo_ref="$LONG_REPO#42" \
