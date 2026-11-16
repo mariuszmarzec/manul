@@ -64,16 +64,16 @@ todo_task_resolve_repository() {
   local configured_repository configured_owner configured_slug owner_pattern slug_pattern configured_method
   while IFS= read -r configured_repository; do
     [[ "$configured_repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || continue
-    configured_owner="\${configured_repository%%/*}"
-    configured_slug="\${configured_repository#*/}"
+    configured_owner="${configured_repository%%/*}"
+    configured_slug="${configured_repository#*/}"
     # Repository path components are restricted above; escape their only ERE
     # metacharacter (dot) before constructing whole-token patterns.
-    owner_pattern="\${configured_owner//./\\.}"
-    slug_pattern="\${configured_slug//./\\.}"
-    if grep -Eiq "(^|[^[:alnum:]_.-])\${owner_pattern}/\${slug_pattern}([.]git)?([^[:alnum:]_.-]|$)" <<<"$description"; then
+    owner_pattern="${configured_owner//./\\.}"
+    slug_pattern="${configured_slug//./\\.}"
+    if grep -Eiq "(^|[^[:alnum:]_.-])${owner_pattern}/${slug_pattern}([.]git)?([^[:alnum:]_.-]|$)" <<<"$description"; then
       configured_method="explicit_repository_name"
       matched_alias=""
-    elif grep -Eiq "(^|[^[:alnum:]_.-])(repo|repository)[[:space:]:=]+\${slug_pattern}([^[:alnum:]_.-]|$)" <<<"$description"; then
+    elif grep -Eiq "(^|[^[:alnum:]_.-])(repo|repository)[[:space:]:=]+${slug_pattern}([^[:alnum:]_.-]|$)" <<<"$description"; then
       configured_method="configured_repository_slug"
       matched_alias="$configured_slug"
     else
