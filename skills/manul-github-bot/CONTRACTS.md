@@ -590,33 +590,34 @@ trigger or task-selection rule:
 - `todo_remote_mcp` selects active unscheduled root tasks whose `shares`
   contain the configured `manulUserId` with `EDITOR_AND_VIEWER` permission.
 
-For both Todo providers, a normal `/manul <request>` trigger is routed as
-follows: an explicit GitHub repository URL or one unambiguous catalog alias
-selects repository-backed execution; when no project alias or repository URL is
-provided, the task is automatically classified as informational
-(`execution.kind=report_only`) and does not require repository metadata or a
-configuration opt-in. The legacy `/manul report <question>` spelling remains
-accepted as an explicit informational-mode alias but is not required.
+For both Todo providers, a normal \`/manul <request>\` trigger is routed from
+the complete task tree: the root description and every nested subtask
+description are considered together. A GitHub repository URL, an exact
+configured \`owner/repo\` reference, a configured short name written as
+\`repo <name>\` or \`repository <name>\`, or one unambiguous catalog alias selects
+repository-backed execution. Short names are matched only against the final
+segment of the top-level \`.repositories\` allowlist; for example, \`repo todo\`
+selects \`mariuszmarzec/todo\` when that is the unique configured repository
+ending in \`todo\`. The project catalog is not needed for URL, full-name, or
+configured short-name routing. The legacy \`/manul report <question>\` spelling
+remains an explicit informational-mode alias.
 
-A missing project reference is distinct from a routing error. An explicit GitHub
-URL is usable without the catalog when it is present in the global
-`.repositories` allowlist. Without an explicit URL, an unavailable/invalid
-catalog disables alias routing and the task is informational/report-only.
-Multiple equally-specific aliases and repositories outside the global list
-remain fail-closed. The common poller accepts `execution.kind=report_only`
-only for the two Todo source types; all other unsupported execution kinds fail
-closed.
+A missing project reference remains informational/report-only. Multiple
+different repository references in one task tree, duplicate configured short
+names, ambiguous catalog aliases, and repositories outside the global
+\`.repositories\` allowlist fail closed and are not queued. The common poller
+accepts \`execution.kind=report_only\` only for the two Todo source types; all
+other unsupported execution kinds fail closed.
 
-Todo providers do not select a configured default repository. For each
-active root, an explicit GitHub repository URL takes precedence and does not
-require a catalog entry. Otherwise, the longest whole-phrase alias in the
-optional project catalog (`~/.agents/skills/globalskills-repository/project-repositories.json`)
-must identify exactly one canonical `owner/repo`. If the catalog is unavailable,
-alias routing is disabled and a task without an explicit URL becomes
-report-only. The resolved `repository`, method, matched alias and available
-mapped skill names are stored in normalized metadata as `repositoryResolution`.
-Mapped skills are read only from `~/.agents/skills/<skill>/SKILL.md`; a missing
-skill file is skipped and workers must not inspect global skill paths.
+Todo providers do not select a configured default repository. For each active
+root, routing searches the complete tree and gives explicit GitHub URLs and
+configured repository names precedence over catalog aliases. Otherwise, the
+longest whole-phrase alias in the optional project catalog
+(\`~/.agents/skills/globalskills-repository/project-repositories.json\`) must
+identify exactly one canonical \`owner/repo\`. The catalog supplies aliases and
+optional mapped project skills. The top-level \`.repositories\` list remains the
+only access allowlist. Mapped skill files are read only from
+\`~/.agents/skills/<skill>/SKILL.md\`; a missing skill file is skipped.
 
 The top-level `.repositories` array in `~/.manul/config.json` is the single
 operator-controlled repository list for all task sources. GitHub Issues polling
