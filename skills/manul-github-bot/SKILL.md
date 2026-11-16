@@ -263,7 +263,10 @@ protocol, then runs the agent in a disposable task-scoped scratch directory.
 The complete answer is saved as a child of the source Todo item, read back and
 verified, and recorded as a local delivery receipt before the Todo tree is
 completed. The generated child is identified by a source-version-bound marker
-so original user task structure remains intact.
+and is the only child excluded from the source fingerprint; edits to the
+original task or its other subtasks still invalidate the queued source. Partial
+writes are retried by reusing the exact child instead of creating duplicates.
+The root is marked done last, after the result and all original descendants.
 
 Todo sources do not have a fixed project repository. Each Todo root resolves its
 execution target independently from the full task tree. Explicit GitHub URLs
