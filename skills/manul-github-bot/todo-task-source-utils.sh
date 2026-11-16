@@ -60,34 +60,32 @@ todo_task_resolve_repository() {
   # configured short names. "repo todo" selects mariuszmarzec/todo without
   # requiring a project-catalog alias.
   repositories_json="$(todo_mcp_source_repositories "$source_json")" || return 2
-  configured_matches_json="$(jq -cn \
-    --arg description "$description" \
-    --argjson repositories "$repositories_json" '
-      def norm:
-        ascii_downcase
-        | gsub("[^a-z0-9]+"; " ")
-        | gsub("^ +| +$"; "");
-      ($description | norm) as $task_text
-      | [
-          $repositories[] as $repository
-          | select($repository | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"))
-          | ($repository | split("/") | last) as $slug
-          | ($repository | norm) as $full_phrase
-          | ($slug | norm) as $slug_phrase
-          | ((" " + $task_text + " ") | contains(" " + $full_phrase + " ")) as $has_full_name
-          | (" " + $task_text + " ") as $padded_task_text
-          | (($padded_task_text | contains(" repo " + $slug_phrase + " "))
-              or ($padded_task_text | contains(" repository " + $slug_phrase + " "))) as $has_short_name
-          | select($has_full_name or $has_short_name)
-          | {
-              repository: $repository,
-              method: (if $has_full_name then "explicit_repository_name" else "configured_repository_slug" end),
-              matchedAlias: (if $has_full_name then "" else $slug end),
-              length: (if $has_full_name then ($full_phrase | length) else ($slug_phrase | length) end)
-            }
-        ]
-      | unique_by(.repository)
-    ')" || return 2
+  configured_matches_json='[]'
+  local configured_repository configured_owner configured_slug owner_pattern slug_pattern configured_method
+  while IFS= read -r configured_repository; do
+    [[ "$configured_repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || continue
+    configured_owner="\${configured_repository%%/*}"
+    configured_slug="\${configured_repository#*/}"
+    # Repository path components are restricted above; escape their only ERE
+    # metacharacter (dot) before constructing whole-token patterns.
+    owner_pattern="\${configured_owner//./\\.}"
+    slug_pattern="\${configured_slug//./\\.}"
+    if grep -Eiq "(^|[^[:alnum:]_.-])\${owner_pattern}/\${slug_pattern}([.]git)?([^[:alnum:]_.-]|$)" <<<"$description"; then
+      configured_method="explicit_repository_name"
+      matched_alias=""
+    elif grep -Eiq "(^|[^[:alnum:]_.-])(repo|repository)[[:space:]:=]+\${slug_pattern}([^[:alnum:]_.-]|$)" <<<"$description"; then
+      configured_method="configured_repository_slug"
+      matched_alias="$configured_slug"
+    else
+      continue
+    fi
+    configured_matches_json="$(jq -cn \
+      --argjson existing "$configured_matches_json" \
+      --arg repository "$configured_repository" \
+      --arg method "$configured_method" \
+      --arg matchedAlias "$matched_alias" \
+      '$existing + [{repository:$repository,method:$method,matchedAlias:$matchedAlias}]')" || return 2
+  done < <(jq -r '.[]' <<<"$repositories_json")
 
   explicit_matches="$(
     grep -Eo 'https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' <<<"$description" \
