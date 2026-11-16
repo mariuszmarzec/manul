@@ -497,7 +497,7 @@ test_status() {
   # Compact default output must stay readable in an 80-column terminal.
   log "Compact list stays within terminal width"
   OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
-  if printf '%s\\n' "$OUTPUT" | awk 'length($0) > 80 { exit 1 }' \
+  if printf '%s\n' "$OUTPUT" | awk 'length($0) > 80 { exit 1 }' \
     && ! printf '%s' "$OUTPUT" | grep -q "$LONG_TASK_ID" \
     && printf '%s' "$OUTPUT" | grep -q "STATE" \
     && printf '%s' "$OUTPUT" | grep -q "T-L" \
