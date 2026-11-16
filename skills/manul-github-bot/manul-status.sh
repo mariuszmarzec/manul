@@ -7,7 +7,8 @@
 # Options:
 #   --task ID        Task/comment ID to query (required if no positional arg)
 #   --json           Output JSON format
-#   --list           List active tasks plus recent terminal tasks
+#   --list           Compact list of active tasks plus recent terminal tasks
+#   --wide           Show the full diagnostic table with all columns (use with --list)
 #   --history        List terminal task history retained for the longer window
 #   --status S       Filter by status (queued, running, blocked_user, completed, failed, stale)
 #   --log            Show daemon.log instead of task status
@@ -58,6 +59,7 @@ FILTER_STATUS=""
 TASK_ID=""
 LOG_MODE=false
 HISTORY_MODE=false
+WIDE_MODE=false
 LOG_TAIL=100
 
 TASK_RETENTION_DEFAULT_LIST_DAYS=7
@@ -73,6 +75,7 @@ while [[ $# -gt 0 ]]; do
       TASK_ID="$2"; shift 2 ;;
     --json) OUTPUT_FORMAT="json"; shift ;;
     --list) LIST_MODE=true; shift ;;
+    --wide) WIDE_MODE=true; shift ;;
     --history) HISTORY_MODE=true; LIST_MODE=true; shift ;;
     --status)
       [ $# -ge 2 ] || { echo "Error: --status requires a value" >&2; exit 1; }
@@ -282,7 +285,7 @@ if [ "$LIST_MODE" = true ]; then
       printf '  %s' "$json_object"
     done <<< "$RESULTS"
     printf '\n]\n'
-  else
+  elif [ "$WIDE_MODE" = true ]; then
     # Calculate widths from all rendered values. printf field widths are minimums,
     # not maximums, so fixed widths let long task IDs/repository names shift columns.
     header_task_id="TASK_ID"
@@ -360,6 +363,71 @@ if [ "$LIST_MODE" = true ]; then
         "$attempts_width" "$attempts" \
         "$pre_execution_failures_width" "$pre_execution_failures" \
         "$agent_started_at_width" "$agent_started_at" "$created"
+    done <<< "$RESULTS"
+  else
+    # Compact, terminal-friendly output is the default. Keep every row below
+    # 80 columns even when provider IDs or repository names are unusually long.
+    compact_value() {
+      local value="$1" width="$2"
+      if [ "${#value}" -gt "$width" ]; then
+        printf '%s~' "${value:0:$((width - 1))}"
+      else
+        printf '%s' "$value"
+      fi
+    }
+
+    compact_repo_reference() {
+      local value="$1" issue_number="$2"
+      if [ "$issue_number" != "0" ]; then
+        value="$value#$issue_number"
+      fi
+      if [ "${#value}" -gt 22 ] && [ "$issue_number" != "0" ]; then
+        printf '%s~#%s' "${value:0:17}" "$issue_number"
+      else
+        compact_value "$value" 22
+      fi
+    }
+
+    printf '%-6s %-22s %-20s %-4s %-6s %s\\n' \
+      "STATE" "REPOSITORY#ISSUE" "TASK" "SRC" "INFO" "TIME"
+
+    while IFS='|' read -r tid repo issue status conv attempts pre_execution_failures agent_started_at created started worker ws next task_source_type task_source_id; do
+      case "$status" in
+        completed) short_status="DONE" ;;
+        blocked_user) short_status="BLOCKED" ;;
+        queued) short_status="QUEUED" ;;
+        running) short_status="RUNNING" ;;
+        failed) short_status="FAILED" ;;
+        stale) short_status="STALE" ;;
+        *) short_status="$status" ;;
+      esac
+
+      case "$task_source_type" in
+        github_issues) short_source="GH" ;;
+        jira_tasks) short_source="JIRA" ;;
+        todo_local_mcp) short_source="TODO-L" ;;
+        todo_remote_mcp) short_source="TODO-R" ;;
+        "") short_source="CLI" ;;
+        *) short_source="$(compact_value "$task_source_type" 4)" ;;
+      esac
+
+      info=""
+      if [ "${attempts:-0}" -gt 0 ]; then
+        info="a${attempts}"
+      fi
+      if [ "${pre_execution_failures:-0}" -gt 0 ]; then
+        [ -n "$info" ] && info="$info "
+        info="${info}p${pre_execution_failures}"
+      fi
+      [ -n "$info" ] || info="-"
+
+      repo_reference="$(compact_repo_reference "$repo" "$issue")"
+      task_reference="$(compact_value "$tid" 20)"
+      created_time="${created:11:5}"
+      [ -n "$created_time" ] || created_time="-"
+
+      printf '%-6s %-22s %-20s %-4s %-6s %s\\n' \
+        "$short_status" "$repo_reference" "$task_reference" "$short_source" "$info" "$created_time"
     done <<< "$RESULTS"
   fi
 else
