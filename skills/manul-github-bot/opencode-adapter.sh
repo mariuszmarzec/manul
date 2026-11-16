@@ -794,9 +794,9 @@ elif execution_kind == "slack_intake":
             "description": "Sphinx Slack intake. Only Todo Local list/get/create tools are permitted; never send Slack messages or modify existing Todo tasks.",
             "tools": {
                 "*": False,
-                "manul_todo_local_todo_list_tasks": True,
-                "manul_todo_local_todo_get_task": True,
-                "manul_todo_local_todo_create_task": True,
+                "manul_todo_local_list_tasks": True,
+                "manul_todo_local_get_task": True,
+                "manul_todo_local_create_task": True,
             },
         }
     }
