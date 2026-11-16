@@ -388,7 +388,7 @@ if [ "$LIST_MODE" = true ]; then
       fi
     }
 
-    printf '%-6s %-22s %-20s %-4s %-6s %s\\n' \
+    printf '%-6s %-22s %-20s %-4s %-6s %s\n' \
       "STATE" "REPOSITORY#ISSUE" "TASK" "SRC" "INFO" "TIME"
 
     while IFS='|' read -r tid repo issue status conv attempts pre_execution_failures agent_started_at created started worker ws next task_source_type task_source_id; do
@@ -405,8 +405,8 @@ if [ "$LIST_MODE" = true ]; then
       case "$task_source_type" in
         github_issues) short_source="GH" ;;
         jira_tasks) short_source="JIRA" ;;
-        todo_local_mcp) short_source="TODO-L" ;;
-        todo_remote_mcp) short_source="TODO-R" ;;
+        todo_local_mcp) short_source="T-L" ;;
+        todo_remote_mcp) short_source="T-R" ;;
         "") short_source="CLI" ;;
         *) short_source="$(compact_value "$task_source_type" 4)" ;;
       esac
@@ -426,7 +426,7 @@ if [ "$LIST_MODE" = true ]; then
       created_time="${created:11:5}"
       [ -n "$created_time" ] || created_time="-"
 
-      printf '%-6s %-22s %-20s %-4s %-6s %s\\n' \
+      printf '%-6s %-22s %-20s %-4s %-6s %s\n' \
         "$short_status" "$repo_reference" "$task_reference" "$short_source" "$info" "$created_time"
     done <<< "$RESULTS"
   fi
