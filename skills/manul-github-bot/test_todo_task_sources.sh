@@ -476,7 +476,7 @@ cat > "$TEST_DIR/remote.json" <<'JSON'
 ]
 JSON
 
-LOCAL_SOURCE='{"type":"todo_local_mcp","repositories":["owner/local","owner/link-target","owner/fiteo-app","owner/manul","owner/test-manul-e2e"],"tokenEnv":"ignored-legacy-setting"}'
+LOCAL_SOURCE='{"type":"todo_local_mcp","repositories":["owner/local","owner/link-target","owner/fiteo-app","owner/manul","owner/test-manul-e2e","mariuszmarzec/todo"],"tokenEnv":"ignored-legacy-setting"}'
 REMOTE_SOURCE='{"type":"todo_remote_mcp","repositories":["owner/remote"],"tokenEnv":"FITEO_MANUL_PAT","manulUserIdEnv":"MANUL_USER_ID","url":"{env:FITEO_BASE_URL}/mcp"}'
 remote_resolved_config="$(todo_source_remote_config "$REMOTE_SOURCE")"
 assert_eq "remote URL expands the Fiteo base URL environment placeholder" "https://fiteo.example.test/mcp" "$(jq -r '.url' <<<"$remote_resolved_config")"
@@ -562,6 +562,39 @@ e2e_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":96,"descri
 assert_eq "hyphenated repository slug wins over embedded Manul alias" "owner/test-manul-e2e" "$(jq -r '.repository' <<<"$e2e_resolution")"
 assert_eq "repository slug is available as an implicit matched alias" "test-manul-e2e" "$(jq -r '.matchedAlias' <<<"$e2e_resolution")"
 
+# Configured repository names are routable without a project-catalog entry,
+# including the concise "repo <slug>" form and references in nested subtasks.
+short_repo_task='{"id":101,"description":"/manul Implement the requested change","subTasks":[{"id":102,"description":"Implementation details","subTasks":[{"id":103,"description":"repo todo."}]}]}'
+short_repo_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$short_repo_task")"
+assert_eq "configured short repository name resolves from a grandchild description" "mariuszmarzec/todo" "$(jq -r '.repository' <<<"$short_repo_resolution")"
+assert_eq "configured short repository name records its routing method" "configured_repository_slug" "$(jq -r '.method' <<<"$short_repo_resolution")"
+assert_eq "configured short repository name records its slug" "todo" "$(jq -r '.matchedAlias' <<<"$short_repo_resolution")"
+
+full_repo_task='{"id":102,"description":"/manul Implement a change","subTasks":[{"id":104,"description":"Target repository: owner/local"}]}'
+full_repo_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$full_repo_task")"
+assert_eq "explicit owner/repo notation in a subtask resolves from the allowlist" "owner/local" "$(jq -r '.repository' <<<"$full_repo_resolution")"
+assert_eq "explicit owner/repo notation has dedicated provenance" "explicit_repository_name" "$(jq -r '.method' <<<"$full_repo_resolution")"
+
+nested_alias_task='{"id":103,"description":"/manul Implement a change","subTasks":[{"id":105,"description":"Use the local project for this change"}]}'
+nested_alias_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$nested_alias_task")"
+assert_eq "catalog aliases are also resolved from nested subtask descriptions" "owner/local" "$(jq -r '.repository' <<<"$nested_alias_resolution")"
+
+resolution_rc=0
+ambiguous_short_source='{"repositories":["org-one/todo","org-two/todo"]}'
+todo_task_resolve_repository "$ambiguous_short_source" '{"id":104,"description":"/manul Implement this in repo todo"}' 2>"$TEST_DIR/ambiguous-short-name.log" >/dev/null || resolution_rc=$?
+assert_rc "duplicate configured repository slugs are rejected instead of guessed" "1" "$resolution_rc"
+assert_contains "ambiguous short repository name lists the candidates" "$(cat "$TEST_DIR/ambiguous-short-name.log")" "org-one/todo, org-two/todo"
+
+slug_boundary_source='{"repositories":["org/todo","org/todo-app"]}'
+slug_boundary_resolution="$(todo_task_resolve_repository "$slug_boundary_source" '{"id":108,"description":"/manul Implement this in repo todo-app"}')"
+assert_eq "short repository matching requires a whole slug and does not match a shorter prefix" "org/todo-app" "$(jq -r '.repository' <<<"$slug_boundary_resolution")"
+
+resolution_rc=0
+conflicting_tree='{"id":105,"description":"/manul Implement the change in repo todo","subTasks":[{"id":106,"description":"Another target: owner/local"}]}'
+todo_task_resolve_repository "$LOCAL_SOURCE" "$conflicting_tree" 2>"$TEST_DIR/conflicting-tree.log" >/dev/null || resolution_rc=$?
+assert_rc "conflicting repository references across a task tree fail closed" "1" "$resolution_rc"
+assert_contains "conflicting repository references explain the ambiguity" "$(cat "$TEST_DIR/conflicting-tree.log")" "multiple configured repositories"
+
 resolution_rc=0
 todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":94,"description":"/manul Update the shared module"}' 2>"$TEST_DIR/ambiguous.log" >/dev/null || resolution_rc=$?
 assert_rc "duplicate alias is rejected instead of guessing" "1" "$resolution_rc"
@@ -593,6 +626,11 @@ explicit_no_catalog_source='{"repositories":["owner/unlisted-but-allowed"]}'
 explicit_no_catalog="$(HOME="$MISSING_CATALOG_HOME" todo_task_resolve_repository "$explicit_no_catalog_source" '{"id":97,"description":"/manul Work on https://github.com/owner/unlisted-but-allowed"}' 2>"$TEST_DIR/no-catalog-explicit.log")"
 assert_eq "explicit allowlisted GitHub URL works without the project catalog" "owner/unlisted-but-allowed" "$(jq -r '.repository' <<<"$explicit_no_catalog")"
 assert_eq "explicit no-catalog routing keeps its provenance" "explicit_github_url" "$(jq -r '.method' <<<"$explicit_no_catalog")"
+
+short_no_catalog_source='{"repositories":["mariuszmarzec/todo"]}'
+short_no_catalog="$(HOME="$MISSING_CATALOG_HOME" todo_task_resolve_repository "$short_no_catalog_source" '{"id":107,"description":"/manul Implement the fix in repo todo"}' 2>"$TEST_DIR/no-catalog-short.log")"
+assert_eq "configured repo slug works without project-repositories.json" "mariuszmarzec/todo" "$(jq -r '.repository' <<<"$short_no_catalog")"
+assert_eq "configured repo slug without catalog keeps its provenance" "configured_repository_slug" "$(jq -r '.method' <<<"$short_no_catalog")"
 
 resolution_rc=0
 todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":98,"description":"/manul Work on https://github.com/other-owner/private-repo"}' 2>"$TEST_DIR/not-allowlisted.log" >/dev/null || resolution_rc=$?
@@ -666,6 +704,43 @@ assert_eq "local nested /manul trigger queues the parent root once" "491" "$(jq 
 assert_eq "local nested trigger uses report-only when the parent has no repository route" "report_only" "$(jq -r '.execution.kind' <<<"$nested_trigger_task")"
 assert_contains "nested /manul command is removed from the ordered step text" "$(jq -r '.prompt' <<<"$nested_trigger_task")" "answer a nested question"
 assert_not_contains "nested /manul command itself is not forwarded as prompt content" "$(jq -r '.prompt' <<<"$nested_trigger_task")" "/manul"
+
+# The root trigger and the target repository may live in different nodes:
+# Todo routing must inspect the same complete tree that was queued.
+cat > "$TEST_DIR/local-configured-repository-in-subtask.json" <<'JSON'
+[
+  {
+    "id": 493,
+    "description": "/manul Implement the requested feature",
+    "addedTime": "2026-10-01T10:00:00",
+    "modifiedTime": "2026-10-01T10:00:00",
+    "parentTaskId": null,
+    "subTasks": [
+      {
+        "id": 494,
+        "description": "Implementation target: repo todo",
+        "addedTime": "2026-10-01T10:01:00",
+        "modifiedTime": "2026-10-01T10:01:00",
+        "parentTaskId": 493,
+        "subTasks": [],
+        "isToDo": true,
+        "priority": 1,
+        "scheduler": null,
+        "shares": []
+      }
+    ],
+    "isToDo": true,
+    "priority": 1,
+    "scheduler": null,
+    "shares": []
+  }
+]
+JSON
+LOCAL_SHORT_SOURCE='{"type":"todo_local_mcp","repositories":["mariuszmarzec/todo"]}'
+export TODO_MCP_FIXTURE="$TEST_DIR/local-configured-repository-in-subtask.json"
+local_short_task="$(task_source_todo_local_poll "$LOCAL_SHORT_SOURCE")"
+assert_eq "local adapter routes a root implementation trigger to a repo named only in its subtask" "mariuszmarzec/todo" "$(jq -r '.metadata.repository' <<<"$local_short_task")"
+assert_eq "local adapter does not downgrade a configured repo-slug task to report-only" "repository" "$(jq -r '.execution.kind' <<<"$local_short_task")"
 
 export TODO_MCP_FIXTURE="$TEST_DIR/local.json"
 assert_contains "local Todo uses the default loopback URL" "$(todo_source_local_config "$LOCAL_SOURCE")" 'http://127.0.0.1:8765/mcp'

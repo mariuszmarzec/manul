@@ -36,27 +36,95 @@ todo_task_repository_catalog_path() {
   printf '%s\n' "$HOME/.agents/skills/globalskills-repository/project-repositories.json"
 }
 
-# Resolve a task target only from the curated project catalog. Explicit GitHub
-# URLs win; otherwise the longest unambiguous whole-phrase alias wins. A
-# The operator's global .repositories list is the allowlist; the catalog only maps names and skills.
+# Resolve Todo task targets from the complete task tree. The global
+# .repositories list is both the allowlist and the source of configured
+# owner/repo names and short repository slugs; the catalog adds optional aliases.
 todo_task_resolve_repository() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
-  local catalog_json="" catalog_valid=false matches_json match_json entry_json="" repositories_json canonical_repository skills_json="[]"
+  local catalog_json="" catalog_valid=false matches_json match_json entry_json="" repositories_json skills_json="[]"
+  local configured_matches_json direct_matches_json direct_match_count
 
-  description="$(jq -r '.description // ""' <<<"$task_json")"
-  # The leading /manul command is a trigger, not a repository alias.
-  # Strip it before matching catalog aliases so plain questions stay report-only.
-  description="$(todo_strip_manul_trigger "$description")"
+  # Inspect the complete Todo tree: the repository may be named in any
+  # root/child/grandchild description, not necessarily on the root.
+  description="$(jq -r '
+    def strip_trigger:
+      gsub("(?m)^[[:space:]]*/manul([[:space:]]+report)?([[:space:]]+|$)"; "");
+    def task_descriptions:
+      ((.description // "") | strip_trigger),
+      (.subTasks[]? | task_descriptions);
+    [task_descriptions] | join("\n")
+  ' <<<"$task_json")" || return 2
+
+  # The top-level .repositories list is the allowlist and also the source of
+  # configured short names. "repo todo" selects mariuszmarzec/todo without
+  # requiring a project-catalog alias.
+  repositories_json="$(todo_mcp_source_repositories "$source_json")" || return 2
+  configured_matches_json='[]'
+  local configured_repository configured_owner configured_slug owner_pattern slug_pattern configured_method
+  while IFS= read -r configured_repository; do
+    [[ "$configured_repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || continue
+    configured_owner="${configured_repository%%/*}"
+    configured_slug="${configured_repository#*/}"
+    # Repository path components are restricted above; escape their only ERE
+    # metacharacter (dot) before constructing whole-token patterns.
+    owner_pattern="${configured_owner//./\\.}"
+    slug_pattern="${configured_slug//./\\.}"
+    if grep -Eiq "(^|[^[:alnum:]_.-])${owner_pattern}/${slug_pattern}([.]git)?([^[:alnum:]_.-]|[.]([[:space:]]|$)|$)" <<<"$description"; then
+      configured_method="explicit_repository_name"
+      matched_alias=""
+    elif grep -Eiq "(^|[^[:alnum:]_.-])(repo|repository)[[:space:]:=]+${slug_pattern}([^[:alnum:]_.-]|[.]([[:space:]]|$)|$)" <<<"$description"; then
+      configured_method="configured_repository_slug"
+      matched_alias="$configured_slug"
+    else
+      continue
+    fi
+    configured_matches_json="$(jq -cn \
+      --argjson existing "$configured_matches_json" \
+      --arg repository "$configured_repository" \
+      --arg method "$configured_method" \
+      --arg matchedAlias "$matched_alias" \
+      '$existing + [{repository:$repository,method:$method,matchedAlias:$matchedAlias}]')" || return 2
+  done < <(jq -r '.[]' <<<"$repositories_json")
+
   explicit_matches="$(
     grep -Eo 'https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' <<<"$description" \
       | sed -E 's#^https?://github\.com/##; s#\.git$##' \
       | sort -u || true
   )"
-  candidate_count="$(printf '%s\n' "$explicit_matches" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
 
-  # The catalog is an optional alias/skills index. Explicit GitHub URLs do
-  # not depend on it; aliases do.
+  # URLs and configured names are stronger signals than catalog aliases.
+  # Multiple different configured targets in one tree are rejected, never
+  # resolved by occurrence order.
+  direct_matches_json="$(jq -cn \
+    --arg urls "$explicit_matches" \
+    --argjson configured "$configured_matches_json" '
+      ([
+        $urls
+        | split("\n")[]
+        | select(length > 0)
+        | {repository:., method:"explicit_github_url", matchedAlias:"", length:(length)}
+      ] + $configured)
+      | group_by(.repository)
+      | map(
+          sort_by(
+            if .method == "explicit_github_url" then 0
+            elif .method == "explicit_repository_name" then 1
+            else 2 end
+          )[0]
+        )
+    ')" || return 2
+  direct_match_count="$(jq -r 'length' <<<"$direct_matches_json")" || return 2
+
+  if [ "$direct_match_count" -gt 1 ]; then
+    local candidates
+    candidates="$(jq -r '[.[].repository] | join(", ")' <<<"$direct_matches_json")"
+    echo "Todo task mentions multiple configured repositories; routing is ambiguous ($candidates)" >&2
+    return 1
+  fi
+
+  # The project catalog is optional when the task names an allowlisted
+  # repository directly. It is needed only for project aliases/skill metadata.
   catalog_file="$(todo_task_repository_catalog_path)"
   if [ -r "$catalog_file" ]; then
     catalog_json="$(cat "$catalog_file" 2>/dev/null || true)"
@@ -67,15 +135,11 @@ todo_task_resolve_repository() {
     fi
   fi
 
-  if [ "$candidate_count" -gt 1 ]; then
-    echo "Todo task mentions multiple GitHub repositories; routing is ambiguous" >&2
-    return 1
-  fi
-
-  if [ "$candidate_count" -eq 1 ]; then
-    repository="$explicit_matches"
-    method="explicit_github_url"
-    matched_alias=""
+  if [ "$direct_match_count" -eq 1 ]; then
+    match_json="$(jq -c '.[0]' <<<"$direct_matches_json")"
+    repository="$(jq -r '.repository' <<<"$match_json")"
+    method="$(jq -r '.method' <<<"$match_json")"
+    matched_alias="$(jq -r '.matchedAlias // empty' <<<"$match_json")"
   else
     if [ "$catalog_valid" != "true" ]; then
       echo "project catalog is unavailable; alias routing is disabled and this task will be report-only" >&2
@@ -107,9 +171,9 @@ todo_task_resolve_repository() {
     ' <<<"$catalog_json")" || return 2
     candidate_count="$(jq -r 'length' <<<"$matches_json")"
     if [ "$candidate_count" -eq 0 ]; then
-      echo "no project alias matched the Todo task description" >&2
-      # Exit code 3 tells Todo adapters there is no repository route, so the
-      # task can safely run in report-only mode. Routing errors stay distinct.
+      echo "no project alias matched and no configured repository name was present in the Todo task tree" >&2
+      # No project reference remains the informational/report-only fallback.
+      # Ambiguous and disallowed repository targets fail closed above/below.
       return 3
     fi
     if [ "$candidate_count" -gt 1 ]; then
@@ -135,10 +199,9 @@ todo_task_resolve_repository() {
       | first // empty
     ' <<<"$catalog_json")" || return 2
   fi
-  canonical_repository="$(jq -r '.name // empty' <<<"${entry_json:-}")"
+  canonical_repository="$(jq -r '.name // empty' <<<"\${entry_json:-}")"
   [ -n "$canonical_repository" ] || canonical_repository="$repository"
 
-  repositories_json="$(todo_mcp_source_repositories "$source_json")" || return 2
   if ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$repositories_json" >/dev/null 2>&1; then
     echo "repository $canonical_repository is excluded by the global .repositories list" >&2
     return 1
