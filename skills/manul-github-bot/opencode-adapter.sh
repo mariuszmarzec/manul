@@ -655,6 +655,7 @@ def collect_permission_rules(obj):
     return rules
 
 names = set()
+existing_mcp_servers = {}
 agent_names = set()
 tool_rule_patterns = set()
 operator_permissions = []
@@ -688,9 +689,17 @@ for path in dict.fromkeys(paths):
         servers = mcp.get("servers")
         if isinstance(servers, dict):
             names.update(servers.keys())
+            for server_name, server_config in servers.items():
+                existing_mcp_servers.setdefault(server_name, []).append(server_config)
         # Older Manul/OpenCode configs may still use named entries directly
         # under mcp. Treat them as occupied too.
-        names.update(k for k, v in mcp.items() if k not in {"servers", "timeout"} and isinstance(v, dict))
+        direct_servers = {
+            k: v for k, v in mcp.items()
+            if k not in {"servers", "timeout"} and isinstance(v, dict)
+        }
+        names.update(direct_servers.keys())
+        for server_name, server_config in direct_servers.items():
+            existing_mcp_servers.setdefault(server_name, []).append(server_config)
     # Managed settings are applied by OpenCode after inline config and must
     # retain their higher priority. They may intentionally deny task access;
     # do not override or silently discard an administrator permission policy.
@@ -713,8 +722,19 @@ if inline_content:
             if isinstance(agents_obj, dict):
                 agent_names.update(agents_obj.keys())
             mcp = parsed.get("mcp") or {}
-            if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
-                names.update(mcp["servers"].keys())
+            if isinstance(mcp, dict):
+                inline_servers = mcp.get("servers")
+                if isinstance(inline_servers, dict):
+                    names.update(inline_servers.keys())
+                    for server_name, server_config in inline_servers.items():
+                        existing_mcp_servers.setdefault(server_name, []).append(server_config)
+                inline_direct_servers = {
+                    k: v for k, v in mcp.items()
+                    if k not in {"servers", "timeout"} and isinstance(v, dict)
+                }
+                names.update(inline_direct_servers.keys())
+                for server_name, server_config in inline_direct_servers.items():
+                    existing_mcp_servers.setdefault(server_name, []).append(server_config)
             operator_permissions.extend(collect_legacy_permission_rules(parsed))
     except Exception as exc:
         print(f"invalid inherited OPENCODE_CONFIG_CONTENT: {exc}", file=sys.stderr)
@@ -811,10 +831,31 @@ if fiteo_url and fiteo_pat:
         print("could not safely inspect all OpenCode config layers; skipping optional Manul Fiteo MCP", file=sys.stderr)
 if todo_url:
     if "manul-todo-local" in names:
-        print("operator MCP 'manul-todo-local' already exists; leaving it untouched", file=sys.stderr)
-        if execution_kind == "slack_intake":
-            # Do not borrow an operator MCP with a matching name.
-            operator_agent_config["manul-slack-intake"]["tools"] = {"*": False}
+        candidates = existing_mcp_servers.get("manul-todo-local", [])
+        accepted_urls = {todo_url, "{env:TODO_LOCAL_MCP_URL}"}
+        reusable = bool(candidates) and all(
+            isinstance(candidate, dict)
+            and candidate.get("type") == "remote"
+            and candidate.get("url") in accepted_urls
+            and candidate.get("disabled") is not True
+            for candidate in candidates
+        )
+        if reusable:
+            print("reusing the existing Manul-owned Todo Local MCP endpoint", file=sys.stderr)
+            if execution_kind == "slack_intake":
+                for tool_name in (
+                    "manul_todo_local_todo_list_tasks",
+                    "manul_todo_local_todo_get_task",
+                    "manul_todo_local_todo_create_task",
+                    "manul_todo_local_list_tasks",
+                    "manul_todo_local_get_task",
+                    "manul_todo_local_create_task",
+                ):
+                    permissions.append({"action": tool_name, "resource": "*", "effect": "allow"})
+        else:
+            print("reserved MCP name 'manul-todo-local' exists but its endpoint cannot be verified as the configured Todo Local MCP; disabling intake tools", file=sys.stderr)
+            if execution_kind == "slack_intake":
+                operator_agent_config["manul-slack-intake"]["tools"] = {"*": False}
     elif scan_ok:
         servers["manul-todo-local"] = {
             "type": "remote",
