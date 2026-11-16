@@ -13,7 +13,7 @@ class SlackIntakeContractTest(unittest.TestCase):
 
     def test_regular_operator_prompt_stays_read_only(self):
         query = self.read("manul-query.sh")
-        self.assertIn("if [[ \" $* \" == *\" --todo-local \"* ]]; then", query)
+        self.assertIn('if [ "$argument" = "--todo-local" ]; then', query)
         self.assertIn("exec bash \"$SCRIPT_DIR/manul-slack-intake.sh\" \"$@\"", query)
         self.assertIn("This is a read-only, one-shot information request.", query)
         self.assertIn("Do not attempt to read local files, inspect runtime state, or invoke tools.", query)
