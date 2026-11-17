@@ -3822,8 +3822,6 @@ else
     fi
   fi
 
-  fi
-
   # GitHub-rooted tasks require a deterministic result-comment receipt.
   # Todo tasks instead use the source MCP and do not have a GitHub issue thread.
   # The comment-only base-branch verifier already checked this exact marker and
