@@ -170,6 +170,16 @@ AgentExecutor.execute() {
         execution_runtime="opencode"
     fi
 
+    # Codex does not yet have a verified tool-free operator-query profile.
+    # Never run a repository-free Todo answer with a backend that could expose
+    # host files or tools; fail closed so the daemon records a normal Todo failure.
+    if [ "$execution_kind" = "answer" ] && [ "$execution_runtime" = "codex" ]; then
+        jq -cn --arg taskId "$task_id" \
+          '{status:"FAILED",task_id:$taskId,exit_code:65,summary:"The configured Codex runtime does not support the required tool-free informational-answer mode",failure_code:"ANSWER_RUNTIME_UNSUPPORTED",diagnostics:{stage:"answer_runtime_policy"}}'
+        AgentExecutor_ExitCode=65
+        return 1
+    fi
+
     # Route through the single configured runtime (or explicit task override).
     local adapter_script
     case "$execution_runtime" in
