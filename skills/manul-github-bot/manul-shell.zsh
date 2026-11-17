@@ -30,7 +30,30 @@ MANUL_REPAIR="$MANUL_CANONICAL_DIR/repair-manul-runtime.sh"
 MANUL_AUTOMATION="$MANUL_CANONICAL_DIR/start-manul-automation.sh"
 MANUL_UPDATER="$MANUL_CANONICAL_DIR/update-manul.sh"
 
+# Git checkouts on Windows-backed filesystems can materialize CRLF even when
+# the canonical Manul source is executed from WSL. Normalize only Manul-owned
+# source scripts; runtime entries are symlinks to these canonical files.
+manul-normalize-script-line-endings() {
+    local normalizer="$MANUL_CANONICAL_DIR/normalize-script-line-endings.py"
+    [ -f "$normalizer" ] || return 0
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: python3 is required to repair Manul script line endings" >&2
+        return 1
+    fi
+
+    command python3 "$normalizer" "$MANUL_CANONICAL_DIR"
+}
+
 manul-ensure-runtime() {
+    # Repair CRLF before executing any script with an env/bash shebang. This
+    # specifically protects the status path, which executes manul-daemon.sh
+    # directly and otherwise fails with an interpreter named "bash\r".
+    manul-normalize-script-line-endings || {
+        echo "ERROR: failed to normalize Manul script line endings" >&2
+        return 1
+    }
+
     if [ ! -d "$MANUL_RUNTIME_DIR" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-daemon.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-status.sh" ] \

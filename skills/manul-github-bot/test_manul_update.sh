@@ -17,10 +17,38 @@ assert_contains() {
     case "$2" in *"$3"*) ok "$1" ;; *) bad "$1 (missing '$3')";; esac
 }
 
+echo "=== CLI repairs CRLF script launchers ==="
+CRLF_CANONICAL="$TEST_DIR/crlf-canonical"
+CRLF_RUNTIME="$TEST_DIR/crlf-runtime"
+mkdir -p "$CRLF_CANONICAL" "$CRLF_RUNTIME"
+cp "$SCRIPT_DIR/manul-shell.zsh" "$CRLF_CANONICAL/manul-shell.zsh"
+cp "$SCRIPT_DIR/normalize-script-line-endings.py" "$CRLF_CANONICAL/normalize-script-line-endings.py"
+printf '#!/usr/bin/env bash\r\nprintf "daemon-launch-ok\\n"\r\n' > "$CRLF_CANONICAL/manul-daemon.sh"
+chmod +x "$CRLF_CANONICAL/manul-daemon.sh"
+for entry in manul-daemon.sh manul-status.sh manul-query.sh manul-comments-remove.sh; do
+    [ -e "$CRLF_RUNTIME/$entry" ] || : > "$CRLF_RUNTIME/$entry"
+done
+CRLF_OUTPUT="$(
+    MANUL_CANONICAL_DIR="$CRLF_CANONICAL" MANUL_RUNTIME_DIR="$CRLF_RUNTIME" \
+    bash -c '
+        source "$MANUL_CANONICAL_DIR/manul-shell.zsh"
+        manul-ensure-runtime
+        "$MANUL_CANONICAL_DIR/manul-daemon.sh"
+    ' 2>&1
+)"
+assert_contains "status self-heal normalizes a CRLF shebang before launch" "$CRLF_OUTPUT" "daemon-launch-ok"
+if LC_ALL=C grep -q $'\r$' "$CRLF_CANONICAL/manul-daemon.sh"; then
+    bad "canonical daemon script no longer contains CRLF"
+else
+    ok "canonical daemon script no longer contains CRLF"
+fi
+
+echo
 echo "=== manul CLI update dispatch ==="
 CLI_CANONICAL="$TEST_DIR/cli-canonical"
 mkdir -p "$CLI_CANONICAL"
 cp "$SCRIPT_DIR/manul-shell.zsh" "$CLI_CANONICAL/manul-shell.zsh"
+cp "$SCRIPT_DIR/normalize-script-line-endings.py" "$CLI_CANONICAL/normalize-script-line-endings.py"
 cat > "$CLI_CANONICAL/update-manul.sh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MANUL_UPDATE_TEST_CAPTURE"
