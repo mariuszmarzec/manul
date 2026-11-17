@@ -658,7 +658,7 @@ cat > "$TEST_DIR/local-question.json" <<'JSON'
   {"id":490,"description":"/manul what day is today?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
 JSON
-LOCAL_QUESTION_SOURCE='{"type":"todo_local_mcp","repositories":["owner/local"]}'
+LOCAL_QUESTION_SOURCE="$(todo_source_local_config "$LOCAL_SOURCE")"
 export TODO_MCP_FIXTURE="$TEST_DIR/local-question.json"
 local_question_before="$(jq -c '.[0]' "$TODO_MCP_FIXTURE")"
 local_question_source_id="490@$(todo_task_fingerprint "$local_question_before")"
@@ -720,7 +720,7 @@ nested_trigger_tasks="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
 assert_eq "local nested /manul trigger is not queued without a repository" "0" "$(printf '%s\n' "$nested_trigger_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
 assert_eq "local nested trigger creates one routing blocker under the parent root" "2" "$(jq '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
 assert_contains "nested trigger blocker explains the missing repository" "$(jq -r '.[0].subTasks[1].description' "$TODO_MCP_FIXTURE")" "owner/repo"
-assert_not_contains "nested /manul command itself is not forwarded as prompt content" "$(jq -r '.prompt' <<<"$nested_trigger_task")" "/manul"
+assert_eq "nested trigger blocker is saved without queueing an agent prompt" "" "$nested_trigger_tasks"
 
 # The root trigger and the target repository may live in different nodes:
 # Todo routing must inspect the same complete tree that was queued.
@@ -1023,7 +1023,7 @@ MARKDOWN
 )"
 assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_markdown" $'First line  \nSecond line'
 assert_contains "Markdown list structure remains intact" "$formatted_markdown" $'- one  \n- two'
-assert_contains "fenced code block content is preserved" "$formatted_markdown" "```kotlin"
+assert_contains "fenced code block content is preserved" "$formatted_markdown" '```kotlin'
 assert_eq "single-line update text has no redundant trailing hard break" "Single-line status update." "$(printf '%s' 'Single-line status update.' | todo_task_markdown_format)"
 
 # Normal standalone operation must not need aicode to export helper paths.
