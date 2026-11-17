@@ -4990,18 +4990,20 @@ PROMPT_APPEND
 - For repository changes, **branch preparation is a mandatory precondition to every edit**: do not edit, patch, generate, format, or otherwise modify repository files until the branch preflight below has succeeded.
 - First run `git -C "__WORKDIR__" status --short` and `git -C "__WORKDIR__" branch --show-current`. Preserve any existing changes; never use `git reset --hard`, `git clean`, or discard/revert unknown work. If the checkout is dirty or its branch cannot be established safely, stop before editing and report the exact blocker.
 - Create the branch yourself before committing or pushing changes, and before the first repository edit.
-- For this standalone issue, use the initial prepared base branch `__INITIAL_BASE_BRANCH__` unless the task explicitly requires another base. The base branch must be updated from origin before you create the task branch.
-- Example preflight (replace `<short-description>` with a lowercase kebab-case summary):
+- For this standalone task, use the initial prepared base branch `__INITIAL_BASE_BRANCH__` unless the task explicitly requires another base. The base branch must be updated from origin before you create the task branch.
+- Choose a short, natural branch name based on the actual requested code change. Follow repository-local naming conventions; when none exist, use a concise lowercase kebab-case name, with a conventional type prefix only when that repository normally uses one.
+- Branch names must describe the change, never how the task arrived or which tool performs it. Do not include Manul, Todo, MCP, runtime/agent/provider names, task-source labels, GitHub comment IDs, Todo task IDs, attempt numbers, or other orchestration metadata unless a term is genuinely part of the requested product/domain change.
+- Do not add issue numbers by default. Include one only when the repository's established branch convention explicitly requires it.
+- Example preflight (replace `<short-description>` with a few lowercase kebab-case words describing the requested outcome):
   ```bash
   WORKDIR="__WORKDIR__"
   BASE_BRANCH="__INITIAL_BASE_BRANCH__"
-  TASK_SUFFIX="$(printf '%s' '__COMMENT_ID__-attempt-__CURRENT_ATTEMPT__' | tr -cs '[:alnum:]-' '-')"
-  TASK_BRANCH="feature/__ISSUE_NUM__-manul-<short-description>-$TASK_SUFFIX"
+  TASK_BRANCH="feature/<short-description>"
   git -C "$WORKDIR" fetch origin "$BASE_BRANCH" &&
     git -C "$WORKDIR" switch --create "$TASK_BRANCH" "origin/$BASE_BRANCH"
   ```
 - Before creating a branch, use a verified existing task PR branch supplied above when present; continue on that exact branch and update that same PR.
-- Only when no verified existing task PR branch was supplied, create a new branch using the unique task/attempt suffix below.
+- Only when no verified existing task PR branch was supplied, create a new branch. If the chosen name already exists locally or remotely, add a plain numeric suffix such as `-2`, `-3` until unique; never use task or attempt identifiers.
 - Verify `git -C "$WORKDIR" branch --show-current` equals the selected branch before modifying files. If fetching or branch preparation fails, do not continue with edits or commits; report the cause. Never overwrite an unverified branch from an earlier attempt.
 - For repository changes: follow repository-local branching guidance or skill content explicitly supplied in the task context; do not inspect global skill directories. Do not read `~/.agents/**` or any global skill directory; the task-access boundary above takes precedence.
 - If the task explicitly requires another branch as the base, including another feature branch, update that exact remote base before creating your branch and reflect that base in the PR.
@@ -5019,6 +5021,20 @@ PROMPT_APPEND
 PROMPT_APPEND
     fi
 
+    cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+
+## Human-facing output (all modes and runtimes)
+These rules apply to every task, regardless of the selected execution runtime or Manul's `bot`/`human` mode.
+
+- Write externally visible work as a competent human teammate would: natural, direct, specific, and focused on the requested outcome.
+- Apply this to branch names, commit subjects, PR titles and descriptions, issue/PR comments, report summaries, generated documentation, and other delivered content.
+- Describe the requested change, its behavior, findings, and verification. Do not describe the internal route by which the task was received or executed.
+- Do not expose orchestration or execution details such as Manul, Todo as a task source, MCP transport/server names, runtime/agent/provider names, adapter names, source labels, local workspace paths, task/provider IDs, comment IDs, attempt numbers, or internal markers. Mention any of these only when it is genuinely part of the product or technical change the user asked about.
+- Keep branch names semantic and readable. Never use internal task/source/attempt metadata to identify a branch.
+- Avoid automation boilerplate and unnecessary explanations of internal mechanics.
+- This content rule does not change the separate attribution contract: bot-mode result comments must still end with exactly `— manul 🐈`; human-mode result comments remain unsigned.
+
+PROMPT_APPEND
     cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
 
 ## Skills
