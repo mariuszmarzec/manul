@@ -61,24 +61,43 @@ task_source_todo_local_poll() {
     todo_task_is_active "$task_json" || continue
     todo_task_has_local_trigger "$task_json" || continue
     task_id="$(jq -r '.id // "unknown"' <<<"$task_json")"
-    if todo_task_is_report_only "$task_json"; then
-      # Keep /manul report as a backwards-compatible explicit alias.
-      resolution='{"reportOnly":true}'
+    local resolution_output resolution_rc task_fingerprint source_id update_status update_summary update_receipt
+    resolution_output="$(todo_task_resolve_repository "$source_json" "$task_json" 2>&1)"
+    resolution_rc=$?
+    if [ "$resolution_rc" -eq 0 ]; then
+      resolution="$resolution_output"
     else
-      local resolution_output resolution_rc
-      resolution_output="$(todo_task_resolve_repository "$source_json" "$task_json" 2>&1)"
-      resolution_rc=$?
-      if [ "$resolution_rc" -eq 0 ]; then
-        resolution="$resolution_output"
-      elif [ "$resolution_rc" -eq 3 ]; then
-        # No project was specified: treat a normal /manul prompt as an
-        # informational request and save its answer under the Todo root.
-        echo "task-source: local Todo task $task_id has no repository match; treating it as report-only" >&2
-        resolution='{"reportOnly":true}'
+      task_fingerprint="$(todo_task_fingerprint "$task_json")" || continue
+      source_id="${task_id}@${task_fingerprint}"
+      if [ "$resolution_rc" -eq 1 ] || [ "$resolution_rc" -eq 3 ]; then
+        update_status="needs_input"
+        update_summary="$(cat <<'TODO_ROUTING_BLOCKER'
+Manul nie uruchomił zadania, ponieważ nie może jednoznacznie ustalić repozytorium docelowego.
+
+Sprawdzone zostały opis zadania, podzadania oraz skonfigurowana lista repozytoriów. Uzupełnij to podzadanie o dokładne owner/repo (lub adres repozytorium GitHub) albo jednoznaczny alias projektu z katalogu projektów. Repozytorium musi znajdować się na globalnej liście .repositories.
+
+Szczegóły routingu:
+TODO_ROUTING_BLOCKER
+)"
       else
-        echo "task-source: local Todo task $task_id was not queued because its repository could not be resolved: ${resolution_output:-unknown routing error}" >&2
-        continue
+        update_status="failed"
+        update_summary="Routing repozytorium zakończył się błędem przed uruchomieniem agenta (rc=$resolution_rc). Szczegóły: ${resolution_output:-brak diagnostyki}. Sprawdź konfigurację repozytoriów i katalog projektów, a następnie zaktualizuj to podzadanie, aby wznowić pracę."
       fi
+      local task_description
+      task_description="$(jq -r '.description // empty' <<<"$task_json")"
+      if [ -n "$task_description" ]; then
+        update_summary="Zadanie: $task_description"$'\n\n'"$update_summary"
+      fi
+      if [ -n "$resolution_output" ]; then
+        update_summary+=$'\n\n'
+        update_summary+="$resolution_output"
+      fi
+      if update_receipt="$(todo_task_publish_update "$source_json" todo_local_mcp "$source_id" "$update_status" "$update_summary" 2>&1)"; then
+        echo "task-source: local Todo task $task_id was not queued; a verified $update_status subtask was saved" >&2
+      else
+        echo "ERROR: task-source: local Todo task $task_id could not be queued and its routing update could not be saved: ${update_receipt:-unknown error}" >&2
+      fi
+      continue
     fi
     normalized="$(todo_task_to_source_json "$task_json" todo_local_mcp "$resolution")" || continue
     printf '%s\n' "$normalized"

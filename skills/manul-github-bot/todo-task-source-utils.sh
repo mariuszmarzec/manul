@@ -315,7 +315,7 @@ todo_task_fingerprint_raw() {
 # Ignore only one source-version-bound Manul report child whose marker and
 # payload digest verify. A changed result or any user-owned subtask remains in
 # the structural fingerprint and makes the source stale.
-todo_task_strip_verified_report_result() {
+todo_task_strip_verified_generated_update() {
   local task_json="$1" root_id parsed candidate_record candidate_json candidate_source expected_version
   local verified_count=0 verified_candidate=""
   root_id="$(jq -r '.id // empty' <<<"$task_json")"
@@ -324,14 +324,18 @@ todo_task_strip_verified_report_result() {
 import base64, hashlib, json, re, sys
 root_id = int(sys.argv[1])
 root = json.load(sys.stdin)
-candidates = []
-subtasks = root.get("subTasks") or []
-marker_pattern = re.compile(
+valid_positions = []
+valid_sources = []
+report_marker_pattern = re.compile(
     r"<!-- MANUL_REPORT_RESULT:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});"
     r"sha256=([0-9a-f]{64})(?:;answerSha256=([0-9a-f]{64});"
     r"answerBase64=([A-Za-z0-9+/]*={0,2}))? -->"
 )
-for index, child in enumerate(subtasks):
+update_marker_pattern = re.compile(
+    r"<!-- MANUL_TASK_UPDATE:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});"
+    r"status=(?:needs_input|failed);sha256=([0-9a-f]{64}) -->"
+)
+for index, child in enumerate(root.get("subTasks") or []):
     description = child.get("description")
     if not isinstance(description, str):
         continue
@@ -339,25 +343,28 @@ for index, child in enumerate(subtasks):
     marker_positions = [
         position for position, line in enumerate(lines)
         if line.startswith("<!-- MANUL_REPORT_RESULT:v1;")
+        or line.startswith("<!-- MANUL_TASK_UPDATE:v1;")
     ]
     if len(marker_positions) != 1:
         continue
     marker_position = marker_positions[0]
     marker = lines[marker_position]
-    match = marker_pattern.fullmatch(marker)
+    report_match = report_marker_pattern.fullmatch(marker)
+    update_match = update_marker_pattern.fullmatch(marker)
+    match = report_match or update_match
     if not match or int(match.group(1)) != root_id:
         continue
-    if marker_position == 0 and "\n" in description:
-        payload = description.partition("\n")[2]  # Legacy marker at the start.
+    if marker_position == 0 and report_match and "\n" in description:
+        payload = description.partition("\n")[2]
     elif marker_position == len(lines) - 1 and "\n" in description:
-        payload = description.rsplit("\n", 1)[0]  # New marker after the Markdown.
+        payload = description.rsplit("\n", 1)[0]
     else:
         continue
     if child.get("parentTaskId") != root_id or child.get("subTasks"):
         continue
     if hashlib.sha256(payload.encode("utf-8")).hexdigest() != match.group(3):
         continue
-    if match.group(4) is not None:
+    if report_match and match.group(4) is not None:
         try:
             raw_answer = base64.b64decode(match.group(5), validate=True)
             raw_answer.decode("utf-8")
@@ -365,10 +372,17 @@ for index, child in enumerate(subtasks):
             continue
         if hashlib.sha256(raw_answer).hexdigest() != match.group(4):
             continue
+    valid_positions.append(index)
+    valid_sources.append(match.group(2))
+if valid_positions:
     candidate = dict(root)
-    candidate["subTasks"] = [item for position, item in enumerate(subtasks) if position != index]
-    candidates.append({"task": candidate, "sourceId": match.group(2)})
-print(json.dumps(candidates, separators=(",", ":")))
+    candidate["subTasks"] = [
+        item for position, item in enumerate(root.get("subTasks") or [])
+        if position not in set(valid_positions)
+    ]
+    print(json.dumps([{"task": candidate, "sourceIds": valid_sources}], separators=(",", ":")))
+else:
+    print("[]")
 ' "$root_id" <<<"$task_json")" || { printf '%s\n' "$task_json"; return 0; }
 
   # Test each individually valid output record against the source tree that
@@ -377,9 +391,8 @@ print(json.dumps(candidates, separators=(",", ":")))
   # to the current source version. Ambiguous matches fail closed.
   while IFS= read -r candidate_record; do
     candidate_json="$(jq -c '.task' <<<"$candidate_record")"
-    candidate_source="$(jq -r '.sourceId // empty' <<<"$candidate_record")"
     expected_version="$(todo_task_fingerprint_raw "$candidate_json")" || continue
-    if [ "$candidate_source" = "${root_id}@${expected_version}" ]; then
+    if jq -e --arg sourceId "${root_id}@${expected_version}" '.sourceIds | index($sourceId) != null' <<<"$candidate_record" >/dev/null 2>&1; then
       verified_count=$((verified_count + 1))
       verified_candidate="$candidate_json"
     fi
@@ -394,7 +407,7 @@ print(json.dumps(candidates, separators=(",", ":")))
 
 todo_task_fingerprint() {
   local stable_task
-  stable_task="$(todo_task_strip_verified_report_result "$1")" || return 1
+  stable_task="$(todo_task_strip_verified_generated_update "$1")" || return 1
   todo_task_fingerprint_raw "$stable_task"
 }
 
@@ -409,7 +422,7 @@ todo_task_ids_json() {
 todo_task_steps_json() {
   local task_json="$1" source_id="${2:-}"
   if [ -n "$source_id" ]; then
-    task_json="$(todo_task_strip_verified_report_result "$task_json")" || return 1
+    task_json="$(todo_task_strip_verified_generated_update "$task_json")" || return 1
   fi
   jq -c '
     def descendants($depth):
@@ -418,11 +431,6 @@ todo_task_steps_json() {
         + ([ $task.subTasks[]? | descendants($depth + 1) ] | add // []);
     [.subTasks[]? | descendants(0)] | add // []
   ' <<<"$task_json"
-}
-
-todo_task_is_report_only() {
-  jq -r '.description // ""' <<<"$1" |
-    grep -qE '^[[:space:]]*/manul[[:space:]]+report([[:space:]]|$)'
 }
 
 todo_strip_manul_trigger() {
@@ -468,25 +476,21 @@ todo_task_prompt() {
       printf '\n## Ordered subtask steps\n\n%s\n' "$steps_markdown"
       printf '\nExecute the pending subtask steps in the exact order shown. Preserve the existing order; nested subtasks follow their parent step immediately. Steps marked [DONE] are context and must not be repeated.\n'
     fi
-    if todo_task_is_report_only "$task_json"; then
-      printf '\nThis is an informational report-only task. Do not modify a repository, create a branch, or create a PR. Manul will save the final answer as a completed subtask under this Todo task and verify it before completing the task tree.\n'
-      printf 'Write the saved result as a polished, self-contained Markdown document. Its FIRST line must be one concise plain-text sentence summarizing the answer or the key conclusion; this line is used as the Todo task-list preview. Do not put a heading, blank line, label, HTML comment, hash, or code fence before that sentence.\n'
-      printf 'After the first line, provide the full explanation and useful details using clear Markdown headings, paragraphs, lists, and code fences when appropriate. Avoid unnecessary boilerplate and tables.\n'
-      printf 'Manul will append a short task-context section with the source and original Todo task description. Do not add task IDs, source labels, hashes, fingerprints, HTML comments, or other internal metadata yourself.\n'
-      printf 'The final output must end with a standalone completion marker on its own line: TASK_DONE or TASK_FAILED: <brief reason>. Write the marker as plain text, without Markdown backticks or code fences. Do not put any prose after the marker.\n'
-    else
-      printf '\nAfter the implementation is complete and its PR is verified, Manul will mark this Todo task and its subtasks done. Do not change Todo completion state yourself.\n'
-    fi
+    printf '\nTreat this as repository-backed work. Investigate the assigned repository and complete the requested change or analysis there. Create a branch and PR when repository files change; a genuinely read-only answer may finish without a PR.\n'
+    printf 'If the repository or other material input is missing, inspect the full task tree and repository context first, then emit TASK_NEEDS_USER_BEGIN/END with a concise summary of what you checked and the exact information needed. Manul will save that request as an open subtask under this root task. Do not guess a repository and do not switch to report-only mode.\n'
+    printf 'After verified delivery, Manul will mark the root task and its subtasks done. Do not change Todo completion state yourself.\n'
   }
 }
 
 todo_task_to_source_json() {
-  local task_json="$1" source_type="$2" resolution_json="${3:-}"
-  local repository task_id fingerprint source_id source_url title body prompt ids created updated matched_alias project_skill_context resolution_method report_only
+  local task_json="$1" source_type="$2" resolution_json="${3-}"
+  local repository task_id fingerprint source_id source_url title body prompt ids created updated matched_alias project_skill_context resolution_method
   [ -n "$resolution_json" ] || resolution_json='{}'
-  report_only="$(jq -r '.reportOnly // false' <<<"$resolution_json")"
   repository="$(jq -r '.repository // empty' <<<"$resolution_json")"
-  if [ "$report_only" != "true" ] && [ -z "$repository" ]; then return 1; fi
+  [ -n "$repository" ] || {
+    echo "Todo implementation task cannot be queued without an allowlisted repository" >&2
+    return 1
+  }
   task_id="$(jq -r '.id // empty' <<<"$task_json")"
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
   fingerprint="$(todo_task_fingerprint "$task_json")" || return 1
@@ -500,21 +504,19 @@ todo_task_to_source_json() {
   body="$title"
   prompt="$(todo_task_prompt "$task_json" "$source_id")"
   resolution_method="$(jq -r '.method // "unknown"' <<<"$resolution_json")"
-  if [ "$report_only" != "true" ]; then
-    prompt+=$'\n\n## Repository routing\n\nTarget repository: '
-    prompt+="$repository"
-    prompt+=$'\nResolution method: '
-    prompt+="$resolution_method"
-    matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
-    if [ -n "$matched_alias" ]; then
-      prompt+=$'\nMatched project alias: '
-      prompt+="$matched_alias"
-    fi
-    project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
-    if [ -n "$project_skill_context" ]; then
-      prompt+=$'\n\n## Relevant project skills (included below)\n\n'
-      prompt+="$project_skill_context"
-    fi
+  prompt+=$'\n\n## Repository routing\n\nTarget repository: '
+  prompt+="$repository"
+  prompt+=$'\nResolution method: '
+  prompt+="$resolution_method"
+  matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
+  if [ -n "$matched_alias" ]; then
+    prompt+=$'\nMatched project alias: '
+    prompt+="$matched_alias"
+  fi
+  project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
+  if [ -n "$project_skill_context" ]; then
+    prompt+=$'\n\n## Relevant project skills (included below)\n\n'
+    prompt+="$project_skill_context"
   fi
   ids="$(todo_task_ids_json "$task_json")"
   created="$(jq -r '.addedTime // ""' <<<"$task_json")"
@@ -532,7 +534,6 @@ todo_task_to_source_json() {
     --argjson resolution "$resolution_json" \
     --argjson taskId "$task_id" \
     --argjson stepIds "$ids" \
-    --argjson reportOnly "$report_only" \
     '{
       taskSourceType:$type,
       taskSourceId:$sourceId,
@@ -544,15 +545,16 @@ todo_task_to_source_json() {
       createdAt:$created,
       updatedAt:$updated,
       state:"OPEN",
-      metadata:({
+      metadata:{
         issueNumber:0,
         todoTaskId:$taskId,
-        stepIds:$stepIds
-      } + (if $repository != "" then {repository:$repository,repositoryResolution:$resolution} else {} end)),
-      execution:{kind:(if $reportOnly then "report_only" else "repository" end)}
+        stepIds:$stepIds,
+        repository:$repository,
+        repositoryResolution:$resolution
+      },
+      execution:{kind:"repository"}
     }'
 }
-
 todo_task_is_active() {
   jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
 }
@@ -698,83 +700,16 @@ sys.stdout.write("\n".join(result))
 }
 
 
-# Build a readable Markdown report while keeping the first line usable as
-# the Todo task-list preview.
-todo_task_report_markdown() {
-  local generated_answer="$1" source_type="$2" root_json="$3"
-  local formatted_answer task_description
-
-  formatted_answer="$(todo_task_markdown_format <<<"$generated_answer")" || return 1
-  task_description="$(jq -r '.description // empty' <<<"$root_json")"
-  task_description="$(todo_strip_manul_trigger "$task_description" | python3 -c 'import sys; print(sys.stdin.read().strip())')"
-  [ -n "$task_description" ] || task_description="Brak opisu zadania."
-
-  case "$source_type" in
-    todo_local_mcp|todo_remote_mcp) ;;
-    *) return 2 ;;
-  esac
-
-  {
-    printf '%s\n\n---\n\n## Zadanie\n\n' "$formatted_answer"
-    printf -- '- **Zadanie:** %s\n' "$task_description"
-  } | todo_task_markdown_format
-}
-
-# Read the original answer from a verified report marker. New records keep the
-# marker after the Markdown body so Todo's first-line preview stays user-facing.
-# The parser also accepts legacy records whose marker was the first line.
-todo_task_report_receipt_answer() {
-  printf '%s' "$1" | python3 -c '
-import base64, hashlib, re, sys
-
-description = sys.stdin.read()
-lines = description.splitlines()
-marker_positions = [
-    position for position, line in enumerate(lines)
-    if line.startswith("<!-- MANUL_REPORT_RESULT:v1;")
-]
-if len(marker_positions) != 1:
-    raise SystemExit("Todo report result marker is invalid")
-marker_position = marker_positions[0]
-marker = lines[marker_position]
-match = re.fullmatch(
-    r"<!-- MANUL_REPORT_RESULT:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});"
-    r"sha256=([0-9a-f]{64})(?:;answerSha256=([0-9a-f]{64});"
-    r"answerBase64=([A-Za-z0-9+/]*={0,2}))? -->",
-    marker,
-)
-if marker_position == 0 and "\n" in description:
-    payload = description.partition("\n")[2]  # Legacy marker at the start.
-elif marker_position == len(lines) - 1 and "\n" in description:
-    payload = description.rsplit("\n", 1)[0]  # New marker after the Markdown.
-else:
-    raise SystemExit("Todo report result marker is not at the beginning or end")
-if not match:
-    raise SystemExit("Todo report result marker is invalid")
-if hashlib.sha256(payload.encode("utf-8")).hexdigest() != match.group(3):
-    raise SystemExit("Todo report Markdown payload digest does not match")
-if match.group(4) is None:
-    sys.stdout.write(payload)
-else:
-    raw_answer = base64.b64decode(match.group(5), validate=True)
-    if hashlib.sha256(raw_answer).hexdigest() != match.group(4):
-        raise SystemExit("Todo report original answer digest does not match")
-    raw_answer.decode("utf-8")
-    sys.stdout.buffer.write(raw_answer)
-'
-}
-
-# Persist an informational answer as a child task. The marker binds the record
-# to the exact source version and payload digest; retries reuse it instead of
-# creating duplicate answers, including after a lost MCP response.
-todo_task_report_deliver() {
-  local source_json="$1" source_type="$2" source_id="$3" generated_answer="$4"
-  local task_id expected_version tasks_json root_json marker_prefix result_json result_count
-  local result_id result_description result_todo arguments answer digest receipt actual_version formatted_answer answer_digest answer_base64 answer_with_sentinel
-  local manul_user_id=""
+# Persist a status update as a verified OPEN child under the Todo root.
+# The generated child is source-version-bound and idempotent across retries.
+todo_task_publish_update() {
+  local source_json="$1" source_type="$2" source_id="$3" status="$4" summary="$5"
+  local task_id expected_version tasks_json root_json manul_user_id marker_prefix
+  local existing_json existing_count result_json result_id result_description body digest arguments actual_version
   task_id="$(todo_task_id_from_source_id "$source_id")"
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
+  case "$status" in needs_input|failed) ;; *) echo "Unsupported Todo update status: $status" >&2; return 2 ;; esac
 
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
   root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
@@ -783,39 +718,46 @@ todo_task_report_deliver() {
       todo_task_has_local_trigger "$root_json" || return 1 ;;
     todo_remote_mcp)
       manul_user_id="$(jq -r '.manulUserId // empty' <<<"$source_json")"
-      # The parent must already be shared with Manul. Its descendants inherit
-      # that access, so a result child does not need a duplicate direct share.
-      todo_task_has_remote_share "$root_json" "$manul_user_id" || return 1 ;;
-    *)
-      return 2 ;;
+      todo_task_has_remote_share "$root_json" "$manul_user_id" || return 1
+      todo_task_has_remote_trigger "$root_json" || return 1 ;;
+    *) return 2 ;;
   esac
+  todo_task_is_active "$root_json" || return 1
   actual_version="$(todo_task_fingerprint "$root_json")" || return 1
   [ "$actual_version" = "$expected_version" ] || {
-    echo "Todo source changed before the report could be saved" >&2
+    echo "Todo source changed before its status update could be saved" >&2
     return 1
   }
 
-  marker_prefix="<!-- MANUL_REPORT_RESULT:v1;root=${task_id};source=${source_id};"
-  result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
+  marker_prefix="<!-- MANUL_TASK_UPDATE:v1;root=${task_id};source=${source_id};status=${status};"
+  existing_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
     [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | contains($prefix))]
   ' <<<"$root_json")" || return 1
-  result_count="$(jq -r 'length' <<<"$result_json")"
-  if [ "$result_count" -gt 1 ]; then
-    echo "Multiple Manul report result subtasks exist for this Todo source version" >&2
+  existing_count="$(jq -r 'length' <<<"$existing_json")"
+  if [ "$existing_count" -gt 1 ]; then
+    echo "Multiple matching Manul status subtasks exist for this Todo source version" >&2
     return 1
   fi
 
-  formatted_answer="$(todo_task_report_markdown "$generated_answer" "$source_type" "$root_json")" || return 1
-
-  if [ "$result_count" -eq 1 ]; then
-    result_json="$(jq -c '.[0]' <<<"$result_json")"
+  if [ "$existing_count" -eq 1 ]; then
+    result_json="$(jq -c '.[0]' <<<"$existing_json")"
     result_id="$(jq -r '.id // empty' <<<"$result_json")"
     result_description="$(jq -r '.description // empty' <<<"$result_json")"
+    [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
+    [ "$(jq -r '.isToDo // true' <<<"$result_json")" = "true" ] || {
+      echo "Generated Todo status subtask is no longer open" >&2
+      return 1
+    }
   else
-    digest="$(printf '%s' "$formatted_answer" | sha256sum | awk '{print $1}')"
-    answer_digest="$(printf '%s' "$generated_answer" | sha256sum | awk '{print $1}')"
-    answer_base64="$(printf '%s' "$generated_answer" | python3 -c 'import base64, sys; sys.stdout.write(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))')" || return 1
-    result_description="${formatted_answer}"$'\n'"${marker_prefix}sha256=${digest};answerSha256=${answer_digest};answerBase64=${answer_base64} -->"
+    local heading
+    if [ "$status" = "needs_input" ]; then
+      heading="Wymagane informacje do kontynuacji"
+    else
+      heading="Wykonanie zadania nie powiodło się"
+    fi
+    body="$(printf '%s\n\n%s' "$heading" "$summary" | todo_task_markdown_format)" || return 1
+    digest="$(printf '%s' "$body" | sha256sum | awk '{print $1}')"
+    result_description="${body}"$'\n'"${marker_prefix}sha256=${digest} -->"
     case "$source_type" in
       todo_local_mcp)
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}')"
@@ -824,65 +766,30 @@ todo_task_report_deliver() {
         arguments="$(jq -cn --arg description "$result_description" --argjson parentTaskId "$task_id" '{task:{description:$description,parentTaskId:$parentTaskId,highestPriorityAsDefault:false}}')"
         todo_mcp_source_call "$source_json" "$source_type" todo_create_task "$arguments" >/dev/null || return $? ;;
     esac
-    tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
-    root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
-    result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
-      [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | contains($prefix))]
-    ' <<<"$root_json")" || return 1
-    result_count="$(jq -r 'length' <<<"$result_json")"
-    [ "$result_count" -eq 1 ] || {
-      echo "Todo report create did not produce exactly one readable result subtask" >&2
-      return 1
-    }
-    result_json="$(jq -c '.[0]' <<<"$result_json")"
-    result_id="$(jq -r '.id // empty' <<<"$result_json")"
-    result_description="$(jq -r '.description // empty' <<<"$result_json")"
   fi
 
-  [[ "$result_id" =~ ^[1-9][0-9]*$ ]] || return 1
-  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
-  [ "$actual_version" = "$expected_version" ] || {
-    echo "Todo report result read-back failed source-version verification" >&2
-    return 1
-  }
-  result_todo="$(jq -r 'if .isToDo == null then "true" else (.isToDo|tostring) end' <<<"$result_json")"
-  if [ "$result_todo" != "false" ]; then
-    case "$source_type" in
-      todo_local_mcp)
-        arguments="$(jq -cn --argjson taskId "$result_id" '{taskIds:[$taskId]}')"
-        todo_mcp_source_call "$source_json" "$source_type" mark_tasks_done "$arguments" >/dev/null || return $? ;;
-      todo_remote_mcp)
-        arguments="$(jq -cn --argjson id "$result_id" '{id:$id,task:{isToDo:false}}')"
-        todo_mcp_source_call "$source_json" "$source_type" todo_update_task "$arguments" >/dev/null || return $? ;;
-    esac
-  fi
-
-  # Read the provider state again after mutation. Exact text, parent, completed
-  # flag, unique receipt and unchanged source structure are all required.
+  # Verify the exact task text, parent link and OPEN state from a fresh provider read.
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
   root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
   result_json="$(jq -c --arg prefix "$marker_prefix" --argjson rootId "$task_id" '
     [.subTasks[]? | select(.parentTaskId == $rootId) | select((.description // "") | contains($prefix))]
   ' <<<"$root_json")" || return 1
-  [ "$(jq -r 'length' <<<"$result_json")" -eq 1 ] || return 1
-  result_json="$(jq -c '.[0]' <<<"$result_json")"
-  [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
-  [ "$(jq -r '.isToDo' <<<"$result_json")" = "false" ] || return 1
-  [ "$(jq -r '.description // empty' <<<"$result_json")" = "$result_description" ] || return 1
-  if [ "$source_type" = "todo_remote_mcp" ] &&
-     ! todo_task_has_remote_share "$root_json" "$manul_user_id"; then
-    echo "Todo report parent is no longer shared with Manul" >&2
-    return 1
-  fi
-  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
-  [ "$actual_version" = "$expected_version" ] || {
-    echo "Todo source changed while the report result was being verified" >&2
+  [ "$(jq -r 'length' <<<"$result_json")" -eq 1 ] || {
+    echo "Todo status update was not readable after creation" >&2
     return 1
   }
-
-  answer_with_sentinel="$(todo_task_report_receipt_answer "$result_description" && printf '\001')" || return 1
-  answer="${answer_with_sentinel%$'\001'}"
-  digest="$(printf '%s' "$answer" | sha256sum | awk '{print $1}')"
-  receipt="$(jq -cn --arg sourceId "$source_id" --argjson rootTaskId "$task_id" --argjson resultTaskId "$result_id" --arg answerSha256 "$digest" --arg verifiedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg answer "$answer" '{sourceId:$sourceId,rootTaskId:$rootTaskId,resultTaskId:$resultTaskId,answerSha256:$answerSha256,verifiedAt:$verifiedAt,answer:$answer}')"
-  printf '%s\n' "$receipt"
+  result_json="$(jq -c '.[0]' <<<"$result_json")"
+  result_id="$(jq -r '.id // empty' <<<"$result_json")"
+  result_description="$(jq -r '.description // empty' <<<"$result_json")"
+  [[ "$result_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
+  [ "$(jq -r '.isToDo // true' <<<"$result_json")" = "true" ] || return 1
+  actual_version="$(todo_task_fingerprint "$root_json")" || return 1
+  [ "$actual_version" = "$expected_version" ] || {
+    echo "Todo status update changed the original source identity" >&2
+    return 1
+  }
+  jq -cn --arg sourceId "$source_id" --arg status "$status" --argjson rootTaskId "$task_id" --argjson updateTaskId "$result_id" --arg summary "$summary" \
+    '{sourceId:$sourceId,status:$status,rootTaskId:$rootTaskId,updateTaskId:$updateTaskId,summary:$summary}'
 }
+

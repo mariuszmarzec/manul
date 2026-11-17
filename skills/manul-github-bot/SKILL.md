@@ -252,21 +252,19 @@ repository-backed execution. Short names are matched against the final path
 segment of the top-level `.repositories` allowlist; for example, `repo todo`
 selects `mariuszmarzec/todo` when it is the only configured repository named
 `todo`. Direct URLs and configured repository names/short names work even
-when the optional project catalog is unavailable. When the request has no
-repository reference, Manul treats it as informational automatically — no
-`report` keyword and no `allowReportOnly` opt-in are needed. The old
-`/manul report <question>` spelling remains accepted as a compatibility alias.
+when the optional project catalog is unavailable. The legacy
+`/manul report <question>` spelling is accepted only as a trigger alias: it
+does not select a separate execution mode.
 
-Informational tasks do not need a project alias or repository URL: the daemon
-skips repository locks, checkouts, branches, PRs, and the GitHub result-comment
-protocol, then runs the agent in a disposable task-scoped scratch directory.
-The complete answer is saved as a child of the source Todo item, read back and
-verified, and recorded as a local delivery receipt before the Todo tree is
-completed. The generated child is identified by a source-version-bound marker
-and is the only child excluded from the source fingerprint; edits to the
-original task or its other subtasks still invalidate the queued source. Partial
-writes are retried by reusing the exact child instead of creating duplicates.
-The root is marked done last, after the result and all original descendants.
+Every Todo MCP task requires an allowlisted repository and runs in the normal
+repository workspace. There is no Todo `report_only` execution path and no
+fallback to a disposable scratch directory. If Manul cannot resolve one
+unambiguous repository, it does not enqueue the agent: it creates an OPEN
+subtask under the Todo root explaining what routing inspected and asking for
+the exact `owner/repo`, GitHub URL, or configured alias. The same applies to
+ambiguous or disallowed repository references. Editing that generated
+subtask invalidates its integrity marker and creates a new task-source version,
+so adding the missing information naturally re-triggers routing.
 
 Todo sources do not have a fixed project repository. Each Todo root resolves its
 execution target independently from the full task tree. Explicit GitHub URLs
@@ -375,7 +373,7 @@ Emit exactly one complete:
 <findings, options, recommendation if useful, explicit question/decision>
 `TASK_NEEDS_USER_END`
 
-Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same execution output. After reaching the decision point, make no further irreversible repository changes. Manul records `blocked_user`, posts the request to the same GitHub conversation, and resumes the same task via `/manul continue <answer>`. Partial or malformed decision blocks are not valid pauses.
+Do not emit `TASK_DONE`, `TASK_COMPLETED`, or `TASK_FAILED` in the same execution output. After reaching the decision point, make no further irreversible repository changes. Manul records `blocked_user`. For GitHub sources it posts the request to the same conversation and resumes via `/manul continue <answer>`; for Todo MCP it creates an OPEN subtask containing the question and resumes when the user edits that subtask. Partial or malformed decision blocks are not valid pauses.
 
 ## Comment routing
 

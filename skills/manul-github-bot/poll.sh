@@ -1190,17 +1190,11 @@ queue_normalized_source_task() {
   issue_number="$(jq -r ".metadata.issueNumber // 0" <<<"$task_json")"
 
   if [ "$execution_kind" = "report_only" ]; then
-    case "$source_type" in
-      todo_local_mcp|todo_remote_mcp) ;;
-      *)
-        log "WARN: non-Todo source $source_type cannot request report-only execution"
-        return 0 ;;
-    esac
-    # The legacy queue schema requires a non-empty repository column. Use a
-    # reserved sentinel; the report-only dispatcher must never lock, clone,
-    # enter or otherwise treat this value as a GitHub repository.
-    repo="todo-report-only"
-    issue_number=0
+    # Todo MCP tasks are always repository-backed. Legacy report_only rows are
+    # deliberately not re-enqueued; the dispatcher converts any already-queued
+    # legacy row into a visible repository-routing blocker.
+    log "discovered task source $source_type:$source_id with disabled Todo report-only execution; not queueing"
+    return 0
   elif [ "$execution_kind" != "repository" ]; then
     log "discovered task source $source_type:$source_id (execution.kind=$execution_kind); unsupported execution kind"
     return 0
@@ -1208,7 +1202,7 @@ queue_normalized_source_task() {
   issue_number="$(sql_num "$issue_number")"
   issue_number="${issue_number:-0}"
   source_context="$(printf "%s" "$task_json" | jq -c '{execution:(.execution // {kind:"repository"}),metadata:(.metadata // {})}')"
-  if [ "$execution_kind" = "repository" ] && [ -z "$repo" ]; then
+  if [ -z "$repo" ]; then
     log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
     return 0
   fi
