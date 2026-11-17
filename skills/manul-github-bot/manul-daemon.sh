@@ -4574,6 +4574,7 @@ This task originates from a Todo task tree. Every Todo MCP task must run in the 
 - Finish using the TASK_DONE / TASK_FAILED / TASK_NEEDS_USER protocol. Do not emit GitHub result comments.
 
 TODO_SOURCE_PROMPT
+    fi
 
     if [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
       REPORT_ONLY_DIR="$(report_only_workspace_create)" || {
