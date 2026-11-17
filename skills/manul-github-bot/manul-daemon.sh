@@ -3716,6 +3716,7 @@ else
            log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
          fi
        fi
+       fi
 
        # 7.7. Delivery push verification. A task that reports TASK_DONE with a real
        # repository change must have committed AND pushed its work. Distinguish the
