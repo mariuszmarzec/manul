@@ -15,8 +15,6 @@ def main() -> int:
         return 2
 
     changed: list[Path] = []
-    visited: set[Path] = set()
-
     for raw_root in sys.argv[1:]:
         root = Path(raw_root)
         if not root.is_dir():
@@ -24,28 +22,19 @@ def main() -> int:
             return 1
 
         for path in root.iterdir():
-            if path.suffix not in SCRIPT_SUFFIXES or not path.is_file():
+            # Only modify regular files owned by the canonical checkout. Do
+            # not follow symlinks that could point outside the Manul source.
+            if path.is_symlink() or path.suffix not in SCRIPT_SUFFIXES or not path.is_file():
                 continue
 
-            # Resolve duplicate paths/symlinks before reading so each source
-            # file is normalized at most once.
             try:
-                resolved = path.resolve(strict=True)
-            except OSError as exc:
-                print(f"ERROR: cannot resolve {path}: {exc}", file=sys.stderr)
-                return 1
-            if resolved in visited:
-                continue
-            visited.add(resolved)
-
-            try:
-                original = resolved.read_bytes()
+                original = path.read_bytes()
                 normalized = original.replace(b"\r\n", b"\n")
                 if normalized != original:
-                    resolved.write_bytes(normalized)
-                    changed.append(resolved)
+                    path.write_bytes(normalized)
+                    changed.append(path)
             except OSError as exc:
-                print(f"ERROR: cannot normalize {resolved}: {exc}", file=sys.stderr)
+                print(f"ERROR: cannot normalize {path}: {exc}", file=sys.stderr)
                 return 1
 
     if changed:
