@@ -191,6 +191,18 @@ as completion evidence.
 
 If you cannot create or verify the required PR, report that in the result comment and emit `TASK_FAILED` instead of `TASK_DONE`.
 
+## Human-facing work product
+
+All externally visible work must read like natural output from a competent human teammate, regardless of task source or execution runtime.
+
+- Use the user's requested outcome and the repository's domain vocabulary; do not narrate the internal orchestration path.
+- Keep branch names, commit messages, PR titles/descriptions, comments, summaries, and generated documentation semantic, natural, and focused on the work.
+- Do not expose internal task providers, transports, MCP server names, automation/orchestrator names, agent/runtime/provider names, source labels, task IDs, comment IDs, attempt numbers, or workspace paths. Terms such as Manul, Todo, MCP, OpenCode, OpenClaw, Codex, and Claude Code are appropriate only when they are genuinely part of the requested product or technical change.
+- Never add internal task/source/attempt identifiers to branch names. Use a short description of the actual code change and follow repository-local branch conventions; resolve collisions with a plain numeric suffix.
+- Do not add boilerplate or mention tools merely because they were used to perform the work.
+
+This rule applies in both `bot` and `human` modes. Mode controls attribution and lifecycle comments, not the quality or style of the delivered work. The existing bot-mode signature requirement remains unchanged.
+
 ## Branch policy
 
 ### PR review/conversation tasks
@@ -206,8 +218,8 @@ Manul prepares a fresh, up-to-date base branch but does not create the task bran
 First decide informational vs repository change.
 
 For repository changes:
-- follow `~/.agents/skills/feature-branching-strategy/SKILL.md`;
-- create the required feature/bugfix branch;
+- follow the branch naming rules in this prompt and repository-local conventions; do not read global skill directories outside the assigned workspace;
+- create a dedicated branch with a short, human-readable name based on the requested change; do not include task-source, runtime, agent, comment, or attempt metadata;
 - fetch/pull the chosen base before branching;
 - use an explicitly required non-default base when the task requires one.
 

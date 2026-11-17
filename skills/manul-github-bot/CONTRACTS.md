@@ -423,9 +423,18 @@ Equivalent implementation choices should be resolved by the agent without blocki
 
 ## 16. Human and bot modes
 
-The top-level configuration key `mode` selects Manul's GitHub presentation/attribution behavior:
+The top-level configuration key `mode` selects Manul's GitHub presentation/attribution behavior. It does not select the writing style or quality of the delivered work.
 
-- `bot` is the default and preserves the existing Manul signature, lifecycle/status/error comments, and AI commit attribution.
+The following user-facing content contract applies in every mode and across all execution runtimes:
+
+- Branch names, commit messages, PR titles/descriptions, comments, report summaries, and generated documents must read like natural, task-focused work from a competent human teammate.
+- Names and descriptions must be based on the requested change, not the way a task was received or the tool/runtime that performed it.
+- Do not expose internal task sources/providers, transports, MCP server names, orchestration/automation names, agent/runtime/provider names, source labels, task IDs, comment IDs, attempt numbers, or internal workspace paths. Terms such as Manul, Todo, MCP, OpenCode, OpenClaw, Codex, and Claude Code are appropriate only when genuinely part of the requested product or technical change.
+- Do not put internal task/source/attempt identifiers into branch names. Use short semantic names and resolve collisions with ordinary numeric suffixes.
+
+Mode-specific attribution remains unchanged:
+
+- `bot` is the default and preserves the existing Manul signature, lifecycle/status/error comments, and AI commit attribution. The required bot result-comment signature remains exactly `— manul 🐈`.
 - `human` suppresses Manul signatures and orchestration lifecycle/status/error comments on GitHub.
 - In `human`, when `commentStyle.human.concise` is enabled, the visible result comment should be a short, natural teammate reply and stay within `commentStyle.human.maxLines`; automation-report headings and boilerplate should be avoided.
 - In `human`, the agent's actual result comment remains user-facing and is verified using the invisible deterministic task/attempt marker.

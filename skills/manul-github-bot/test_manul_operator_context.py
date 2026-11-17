@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import datetime as dt
 import json
 import os
 import sqlite3
@@ -23,6 +24,11 @@ class OperatorContextTests(unittest.TestCase):
         self.db = self.root / "manul.db"
         self.logs = self.root / "logs"
         self.logs.mkdir()
+        # Keep the "recent completed task" fixture inside the rolling 7-day
+        # window regardless of the date on which CI runs.
+        recent_activity = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
+        ).strftime("%Y-%m-%d %H:%M:%S")
         connection = sqlite3.connect(self.db)
         connection.execute(
             """
@@ -60,8 +66,8 @@ class OperatorContextTests(unittest.TestCase):
                 ),
                 (
                     "done-1", "owner/repo", 11, "completed", "todo_remote_mcp",
-                    "116372@fingerprint", "researcher", 1, "2026-11-10 10:00:00",
-                    "2026-11-10 10:01:00", "2026-11-10 10:05:00",
+                    "116372@fingerprint", "researcher", 1, recent_activity,
+                    recent_activity, recent_activity,
                     "Summarize the fix", "Verified result summary", None,
                 ),
                 (

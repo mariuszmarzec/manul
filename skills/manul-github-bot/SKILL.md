@@ -579,6 +579,8 @@ Current automation controls include:
 - `commentStyle.human.maxLines` (default `6`) caps visible human-mode result-comment lines and is clamped to 1–20;
 - `automation.agentRuntime` (default `openclaw`) selects the sole execution runtime for all tasks, including tasks with explicit canonical roles; supported values: `openclaw`, `opencode`, `codex`, `claude-code`;
 
+All modes and execution runtimes must produce natural, human-like, task-focused content. Branch names and delivered text must describe the requested work, not the internal task source or execution tools. Do not expose Todo/MCP/task-provider details, Manul orchestration, runtime/agent/provider names, or task/comment/attempt identifiers unless they are genuinely part of the requested product or technical change. This style contract is independent of `mode`.
+
 Human mode is intentionally a presentation/attribution mode: task state remains authoritative in SQLite and local logs, while GitHub receives only the user-facing agent result (and genuine user-decision questions when needed). When `commentStyle.human.concise` is enabled, that result should read like a short teammate reply and stay within the configured visible line limit, without automation-report headings or boilerplate.
 
 ```
