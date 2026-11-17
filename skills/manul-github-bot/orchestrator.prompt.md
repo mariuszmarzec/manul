@@ -218,7 +218,7 @@ Manul prepares a fresh, up-to-date base branch but does not create the task bran
 First decide informational vs repository change.
 
 For repository changes:
-- follow `~/.agents/skills/feature-branching-strategy/SKILL.md`;
+- follow the branch naming rules in this prompt and repository-local conventions; do not read global skill directories outside the assigned workspace;
 - create a dedicated branch with a short, human-readable name based on the requested change; do not include task-source, runtime, agent, comment, or attempt metadata;
 - fetch/pull the chosen base before branching;
 - use an explicitly required non-default base when the task requires one.
