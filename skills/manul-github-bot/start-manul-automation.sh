@@ -18,6 +18,24 @@ set -uo pipefail
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
+# A shell function may still be loaded from an older manul-shell.zsh in the
+# current interactive Zsh. Therefore startup/stop must repair line endings
+# itself before directly executing runtime scripts such as manul-daemon.sh.
+LINE_ENDING_NORMALIZER="$SCRIPT_DIR/normalize-script-line-endings.py"
+if [ ! -f "$LINE_ENDING_NORMALIZER" ]; then
+    echo "ERROR: Manul line-ending normalizer is missing: $LINE_ENDING_NORMALIZER" >&2
+    exit 1
+fi
+command -v python3 >/dev/null 2>&1 || {
+    echo "ERROR: python3 is required to normalize Manul script line endings" >&2
+    exit 1
+}
+if ! python3 "$LINE_ENDING_NORMALIZER" "$SCRIPT_DIR" "$MANUL_DIR"; then
+    echo "ERROR: failed to normalize Manul script line endings before automation control" >&2
+    exit 1
+fi
+
 source "$SCRIPT_DIR/manul-platform.sh"
 manul_platform_prepare || exit 1
 manul_platform_reexec_if_needed "$SCRIPT_DIR/start-manul-automation.sh" "$@"
