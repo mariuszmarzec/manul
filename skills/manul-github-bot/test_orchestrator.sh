@@ -280,6 +280,8 @@ test_checkpoint_protocol() {
   grep -q 'stop making further repository changes' "$PROMPT" || return 1
   grep -q "existing PR review/fix task" "$PROMPT" || return 1
   grep -q 'Human-facing work product' "$PROMPT" || return 1
+  grep -q 'repository-local conventions' "$PROMPT" || return 1
+  ! grep -q '~/.agents/skills/feature-branching-strategy' "$PROMPT" || return 1
   grep -q 'This rule applies in both `bot` and `human` modes' "$PROMPT" || return 1
 
   grep -q 'agent MUST NOT accumulate all' "$CONTRACTS" || return 1
