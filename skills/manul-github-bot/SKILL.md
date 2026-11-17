@@ -256,15 +256,25 @@ when the optional project catalog is unavailable. The legacy
 `/manul report <question>` spelling is accepted only as a trigger alias: it
 does not select a separate execution mode.
 
-Every Todo MCP task requires an allowlisted repository and runs in the normal
-repository workspace. There is no Todo `report_only` execution path and no
-fallback to a disposable scratch directory. If Manul cannot resolve one
-unambiguous repository, it does not enqueue the agent: it creates an OPEN
-subtask under the Todo root explaining what routing inspected and asking for
-the exact `owner/repo`, GitHub URL, or configured alias. The same applies to
-ambiguous or disallowed repository references. Editing that generated
-subtask invalidates its integrity marker and creates a new task-source version,
-so adding the missing information naturally re-triggers routing.
+Todo MCP tasks use one of two explicit execution kinds; neither is
+`report_only`:
+
+- A clear informational question that does not require a repository is queued as
+  `execution.kind=answer` with `action=ANSWER`. It runs in the validated,
+  disposable `operator-query/oq-*` workspace through a tool-free runtime:
+  no repository checkout, shell, filesystem, browser, GitHub, or MCP access.
+  Manul supplies the current date/time in Europe/Warsaw for questions such as
+  today's weekday. A non-empty answer is saved as a verified child task titled
+  **Odpowiedź**, and only then is the complete Todo tree marked done.
+- Implementation and repository investigation tasks use
+  `execution.kind=repository` and require one allowlisted repository. If the
+  repository is missing, ambiguous, or disallowed, Manul does not start the
+  agent: it creates an OPEN routing subtask explaining what was checked and
+  asking for the exact `owner/repo`, GitHub URL, or configured alias. Editing
+  that subtask creates a new task-source version and re-triggers routing.
+
+Legacy Todo `report_only` queue entries are rejected/migrated; new Todo tasks
+cannot select that execution mode.
 
 Todo sources do not have a fixed project repository. Each Todo root resolves its
 execution target independently from the full task tree. Explicit GitHub URLs

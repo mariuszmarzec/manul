@@ -72,7 +72,7 @@ AgentExecutor.execute() {
 
     # Validate inputs before dispatching
     case "$execution_kind" in
-        repository|report_only|operator_query|slack_intake) ;;
+        repository|report_only|operator_query|slack_intake|answer) ;;
         *)
             printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unsupported task execution kind","session_id":"","duration_s":0}\n' "$task_id"
             AgentExecutor_ExitCode=1
@@ -138,7 +138,7 @@ AgentExecutor.execute() {
 
     local sdd_policy
     sdd_policy="$(jq -r '.sddPolicy // false' "$ctx_file" 2>/dev/null || echo false)"
-    if [ "$agent" = "sdd" ] || [ "$sdd_policy" = "true" ]; then
+    if [ "$execution_kind" != "answer" ] && { [ "$agent" = "sdd" ] || [ "$sdd_policy" = "true" ]; }; then
         local role_dir skill_dir required_role
         role_dir="${MANUL_AGENT_DEFINITIONS_DIR:-$HOME/.agents/agents}"
         skill_dir="${MANUL_AGENT_SKILLS_DIR:-$HOME/.agents/skills}"
@@ -168,6 +168,16 @@ AgentExecutor.execute() {
     # another configured runtime and is never passed to the OpenClaw adapter.
     if [ "$auto_accept" = "true" ]; then
         execution_runtime="opencode"
+    fi
+
+    # Codex does not yet have a verified tool-free operator-query profile.
+    # Never run a repository-free Todo answer with a backend that could expose
+    # host files or tools; fail closed so the daemon records a normal Todo failure.
+    if [ "$execution_kind" = "answer" ] && [ "$execution_runtime" = "codex" ]; then
+        jq -cn --arg taskId "$task_id" \
+          '{status:"FAILED",task_id:$taskId,exit_code:65,summary:"The configured Codex runtime does not support the required tool-free informational-answer mode",failure_code:"ANSWER_RUNTIME_UNSUPPORTED",diagnostics:{stage:"answer_runtime_policy"}}'
+        AgentExecutor_ExitCode=65
+        return 1
     fi
 
     # Route through the single configured runtime (or explicit task override).
@@ -214,6 +224,13 @@ AgentExecutor.execute() {
     if [ "$preflight_only" = "true" ]; then
         adapter_preflight_args=(--preflight-only)
     fi
+    # Todo answer tasks reuse the already-audited tool-free operator-query
+    # runtime contract, while remaining a distinct queued/task-delivery kind.
+    local adapter_execution_kind="$execution_kind"
+    if [ "$execution_kind" = "answer" ]; then
+        adapter_execution_kind="operator_query"
+    fi
+
     # Execute the adapter; it writes its ExecutionResult JSON to stdout.
     local adapter_output
     adapter_output="$( \
@@ -221,7 +238,7 @@ AgentExecutor.execute() {
         MANUL_WORKSPACE="$MANUL_WORKSPACE" \
         MANUL_TASK_WORKSPACE_ROOT="$workspace_root" \
         MANUL_TASK_WORKDIR="$workdir" \
-        MANUL_TASK_EXECUTION_KIND="$execution_kind" \
+        MANUL_TASK_EXECUTION_KIND="$adapter_execution_kind" \
         bash "$adapter_script" \
         --task-id "$task_id" \
         --prompt "$prompt" \

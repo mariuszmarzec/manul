@@ -351,6 +351,15 @@ The agent may read/search configured related repository checkouts inside the lea
 - Operator queries do not emit task lifecycle markers to GitHub and must not
   persist runtime session IDs, queue rows, results, or task logs.
 
+Todo `execution.kind=answer` is a separate queued source-task contract that
+reuses the exact same tool-free adapter capability and validated
+`operator-query/oq-*` workspace. Unlike the standalone CLI, it does claim its
+Todo queue row and conversation context, does not read a Manul operator
+snapshot, and persists the generated answer as a digest-bound Todo child task.
+It never gains access to shell, filesystem, browser, GitHub, MCP, or repository
+tools. The answer child is verified before the normal Todo whole-tree completion
+path marks it and the root complete.
+
 
 An explicitly authorized operator-side maintenance session running **outside a
 Manul-managed task** may inspect read-only logs under `~/.manul/logs/**` to
@@ -363,7 +372,7 @@ Every generated implementation/review-fix prompt must enforce a least-privilege 
 
 - The exact assigned task workspace root is the only local repository-access boundary. The primary checkout (`WORKDIR`) is authoritative for all default repository edits, commits, pushes and PR delivery.
 - Related checkouts explicitly listed in the generated prompt may be inspected/searched but are read-only by default. No changes may be delivered from a secondary checkout unless the user has explicitly approved that repository's branch/PR/delivery policy.
-- The configured Manul workspace base (`MANUL_WORKSPACE`, defaulting to `$HOME/.manul/workspace`) is private runtime state. Repository-backed tasks may access only their exact leased `ws-*` root directly below that base and its descendants. Every Todo MCP task must use that same repository-backed lease; there is no Todo report-only scratch workspace and no exception for a missing repository. Legacy `report_only` queue records are stopped before agent launch. Access to any sibling workspace, prior attempt, cache, database, prompt, log, adapter, daemon state, or runtime artifact is explicitly forbidden, including read-only inspection. The global OpenCode config must blanket-deny the default home-relative workspace rule; the adapter may add a temporary invocation-local config overlay allowing only the validated active task root and `<root>/**`. The overlay must not be persisted to provider/global config and must be deleted after invocation; sibling paths remain denied. Do not read/list/search/probe `~/.agents/**` or `~/.config/opencode/**`.
+- The configured Manul workspace base (`MANUL_WORKSPACE`, defaulting to `$HOME/.manul/workspace`) is private runtime state. Repository-backed tasks may access only their exact leased `ws-*` root directly below that base and its descendants. Todo implementation tasks use that same repository-backed lease and require an allowlisted repository. Todo informational `answer` tasks use only a validated, disposable `operator-query/oq-*` root directly below the same base; their adapter execution kind is mapped to the existing tool-free `operator_query` capability, with no repository, shell, filesystem, browser, GitHub, or MCP access. Legacy `report_only` queue records are stopped before agent launch; there is no Todo report-only workspace. Access to any sibling workspace, prior attempt, cache, database, prompt, log, adapter, daemon state, or runtime artifact is explicitly forbidden, including read-only inspection. The global OpenCode config must blanket-deny the default home-relative workspace rule; the adapter may add a temporary invocation-local config overlay allowing only the validated active task root and `<root>/**`. The overlay must not be persisted to provider/global config and must be deleted after invocation; sibling paths remain denied. Do not read/list/search/probe `~/.agents/**` or `~/.config/opencode/**`.
 - Do not follow symlinks or use shell/file/skill tools, globbing, shell redirection, `git -C`, subagents, or indirect path tricks to reach another workspace or escape the task root.
 - Do not inspect Manul task state or runtime artifacts to prove routing/role selection. Those are operator-owned diagnostics collected outside the implementation session.
 - Prefer repository-local instructions and skills. Global skills may only be used when their contents are explicitly supplied to the agent as task context; never tell the agent to open a global skill path.
@@ -611,16 +620,31 @@ ending in `todo`. The project catalog is not needed for URL, full-name, or
 configured short-name routing. The legacy `/manul report <question>` spelling
 is only a trigger alias; it cannot select a different execution mode.
 
-Every Todo MCP task must use `execution.kind=repository`. A missing repository,
+Todo MCP tasks use two explicit execution contracts; `report_only` is
+disabled for new tasks.
+
+A clear informational question with no repository target is normalized to
+`action=ANSWER` and `execution.kind=answer`. The poller accepts this kind only
+for Todo sources, only with an empty repository field, and only with the ANSWER
+action. The dispatcher uses the validated `MANUL_WORKSPACE/operator-query/oq-*`
+workspace and passes the existing `operator_query` tool-free capability to the
+selected runtime. It supplies the current Europe/Warsaw date/time, requires a
+non-empty `TASK_DONE` answer, saves that answer as an idempotent,
+digest-bound OPEN child task, reads it back, and only then marks the complete
+Todo tree done (root last). The generated `answered` child is excluded from the
+source fingerprint only while its marker and payload digest remain valid.
+
+Implementation/repository-investigation tasks use
+`action=IMPLEMENT` and `execution.kind=repository`. A missing repository,
 multiple different repository references in one task tree, duplicate configured
 short names, ambiguous catalog aliases, and repositories outside the global
-`.repositories` allowlist are never converted to report-only work. Instead,
-Manul creates and verifies an OPEN child task that summarizes the routing checks
-and asks for the exact repository or a correction to the ambiguous/disallowed
-reference. Editing that child invalidates its digest-bound marker and creates a
-new source version. The common poller rejects legacy Todo `report_only` queue
-entries; the dispatcher stops any already-persisted legacy entry before an
-agent or scratch workspace can be launched.
+`.repositories` allowlist are never downgraded to answer mode or report-only.
+Instead, Manul creates and verifies an OPEN child task that summarizes the
+routing checks and asks for the exact repository or a correction to the
+ambiguous/disallowed reference. Editing that child invalidates its digest-bound
+marker and creates a new source version. The common poller rejects legacy Todo
+`report_only` queue entries, and the dispatcher migrates any already-persisted
+legacy entry before agent launch.
 
 Todo providers do not select a configured default repository. For each active
 root, routing searches the complete tree and gives explicit GitHub URLs and
@@ -698,13 +722,14 @@ topology change invalidates the source; status/time-only progress does not. The 
 must remain active and the current source tree must still match before execution and
 completion.
 
-Todo MCP tasks always complete through normal repository delivery
-verification (including a verified PR when repository files changed). There is
-no report-only answer-child path. Missing user input creates a verified OPEN
-blocker subtask; terminal execution failures create a verified OPEN failure
-subtask containing the stage and redacted reason. The root stays active after
-either update and is marked done only after successful repository delivery
-verification.
+Repository-backed Todo tasks complete only after normal repository
+delivery verification (including a verified PR when repository files changed).
+Informational answer tasks complete only after their non-empty answer is
+persisted and read back as a verified Todo child. Missing user input creates a
+verified OPEN blocker subtask; terminal execution failures create a verified
+OPEN failure subtask containing the stage and redacted reason. The root stays
+active after either update and is marked done only after the relevant delivery
+contract has succeeded.
 
 The task-source identity is the root work item. A pull request, review
 comment, or CI check is never a task-source root. Those artifacts may be linked

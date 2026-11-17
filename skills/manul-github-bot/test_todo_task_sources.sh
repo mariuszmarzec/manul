@@ -652,37 +652,62 @@ assert_contains "local root source type is normalized" "$local_task" '"taskSourc
 assert_eq "local Todo adapter assigns repository from description, not a static default" "owner/local" "$(jq -r '.metadata.repository' <<<"$local_task")"
 assert_eq "local source persists repository-resolution provenance" "catalog_alias" "$(jq -r '.metadata.repositoryResolution.method' <<<"$local_task")"
 
-# A Todo task without a repository must create a visible OPEN blocker, never report_only.
+# Plain informational questions without a repository are answered directly.
 cat > "$TEST_DIR/local-question.json" <<'JSON'
 [
-  {"id":490,"description":"/manul what day is today?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
+  {"id":490,"description":"/manul Jaki dzisiaj dzień tygodnia?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
 ]
 JSON
 LOCAL_QUESTION_SOURCE="$(todo_source_local_config "$LOCAL_SOURCE")"
 export TODO_MCP_FIXTURE="$TEST_DIR/local-question.json"
-local_question_before="$(jq -c '.[0]' "$TODO_MCP_FIXTURE")"
-local_question_source_id="490@$(todo_task_fingerprint "$local_question_before")"
 local_question_tasks="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
-assert_eq "local task without a repository is not queued in report-only mode" "0" "$(printf '%s\n' "$local_question_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
-assert_eq "local missing-repository blocker is created under its root" "1" "$(jq '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
-local_question_subtask="$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")"
-assert_contains "local blocker asks for an explicit owner/repo" "$local_question_subtask" "owner/repo"
-assert_contains "local blocker summarizes the routing checks" "$local_question_subtask" "Sprawdzone zostały opis zadania"
-assert_eq "local blocker remains open for the user" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "local root remains open while repository information is missing" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "verified routing blocker does not alter the original source identity" "0" "$(todo_task_still_current "$LOCAL_QUESTION_SOURCE" todo_local_mcp "$local_question_source_id"; echo $?)"
+assert_eq "local informational question is queued without a repository" "1" "$(printf '%s\n' "$local_question_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
+assert_eq "local informational question uses the dedicated ANSWER action" "ANSWER" "$(jq -r '.action' <<<"$local_question_tasks")"
+assert_eq "local informational question uses the tool-free answer execution kind" "answer" "$(jq -r '.execution.kind' <<<"$local_question_tasks")"
+assert_eq "local informational question has no repository metadata" "true" "$(jq -e '.metadata.repository == null' <<<"$local_question_tasks" >/dev/null && echo true || echo false)"
+assert_contains "local informational answer prompt explains that no repository is needed" "$(jq -r '.prompt' <<<"$local_question_tasks")" "No repository is assigned or needed"
+assert_contains "local informational answer prompt includes the current Poland date" "$(jq -r '.prompt' <<<"$local_question_tasks")" "Europe/Warsaw"
+assert_eq "local informational question does not create a repository blocker" "0" "$(jq '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
+
+# The answer is saved as a digest-bound child and preserves the original source id.
+local_question_root="$(jq -c '.[0]' "$TODO_MCP_FIXTURE")"
+local_question_source_id="$(jq -r '.taskSourceId' <<<"$local_question_tasks")"
+local_answer_text="Dzisiaj jest wtorek."
+local_answer_receipt="$(todo_task_publish_update "$LOCAL_QUESTION_SOURCE" todo_local_mcp "$local_question_source_id" answered "$local_answer_text")"
+assert_eq "local answer is saved under the original root" "490" "$(jq -r '.[0].subTasks[0].parentTaskId' "$TODO_MCP_FIXTURE")"
+assert_contains "local answer child contains the actual answer" "$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")" "$local_answer_text"
+assert_contains "local answer child is marked as an answered result" "$(tail -n 1 <<<"$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")")" "status=answered"
+assert_eq "local answer child remains pending until whole-tree completion" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
+assert_eq "local answer child does not change the queued source identity" "0" "$(todo_task_still_current "$LOCAL_QUESTION_SOURCE" todo_local_mcp "$local_question_source_id"; echo $?)"
 : > "$TODO_MCP_CALL_LOG"
-task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE" >/dev/null
-assert_eq "re-poll reuses the existing blocker without duplicate subtasks" "1" "$(jq '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
-assert_eq "re-poll does not create another blocker child" "0" "$(grep -c '^create_task' "$TODO_MCP_CALL_LOG" || true)"
-# Editing the blocker invalidates its marker and allows the new repository to route.
-jq '.[0].subTasks[0].description |= sub("owner/repo"; "owner/local")' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-question-resolved.json"
-export TODO_MCP_FIXTURE="$TEST_DIR/local-question-resolved.json"
-local_question_resumed="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
-assert_eq "editing the blocker with a configured repository requeues the task" "1" "$(printf '%s\n' "$local_question_resumed" | sed '/^$/d' | wc -l | tr -d ' ')"
-assert_eq "resumed task uses repository execution" "repository" "$(jq -r '.execution.kind' <<<"$local_question_resumed")"
-assert_eq "resumed task uses the repository supplied in the blocker" "owner/local" "$(jq -r '.metadata.repository' <<<"$local_question_resumed")"
-assert_not_contains "Todo normalization never contains report_only execution" "$local_question_resumed" "report_only"
+local_answer_retry="$(todo_task_publish_update "$LOCAL_QUESTION_SOURCE" todo_local_mcp "$local_question_source_id" answered "Retry must reuse the existing answer.")"
+assert_eq "local answer retry reuses its child id" "$(jq -r '.updateTaskId' <<<"$local_answer_receipt")" "$(jq -r '.updateTaskId' <<<"$local_answer_retry")"
+assert_eq "local answer retry does not create a duplicate child" "0" "$(grep -c '^create_task' "$TODO_MCP_CALL_LOG" || true)"
+# Simulate a remote-style partial completion: the answer child is done but
+# the root remains open because a later root update has not yet succeeded.
+jq '.[0].subTasks[0].isToDo = false' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-answer-partial.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/local-answer-partial.json"
+local_answer_partial_retry="$(todo_task_publish_update "$LOCAL_QUESTION_SOURCE" todo_local_mcp "$local_question_source_id" answered "Retry after a partial tree completion.")"
+assert_eq "partial answer completion reuses the existing child" "$(jq -r '.updateTaskId' <<<"$local_answer_receipt")" "$(jq -r '.updateTaskId' <<<"$local_answer_partial_retry")"
+assert_eq "partial answer completion does not create a duplicate" "0" "$(grep -c '^create_task' "$TODO_MCP_CALL_LOG" || true)"
+assert_eq "root remains open until whole-tree completion resumes" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
+todo_task_mark_done "$LOCAL_QUESTION_SOURCE" todo_local_mcp "$local_question_source_id"
+assert_eq "local answer child is completed with the task tree" "false" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
+assert_eq "local root is completed only after the answer child" "false" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
+
+
+# An implementation request with no repository remains a visible routing blocker.
+cat > "$TEST_DIR/local-implementation-no-repository.json" <<'JSON'
+[
+  {"id":496,"description":"/manul Implement the requested feature","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/local-implementation-no-repository.json"
+local_implementation_tasks="$(task_source_todo_local_poll "$LOCAL_QUESTION_SOURCE")"
+assert_eq "local implementation without a repository is not queued as an answer" "0" "$(printf '%s\n' "$local_implementation_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
+assert_eq "local implementation without a repository creates an open blocker" "1" "$(jq '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
+assert_contains "local implementation blocker asks for owner/repo" "$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")" "owner/repo"
+assert_eq "implementation blocker remains open" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
 
 # Local Todo must still detect a nested trigger, but an unresolved root
 # repository creates an OPEN blocker under the parent instead of queueing work.
@@ -697,7 +722,7 @@ cat > "$TEST_DIR/local-nested-trigger.json" <<'JSON'
     "subTasks": [
       {
         "id": 492,
-        "description": "/manul answer a nested question",
+        "description": "/manul Implement the nested step",
         "addedTime": "2026-10-01T10:01:00",
         "modifiedTime": "2026-10-01T10:01:00",
         "parentTaskId": 491,
@@ -828,10 +853,10 @@ assert_contains "remote root source type is normalized" "$remote_task" '"taskSou
 assert_eq "remote Fiteo adapter assigns repository from shared task description" "owner/remote" "$(jq -r '.metadata.repository' <<<"$remote_task")"
 assert_eq "remote source persists alias provenance" "remote project" "$(jq -r '.metadata.repositoryResolution.matchedAlias' <<<"$remote_task")"
 
-# Every shared remote Todo task without a route receives an OPEN blocker child.
+# Shared remote Todo information requests without a repository use direct answers.
 cat > "$TEST_DIR/remote-question.json" <<'JSON'
 [
-  {"id":590,"ownerId":4,"description":"/manul jak wyglada helloworld w kotlinie? tylko odpowiedz bez kodzenia","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]},
+  {"id":590,"ownerId":4,"description":"/manul Jaki dzisiaj dzień tygodnia?","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]},
   {"id":591,"ownerId":4,"description":"/manul daj znać czy żyjesz","addedTime":"2026-10-01T10:01:00","modifiedTime":"2026-10-01T10:01:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
 ]
 JSON
@@ -848,11 +873,23 @@ assert_eq "default Todo repository catalog resolves from ~/.agents/skills" "$HOS
 
 export TODO_MCP_FIXTURE="$TEST_DIR/remote-question.json"
 remote_question_tasks="$(HOME="$SKILLS_HOME" task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE")"
-assert_eq "remote tasks without an explicit repository are not queued" "0" "$(printf '%s\n' "$remote_question_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
-assert_eq "both remote roots receive a blocker child" "[1,1]" "$(jq -c '[.[].subTasks | length]' "$TODO_MCP_FIXTURE")"
-assert_contains "remote blocker asks for an allowlisted owner/repo" "$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")" "owner/repo"
-assert_contains "remote blocker preserves the original request context" "$(jq -r '.[1].subTasks[0].description' "$TODO_MCP_FIXTURE")" "daj znać czy żyjesz"
-assert_eq "remote blocker remains open" "[true,true]" "$(jq -c '[.[].subTasks[0].isToDo]' "$TODO_MCP_FIXTURE")"
+assert_eq "remote informational questions are queued without a repository" "2" "$(printf '%s\n' "$remote_question_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
+assert_eq "remote informational questions use ANSWER actions" "[\"ANSWER\",\"ANSWER\"]" "$(jq -c 'map(.action)' <<<"$(printf '%s\n' "$remote_question_tasks" | jq -s '.')")"
+assert_eq "remote informational questions use answer execution" "[\"answer\",\"answer\"]" "$(jq -c '[.[].execution.kind]' <<<"$(printf '%s\n' "$remote_question_tasks" | jq -s '.')")"
+assert_eq "remote informational questions do not create repository blockers" "[0,0]" "$(jq -c '[.[].subTasks | length]' "$TODO_MCP_FIXTURE")"
+
+# A remote implementation request without a repository still asks for owner/repo.
+cat > "$TEST_DIR/remote-implementation-no-repository.json" <<'JSON'
+[
+  {"id":592,"ownerId":4,"description":"/manul Implement the requested backend change","addedTime":"2026-10-01T10:02:00","modifiedTime":"2026-10-01T10:02:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/remote-implementation-no-repository.json"
+remote_implementation_tasks="$(HOME="$SKILLS_HOME" task_source_todo_remote_poll "$REMOTE_QUESTION_SOURCE")"
+assert_eq "remote implementation without repository is not queued as an answer" "0" "$(printf '%s\n' "$remote_implementation_tasks" | sed '/^$/d' | wc -l | tr -d ' ')"
+assert_eq "remote implementation without repository creates a blocker" "1" "$(jq '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
+assert_contains "remote implementation blocker asks for owner/repo" "$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")" "owner/repo"
+assert_eq "remote implementation blocker remains OPEN" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
 export TODO_TASK_REPOSITORY_CATALOG="$SAVED_TODO_TASK_REPOSITORY_CATALOG"
 export TODO_MCP_FIXTURE="$TEST_DIR/remote.json"
 assert_contains "a nested /manul command activates the parent task" "$remote_tasks" '"taskSourceId":"21@'
@@ -1025,6 +1062,13 @@ assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_m
 assert_contains "Markdown list structure remains intact" "$formatted_markdown" $'- one  \n- two'
 assert_contains "fenced code block content is preserved" "$formatted_markdown" '```kotlin'
 assert_eq "single-line update text has no redundant trailing hard break" "Single-line status update." "$(printf '%s' 'Single-line status update.' | todo_task_markdown_format)"
+
+# ANSWER is a distinct no-repository task kind mapped to the audited operator-query runtime.
+agent_executor_source="$(cat "$SCRIPT_DIR/agent-executor.sh")"
+poll_source="$(cat "$SCRIPT_DIR/poll.sh")"
+assert_contains "agent executor maps ANSWER to tool-free operator_query" "$agent_executor_source" 'adapter_execution_kind="operator_query"'
+assert_contains "source poller accepts the explicit ANSWER action" "$poll_source" 'IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER)'
+assert_contains "source poller accepts answer execution only for Todo and without a repository" "$poll_source" 'execution_kind" = "answer"'
 
 # Normal standalone operation must not need aicode to export helper paths.
 source "$SCRIPT_DIR/task-source.sh"

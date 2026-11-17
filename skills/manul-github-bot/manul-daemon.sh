@@ -2400,7 +2400,7 @@ fail_sdd_policy_task() {
   if [ -n "$workspace_id" ]; then
     workspace_release "$workspace_id" "$comment_id" || log "WARN: workspace release after SDD policy failure did not match task $comment_id"
   fi
-  release_task_repo_lock "$repo"
+  if [ -n "$repo" ]; then release_task_repo_lock "$repo"; fi
   release_task_lock
   set_activity "none" "idle"
   log "dispatch: task $comment_id blocked before agent start by SDD policy: $reason"
@@ -2467,7 +2467,7 @@ handle_pre_execution_failure() {
   if [ -n "$workspace_id" ]; then
     workspace_release "$workspace_id" "$comment_id" || log "WARN: workspace release after pre-execution failure did not match task $comment_id"
   fi
-  release_task_repo_lock "$repo"
+  if [ -n "$repo" ]; then release_task_repo_lock "$repo"; fi
   release_task_lock
   set_activity "none" "idle"
 
@@ -3619,7 +3619,7 @@ evaluate_task_completion() {
   fi
 
 
-  if [ "$TASK_EXECUTION_KIND" != "report_only" ]; then
+  if [ "$TASK_EXECUTION_KIND" = "repository" ]; then
   # 7.5. Verify repository state is clean (no staged/unstaged/untracked changes)
   if [ "$SUCCESS" = "true" ] && [ -n "$WORKDIR" ] && [ -d "$WORKDIR/.git" ]; then
     local repo_state_clean="true"
@@ -3839,8 +3839,32 @@ else
     fi
   fi
 
+  if [ "$SUCCESS" = "true" ] && [ "$TASK_EXECUTION_KIND" = "answer" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+    local answer_source_id answer_text answer_receipt
+    answer_source_id="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceId,'') FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || true)"
+    answer_text=""
+    if [ -f "$STDOUT_FILE" ]; then
+      answer_text="$(sed -E '/^TASK_DONE([[:space:]]|$)/d; /^TASK_FAILED([[:space:]:]|$)/d' "$STDOUT_FILE")"
+    fi
+    if [ -z "$(printf '%s' "$answer_text" | tr -d '[:space:]')" ]; then
+      SUCCESS="false"
+      FAILURE_CODE="TODO_ANSWER_EMPTY"
+      FAIL_REASON="The answer runtime completed without returning a non-empty answer."
+      log "ERROR: refusing to complete Todo answer task $COMMENT_ID because its answer body is empty"
+    elif answer_receipt="$(task_source_publish_update "$CONFIG" "$TASK_SOURCE_TYPE" "$answer_source_id" answered "$answer_text" 2>&1)"; then
+      log "dispatch: verified the answer as a Todo subtask for task $COMMENT_ID (receipt=$answer_receipt)"
+      lc_log "TODO_ANSWER_PUBLISHED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE receipt=$answer_receipt"
+    else
+      SUCCESS="false"
+      FAILURE_CODE="TODO_ANSWER_DELIVERY_FAILED"
+      FAIL_REASON="Manul prepared an answer but could not save and verify it as a Todo subtask: ${answer_receipt:-unknown error}"
+      log "ERROR: failed to persist Todo answer child for $COMMENT_ID: ${answer_receipt:-unknown error}"
+      lc_log "TODO_ANSWER_PUBLISH_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+    fi
+  fi
+
   # Mark the root Todo task and its complete ordered subtask tree done only
-  # after implementation delivery has been independently verified above.
+  # after repository delivery or direct-answer persistence has been verified above.
   if [ "$SUCCESS" = "true" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
     if task_source_complete "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID"; then
       log "dispatch: Todo task tree $TASK_SOURCE_ID marked done"
@@ -4068,7 +4092,7 @@ dispatch_once() {
   next_task_id="$(sqlite3 "$DB" "SELECT commentId FROM processed_comments WHERE status='queued' AND (nextAttemptAt IS NULL OR datetime(nextAttemptAt) <= datetime('now')) ORDER BY createdAt ASC, nextAttemptAt ASC NULLS FIRST LIMIT 1;" 2>/dev/null)"
   next_task_context="$(sqlite3 "$DB" "SELECT context FROM processed_comments WHERE commentId='$(sql_escape "$next_task_id")' LIMIT 1;" 2>/dev/null)"
   next_execution_kind="$(task_execution_kind_from_context "$next_task_context")"
-  if [ "$next_execution_kind" != "report_only" ]; then
+  if [ "$next_execution_kind" != "report_only" ] && [ "$next_execution_kind" != "answer" ]; then
     if ! ensure_workspace_pool; then
       log "dispatch: workspace pool reconciliation failed"
       lc_log "WORKSPACE_POOL_ERROR" "need=$MAX_CONCURRENT_TASKS"
@@ -4076,8 +4100,8 @@ dispatch_once() {
       return 0
     fi
   else
-    log "dispatch: report-only Todo task $next_task_id skips repository workspace pool"
-    lc_log "REPORT_ONLY_DISPATCH" "task=$next_task_id phase=workspace_pool_skipped"
+    log "dispatch: no-repository task $next_task_id skips repository workspace pool (kind=$next_execution_kind)"
+    lc_log "NO_REPOSITORY_DISPATCH" "task=$next_task_id kind=$next_execution_kind phase=workspace_pool_skipped"
   fi
 
     # 1. Find next eligible task using proper SQLite query with retry backoff
@@ -4219,7 +4243,7 @@ dispatch_once() {
     local TASK_EXECUTION_KIND
     TASK_EXECUTION_KIND="$(task_execution_kind_from_context "$TASK_CONTEXT")"
     case "$TASK_EXECUTION_KIND" in
-      repository|report_only) ;;
+      repository|report_only|answer) ;;
       *)
         log "dispatch: refusing unsupported execution kind '$TASK_EXECUTION_KIND' for task $COMMENT_ID"
         mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
@@ -4235,6 +4259,15 @@ dispatch_once() {
       CONVERSATION_ID="$(task_source_ensure_workspace_context "$DB" "$COMMENT_ID" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" 2>/dev/null || true)"
       if [ -n "$CONVERSATION_ID" ]; then
         log "dispatch: repaired missing workspace context for legacy source task $COMMENT_ID ($TASK_SOURCE_TYPE:$TASK_SOURCE_ID -> $CONVERSATION_ID)"
+      fi
+    fi
+    if [ "$TASK_EXECUTION_KIND" = "answer" ]; then
+      if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" || [ -n "$REPO" ] || [ "$TASK_ACTION" != "ANSWER" ]; then
+        log "dispatch: refusing invalid no-repository answer task $COMMENT_ID (source=$TASK_SOURCE_TYPE repo=${REPO:-none} action=$TASK_ACTION)"
+        mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
+        release_task_lock
+        set_activity "none" "idle"
+        return 0
       fi
     fi
     if [ "$TASK_EXECUTION_KIND" = "report_only" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
@@ -4289,7 +4322,7 @@ dispatch_once() {
       lc_log "SOURCE_STALE_REVAL" "task=$COMMENT_ID repo=$REPO rc=$reval_rc"
       mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
       stop_heartbeat "$COMMENT_ID"
-      if [ "$TASK_EXECUTION_KIND" != "report_only" ]; then
+      if [ "$TASK_EXECUTION_KIND" = "repository" ]; then
         release_repo_lock "$REPO"
       fi
       release_task_lock
@@ -4305,7 +4338,7 @@ dispatch_once() {
     # Initialize repository/workspace state before any pre-agent failure path reads it.
     local REPO_DIR="" WORKDIR="" WORKSPACE_ID="" workspace_path=""
     local CURRENT_BRANCH="report-only" INITIAL_BRANCH="report-only" INITIAL_HEAD="" DEFAULT_BRANCH="" INITIAL_BASE_BRANCH=""
-    local RELATED_REPOSITORIES="" RELATED_UNAVAILABLE="" REPORT_ONLY_DIR=""
+    local RELATED_REPOSITORIES="" RELATED_UNAVAILABLE="" REPORT_ONLY_DIR="" ANSWER_DIR=""
 
     # Start heartbeat for long-running task
     start_heartbeat "$COMMENT_ID" "$CURRENT_WORKER_PID" "$CLAIM_TOKEN"
@@ -4557,14 +4590,30 @@ For a normal task, you handle the result comment. When you emit TASK_NEEDS_USER_
 PROMPT_EOF
 
     if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
-      cat >> "$TASK_PROMPT_FILE" <<'TODO_SOURCE_PROMPT'
+      if [ "$TASK_EXECUTION_KIND" = "answer" ]; then
+        cat >> "$TASK_PROMPT_FILE" <<'TODO_ANSWER_SOURCE_PROMPT'
+
+## Todo informational answer — no repository required
+
+This task is an ordinary informational question. It is not implementation work and does not need a repository.
+- Answer the exact question directly, in the same language as the user.
+- The current date and time in the user's timezone (Europe/Warsaw) is supplied in the preceding task context. Use it for questions about today's date or weekday.
+- Do not ask for a repository or create a repository-routing blocker.
+- Do not use tools, shell, filesystem, browser, GitHub, or MCP. This task runs through the isolated tool-free answer runtime.
+- Do not post a GitHub comment or modify any repository.
+- Return a useful answer and finish with TASK_DONE on its own final line. Do not put prose after the marker.
+- Manul will save the answer as a Todo child task, verify it, and then complete the task tree. Do not change Todo completion state yourself.
+
+TODO_ANSWER_SOURCE_PROMPT
+      else
+        cat >> "$TASK_PROMPT_FILE" <<'TODO_SOURCE_PROMPT'
 
 ## Todo Source Delivery — repository-backed execution only
 
-This task originates from a Todo task tree. Every Todo MCP task must run in the normal repository workspace; report-only execution is disabled.
-- A repository has already been resolved and assigned by Manul. Use that exact repository; never guess another repository or silently switch to report-only.
+This task originates from a Todo task tree. Every implementation Todo task must run in the normal repository workspace; report-only execution is disabled.
+- A repository has already been resolved and assigned by Manul. Use that exact repository; never guess another repository or silently switch execution modes.
 - Treat the supplied Todo root and ordered descendants as the task plan. Execute pending steps in their exact order; completed steps are context and must not be repeated.
-- Make repository changes using the normal branch/commit/push/PR workflow. A real PR and verified description are required whenever repository files change. A genuinely read-only task may finish with a clear result and no PR.
+- Make repository changes using the normal branch/commit/push/PR workflow. A real PR and verified description are required whenever repository files change. A genuinely read-only repository investigation may finish with a clear result and no PR.
 - Do NOT post GitHub issue/PR comments for a Todo source and do NOT change Todo task completion state yourself.
 - If any material input is missing or a user decision is essential, inspect the assigned repository, original description, and all supplied subtasks first. Then emit exactly one complete TASK_NEEDS_USER_BEGIN/END block containing: what you checked, what remains unknown, why it blocks correct work, and the precise information/action needed. Manul will save this summary as an OPEN subtask under the Todo root. Do not use TASK_FAILED just to request information.
 - If implementation or execution genuinely fails, emit TASK_FAILED: <brief reason>. Manul will publish the failure and its diagnosis as an OPEN Todo subtask; the root stays open.
@@ -4572,9 +4621,49 @@ This task originates from a Todo task tree. Every Todo MCP task must run in the 
 - Finish using the TASK_DONE / TASK_FAILED / TASK_NEEDS_USER protocol. Do not emit GitHub result comments.
 
 TODO_SOURCE_PROMPT
+      fi
     fi
 
-    if [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
+    if [ "$TASK_EXECUTION_KIND" = "answer" ]; then
+      ANSWER_DIR="$(answer_workspace_create)" || {
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not create a validated isolated answer workspace under MANUL_WORKSPACE/operator-query." "" "$current_attempt" "answer_workspace"
+        return 0
+      }
+      workspace_path="$ANSWER_DIR"
+      WORKDIR=""
+      TASK_TYPE="todo_answer"
+      TASK_ACTION="ANSWER"
+      PR_HEAD_BRANCH=""
+      REPLY_TO=""
+      local answer_prompt_content
+      answer_prompt_content="$(cat "$TASK_PROMPT_FILE")"
+      answer_prompt_content="${answer_prompt_content//__REPO__/No repository (direct answer)}"
+      answer_prompt_content="${answer_prompt_content//__ISSUE_NUM__/N\/A}"
+      answer_prompt_content="${answer_prompt_content//__COMMENT_ID__/$COMMENT_ID}"
+      answer_prompt_content="${answer_prompt_content//__COMMENT_URL__/$COMMENT_URL}"
+      answer_prompt_content="${answer_prompt_content//__TASK_TYPE__/todo_answer}"
+      answer_prompt_content="${answer_prompt_content//__TASK_ACTION__/ANSWER}"
+      answer_prompt_content="${answer_prompt_content//__PR_NUMBER__/N\/A}"
+      answer_prompt_content="${answer_prompt_content//__TASK_PR_NUMBER__/N\/A}"
+      answer_prompt_content="${answer_prompt_content//__REPLY_TO__/N\/A}"
+      answer_prompt_content="${answer_prompt_content//__MANUL_MODE__/$MANUL_MODE}"
+      answer_prompt_content="${answer_prompt_content//__HUMAN_COMMENT_MAX_LINES__/$CFG_HUMAN_COMMENT_MAX_LINES}"
+      answer_prompt_content="${answer_prompt_content//__CURRENT_ATTEMPT__/$current_attempt}"
+      answer_prompt_content="${answer_prompt_content//__WORKDIR__/$ANSWER_DIR}"
+      answer_prompt_content="${answer_prompt_content//__WORKSPACE_ROOT__/$ANSWER_DIR}"
+      answer_prompt_content="${answer_prompt_content//__RELATED_REPOSITORIES__/None}"
+      answer_prompt_content="${answer_prompt_content//__RELATED_UNAVAILABLE__/None}"
+      answer_prompt_content="${answer_prompt_content//__PR_HEAD_BRANCH__/None}"
+      answer_prompt_content="${answer_prompt_content//__CURRENT_BRANCH__/none}"
+      answer_prompt_content="${answer_prompt_content//__DEFAULT_BRANCH__/None}"
+      answer_prompt_content="${answer_prompt_content//__INITIAL_BASE_BRANCH__/None}"
+      printf '%s' "$answer_prompt_content" > "$TASK_PROMPT_FILE"
+      local answer_current_date
+      answer_current_date="$(TZ=Europe/Warsaw LC_ALL=C date '+%A, %Y-%m-%d %H:%M %Z' 2>/dev/null || date '+%A, %Y-%m-%d %H:%M %Z')"
+      printf '\n## Current date/time at answer execution (Europe/Warsaw)\n\n%s\n' "$answer_current_date" >> "$TASK_PROMPT_FILE"
+      log "dispatch: Todo answer task $COMMENT_ID uses the isolated tool-free answer runtime; no repository checkout or repo lock"
+      lc_log "TODO_ANSWER_START" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE workspace=$ANSWER_DIR"
+    elif [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
       REPORT_ONLY_DIR="$(report_only_workspace_create)" || {
         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "" "$REPLY_TO" "Could not create an isolated report-only workspace under MANUL_WORKSPACE." "" "$current_attempt" "report_only_workspace"
         return 0
@@ -5142,6 +5231,7 @@ SDD_CHECKPOINT_PROTOCOL
        log "ERROR: cannot enter working directory $WORKDIR, failing task"
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "The validated task workspace could not be entered by the daemon." "${PR_NUM_FROM_URL:-}" "$current_attempt"
        [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+        [ "$TASK_EXECUTION_KIND" != "answer" ] || answer_workspace_cleanup "$ANSWER_DIR" || log "WARN: failed to clean answer workspace after pre-agent return for task $COMMENT_ID"
        return 0
      }
 
@@ -5192,6 +5282,7 @@ SDD_CHECKPOINT_PROTOCOL
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not create the runtime preflight context." "${PR_NUM_FROM_URL:-}" "$current_attempt" "runtime_preflight_context"
        rm -f "$PREFLIGHT_CTX_FILE"
        [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+        [ "$TASK_EXECUTION_KIND" != "answer" ] || answer_workspace_cleanup "$ANSWER_DIR" || log "WARN: failed to clean answer workspace after pre-agent return for task $COMMENT_ID"
        return 0
      fi
 
@@ -5211,6 +5302,7 @@ SDD_CHECKPOINT_PROTOCOL
        log "dispatch: runtime preflight failed for task $COMMENT_ID (stage=$preflight_stage, rc=$preflight_rc): $preflight_summary"
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$preflight_summary" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$preflight_stage"
        [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+        [ "$TASK_EXECUTION_KIND" != "answer" ] || answer_workspace_cleanup "$ANSWER_DIR" || log "WARN: failed to clean answer workspace after pre-agent return for task $COMMENT_ID"
        return 0
      fi
 
@@ -5227,6 +5319,7 @@ SDD_CHECKPOINT_PROTOCOL
        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=agent_start_marker_failed"
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not record the agent-start marker after runtime preflight." "${PR_NUM_FROM_URL:-}" "$current_attempt" "agent_start_marker"
        [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+        [ "$TASK_EXECUTION_KIND" != "answer" ] || answer_workspace_cleanup "$ANSWER_DIR" || log "WARN: failed to clean answer workspace after pre-agent return for task $COMMENT_ID"
        return 0
      fi
 
@@ -5253,6 +5346,7 @@ SDD_CHECKPOINT_PROTOCOL
        # The wrapper has either requeued the claim as a pre-agent failure or
        # left it for watchdog recovery. Never continue to prompt/runtime launch.
        [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+        [ "$TASK_EXECUTION_KIND" != "answer" ] || answer_workspace_cleanup "$ANSWER_DIR" || log "WARN: failed to clean answer workspace after pre-agent return for task $COMMENT_ID"
        return 0
      fi
 
@@ -5356,6 +5450,7 @@ SDD_CHECKPOINT_PROTOCOL
        log "dispatch: adapter failed before agent startup for task $COMMENT_ID (stage=$exec_failure_stage): $exec_summary"
        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$exec_summary" "${PR_NUM_FROM_URL:-}" "$current_attempt" "$exec_failure_stage"
        [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+        [ "$TASK_EXECUTION_KIND" != "answer" ] || answer_workspace_cleanup "$ANSWER_DIR" || log "WARN: failed to clean answer workspace after pre-agent return for task $COMMENT_ID"
        return 0
      fi
 
@@ -5392,10 +5487,11 @@ SDD_CHECKPOINT_PROTOCOL
           log "WARN: failed to post TASK_NEEDS_USER comment for $COMMENT_ID"
         fi
         stop_heartbeat "$COMMENT_ID"
-        release_task_repo_lock "$REPO"
+        if [ "$TASK_EXECUTION_KIND" = "repository" ]; then release_task_repo_lock "$REPO"; fi
         release_task_lock
         set_activity "$COMMENT_ID" "blocked_user"
         [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+        [ "$TASK_EXECUTION_KIND" != "answer" ] || answer_workspace_cleanup "$ANSWER_DIR" || log "WARN: failed to clean answer workspace after pre-agent return for task $COMMENT_ID"
         return 0
       fi
       if [ "$NEEDS_USER_INPUT" = "true" ]; then
@@ -5498,7 +5594,7 @@ Zadanie główne pozostaje otwarte. Usuń przeszkodę i edytuj to podzadanie, ab
     fi
 
     # Release repository lock
-    release_task_repo_lock "$REPO"
+    if [ "$TASK_EXECUTION_KIND" = "repository" ]; then release_task_repo_lock "$REPO"; fi
 
     # Persist task diagnostics before removing transient worker artifacts.
     archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
@@ -5507,11 +5603,57 @@ Zadanie główne pozostaje otwarte. Usuń przeszkodę i edytuj to podzadanie, ab
     # directory rather than a leased repository workspace.
     rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
     if [ "$TASK_EXECUTION_KIND" = "report_only" ] && [ -n "${REPORT_ONLY_DIR:-}" ]; then
-      report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+      report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean legacy report-only workspace for task $COMMENT_ID"
+    fi
+    if [ "$TASK_EXECUTION_KIND" = "answer" ] && [ -n "${ANSWER_DIR:-}" ]; then
+      answer_workspace_cleanup "$ANSWER_DIR" || log "WARN: failed to clean answer workspace for task $COMMENT_ID"
     fi
 
     release_task_lock
     set_activity "none" "idle"
+}
+
+answer_workspace_create() {
+  local workspace_base_real answer_root answer_root_real answer_dir answer_dir_real
+  mkdir -p "$MANUL_WORKSPACE" || return 1
+  workspace_base_real="$(realpath -e -- "$MANUL_WORKSPACE" 2>/dev/null)" || return 1
+  answer_root="$workspace_base_real/operator-query"
+  [ ! -L "$answer_root" ] || return 1
+  mkdir -p "$answer_root" || return 1
+  [ ! -L "$answer_root" ] || return 1
+  answer_root_real="$(realpath -e -- "$answer_root" 2>/dev/null)" || return 1
+  [ "$answer_root_real" = "$answer_root" ] || return 1
+  chmod 700 "$answer_root_real" || return 1
+  answer_dir="$(umask 077; mktemp -d "$answer_root_real/oq-XXXXXX")" || return 1
+  [ -d "$answer_dir" ] && [ ! -L "$answer_dir" ] || return 1
+  answer_dir_real="$(realpath -e -- "$answer_dir" 2>/dev/null)" || {
+    rm -rf -- "$answer_dir"
+    return 1
+  }
+  if [ "$(dirname -- "$answer_dir_real")" != "$answer_root_real" ] ||
+     [[ "$(basename -- "$answer_dir_real")" != oq-* ]]; then
+    rm -rf -- "$answer_dir"
+    return 1
+  fi
+  printf '%s\n' "$answer_dir_real"
+}
+
+answer_workspace_cleanup() {
+  local answer_dir="$1" workspace_base_real answer_root answer_root_real answer_dir_real
+  [ -n "$answer_dir" ] || return 0
+  [ ! -L "$answer_dir" ] || return 1
+  [ -d "$answer_dir" ] || return 0
+  workspace_base_real="$(realpath -e -- "$MANUL_WORKSPACE" 2>/dev/null)" || return 1
+  answer_root="$workspace_base_real/operator-query"
+  [ ! -L "$answer_root" ] && [ -d "$answer_root" ] || return 1
+  answer_root_real="$(realpath -e -- "$answer_root" 2>/dev/null)" || return 1
+  [ "$answer_root_real" = "$answer_root" ] || return 1
+  answer_dir_real="$(realpath -e -- "$answer_dir" 2>/dev/null)" || return 1
+  if [ "$(dirname -- "$answer_dir_real")" != "$answer_root_real" ] ||
+     [[ "$(basename -- "$answer_dir_real")" != oq-* ]]; then
+    return 1
+  fi
+  rm -rf -- "$answer_dir_real"
 }
 
 # Compatibility entry point for explicit one-shot/manual runs: poll once, then dispatch.

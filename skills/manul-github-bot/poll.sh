@@ -1172,7 +1172,7 @@ queue_normalized_source_task() {
   normalized_prompt="$(jq -r ".prompt // .body // empty" <<<"$task_json")"
   source_action="$(jq -r '.action // "IMPLEMENT"' <<<"$task_json")"
   case "$source_action" in
-    IMPLEMENT|REVIEW_FIX|VERIFY) ;;
+    IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER) ;;
     *) source_action="IMPLEMENT" ;;
   esac
   [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] && [ -n "$normalized_prompt" ] || return 0
@@ -1190,22 +1190,25 @@ queue_normalized_source_task() {
   issue_number="$(jq -r ".metadata.issueNumber // 0" <<<"$task_json")"
 
   if [ "$execution_kind" = "report_only" ]; then
-    # Todo MCP tasks are always repository-backed. Legacy report_only rows are
-    # deliberately not re-enqueued; the dispatcher converts any already-queued
-    # legacy row into a visible repository-routing blocker.
-    log "discovered task source $source_type:$source_id with disabled Todo report-only execution; not queueing"
+    # Legacy report_only records are intentionally not re-enqueued.
+    log "discovered task source $source_type:$source_id with disabled report-only execution; not queueing"
     return 0
+  elif [ "$execution_kind" = "answer" ]; then
+    case "$source_type" in todo_local_mcp|todo_remote_mcp) ;; *) return 0 ;; esac
+    if [ -n "$repo" ] || [ "$source_action" != "ANSWER" ]; then
+      log "WARN: answer task source $source_type:$source_id has an invalid repository/action combination; not queueing"
+      return 0
+    fi
   elif [ "$execution_kind" != "repository" ]; then
     log "discovered task source $source_type:$source_id (execution.kind=$execution_kind); unsupported execution kind"
+    return 0
+  elif [ -z "$repo" ]; then
+    log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
     return 0
   fi
   issue_number="$(sql_num "$issue_number")"
   issue_number="${issue_number:-0}"
   source_context="$(printf "%s" "$task_json" | jq -c '{execution:(.execution // {kind:"repository"}),metadata:(.metadata // {})}')"
-  if [ -z "$repo" ]; then
-    log "WARN: task source $source_type:$source_id has repository execution but no repository metadata; not queued"
-    return 0
-  fi
   if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context,action) VALUES('$(sql_escape "$task_id")','$(sql_escape "$repo")',${issue_number},'$(sql_escape "$source_url")','task-source','','$(sql_escape "$normalized_prompt")','queued','$(sql_escape "$created")',NULL,NULL,'$(sql_escape "$source_conversation_id")','$(sql_escape "$task_id")','$(sql_escape "$source_type")','$(sql_escape "$source_id")','$(sql_escape "$source_url")','$(sql_escape "$title")','$(sql_escape "$updated")','$(sql_escape "$source_context")','$(sql_escape "$source_action")'); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
     NEW=$((NEW + 1))
     log "queued task source $source_type:$source_id"
