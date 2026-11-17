@@ -228,25 +228,25 @@ task_source_complete() {
   esac
 }
 
-# Persist and verify a report-only Todo result without changing root status.
-task_source_report_deliver() {
-  local config="$1" type="$2" source_id="$3" answer="$4" source_json
+# Publish an idempotent, user-visible blocker/failure child through the source MCP.
+# The helper reads the child back and validates its parent, OPEN state, and digest.
+task_source_publish_update() {
+  local config="$1" type="$2" source_id="$3" status="$4" summary="$5" source_json
   task_source_is_todo_type "$type" || return 2
   source_json="$(task_source_config_by_type "$config" "$type")" || return 2
   case "$type" in
     todo_local_mcp)
       source "$TASK_SOURCE_DIR/task-source-todo-local.sh"
       source_json="$(todo_source_local_config "$source_json")" || return $?
-      todo_task_report_deliver "$source_json" "$type" "$source_id" "$answer" ;;
+      todo_task_publish_update "$source_json" "$type" "$source_id" "$status" "$summary" ;;
     todo_remote_mcp)
       source "$TASK_SOURCE_DIR/task-source-todo-remote.sh"
       source_json="$(todo_source_remote_config "$source_json")" || return $?
-      todo_task_report_deliver "$source_json" "$type" "$source_id" "$answer" ;;
+      todo_task_publish_update "$source_json" "$type" "$source_id" "$status" "$summary" ;;
     *)
       return 2 ;;
   esac
 }
-
 
 # Startup diagnostics are deliberately non-fatal: the daemon remains useful for
 # other providers, but every enabled source must explain whether it can poll.

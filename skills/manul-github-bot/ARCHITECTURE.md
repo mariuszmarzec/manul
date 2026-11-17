@@ -93,16 +93,18 @@ A pull request is never a root task source. A GitHub Issue or Jira task may have
 
 Todo sources have two execution variants. Repository-backed tasks use an
 explicit, allowlisted GitHub URL or an unambiguous alias from the optional
-project catalog and follow the normal checkout/branch/PR path. When there is no
-usable project reference, the task runs report-only without a configuration
-opt-in, bypasses repository locks and workspace-pool allocation, and receives
-a private disposable scratch root at
-`MANUL_WORKSPACE/report-only/ws-*`. This namespace is separate from the
-workspace lease pool and is accepted by the OpenCode adapter only for an
-explicit `report_only` execution context. The final answer is persisted as a
-child Todo task. The adapter verifies that child by reading the task tree back
-before the daemon stores its local receipt and marks the root last. The source fingerprint excludes only that one valid,
-source-version-bound result child, so unrelated user edits remain visible.
+project catalog and follow the normal checkout/branch/PR path. Todo work always
+requires one allowlisted repository and uses a normal leased repository
+workspace. There is no Todo report-only mode, scratch execution, or fallback
+when routing fails. If no unique target can be resolved, the adapter creates
+and verifies an OPEN Todo child task explaining what it checked and asking for
+the exact repository or a correction to the conflicting reference. During
+execution, missing required input is captured in an OPEN child task, and
+terminal failures are published as OPEN children with their stage and
+redacted reason. Generated feedback children carry digest-bound markers; only
+an unchanged verified marker is excluded from the source fingerprint so edits
+by the user produce a new source version. The Todo root is marked done last,
+only after normal repository delivery has been verified.
 
 The shared Todo MCP transport and local endpoint resolver are owned by
 globalskills/aicode and passed to Manul through exported environment paths.

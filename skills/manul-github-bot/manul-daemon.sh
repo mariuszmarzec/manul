@@ -2312,12 +2312,38 @@ publish_task_started_for_claim() {
 # Publish terminal failures through the shared feedback handler so all failure
 # paths produce the same TASK_FAILED event and preserve issue/review-thread routing.
 post_task_failure_feedback() {
-  local repo="$1" issue_num="$2" comment_id="$3" error="$4" pr_number="${5:-}" stage="${6:-task_execution}"
+  local repo="$1" issue_num="$2" comment_id="$3" error="$4" pr_number="${5-}" stage="${6:-task_execution}"
+  local source_type source_id
+  source_type="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceType,'') FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
+  source_id="$(sqlite3 "$DB" "SELECT COALESCE(taskSourceId,'') FROM processed_comments WHERE commentId='$(sql_escape "$comment_id")' LIMIT 1;" 2>/dev/null || true)"
+  error="$(manul_redact_failure_details "$error")"
+
+  if task_source_is_todo_type "$source_type"; then
+    local update_summary update_receipt post_attempt
+    update_summary="Manul zakończył próbę wykonania zadania błędem.
+
+**Etap:** $stage
+
+**Przyczyna:**
+$error
+
+Zadanie główne pozostaje otwarte. Usuń wskazaną przeszkodę i edytuj to podzadanie, aby utworzyć nową wersję zadania i ponowić pracę."
+    for post_attempt in 1 2 3; do
+      if update_receipt="$(task_source_publish_update "$CONFIG" "$source_type" "$source_id" failed "$update_summary" 2>&1)"; then
+        lc_log "TODO_TASK_FAILURE_UPDATE_CONFIRMED" "task=$comment_id source=$source_type stage=$stage try=$post_attempt receipt=$update_receipt"
+        return 0
+      fi
+      log "WARN: failed to publish Todo failure update for $comment_id (try=$post_attempt/3): ${update_receipt:-unknown error}"
+      if [ "$post_attempt" -lt 3 ]; then sleep "$post_attempt"; fi
+    done
+    lc_log "TODO_TASK_FAILURE_UPDATE_FAILED" "task=$comment_id source=$source_type stage=$stage"
+    return 1
+  fi
+
   if [[ "$issue_num" =~ ^0+$ ]]; then
     lc_log "EXTERNAL_SOURCE_FAILURE_FEEDBACK_SUPPRESSED" "task=$comment_id stage=$stage"
     return 0
   fi
-  error="$(manul_redact_failure_details "$error")"
   local args=(post-failed --repo "$repo" --issue "$issue_num" --comment-id "$comment_id" --task-id "$comment_id" --error "$error" --stage "$stage")
 
   if [[ "$comment_id" =~ ^review:[0-9]+$ ]] && ! [[ "$pr_number" =~ ^[0-9]+$ ]]; then
@@ -2344,7 +2370,6 @@ post_task_failure_feedback() {
   lc_log "TASK_FAILURE_COMMENT_FAILED" "task=$comment_id repo=$repo issue=$issue_num reason=github_post_failed"
   return 1
 }
-
 
 # SDD policy failures are deterministic and terminal. Missing roles/skills,
 # invalid configuration, and prohibited direct coding roles cannot be repaired
@@ -3533,14 +3558,7 @@ evaluate_task_completion() {
   # A user-input request is a deliberate pause, not task failure.
   # Detect and validate the complete structured block before any success/failure
   # verification. Malformed/partial blocks intentionally remain failures.
-  if [ "$TASK_EXECUTION_KIND" = "report_only" ] && [ -f "$STDOUT_FILE" ] && {
-    grep -q "^TASK_NEEDS_USER_BEGIN$" "$STDOUT_FILE" 2>/dev/null ||
-    grep -q "^TASK_NEEDS_USER_END$" "$STDOUT_FILE" 2>/dev/null
-  }; then
-    FAIL_REASON="Report-only Todo tasks cannot pause for user input; return a complete answer or TASK_FAILED"
-    FAILURE_CODE="REPORT_ONLY_USER_INPUT_UNSUPPORTED"
-    USER_DECISION_INVALID="true"
-  elif [ -f "$STDOUT_FILE" ] && {
+  if [ -f "$STDOUT_FILE" ] && {
     grep -q "^TASK_NEEDS_USER_BEGIN$" "$STDOUT_FILE" 2>/dev/null ||
     grep -q "^TASK_NEEDS_USER_END$" "$STDOUT_FILE" 2>/dev/null
   }; then
@@ -3698,6 +3716,7 @@ else
            log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
          fi
        fi
+       fi
 
        # 7.7. Delivery push verification. A task that reports TASK_DONE with a real
        # repository change must have committed AND pushed its work. Distinguish the
@@ -3803,74 +3822,6 @@ else
     fi
   fi
 
-  fi
-
-  # Report-only Todo tasks persist their final answer before any source-tree
-  # completion. The adapter returns a source-bound receipt only after read-back.
-  if [ "$SUCCESS" = "true" ] && [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
-    if ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
-      SUCCESS="false"
-      FAILURE_CODE="REPORT_ONLY_SOURCE_INVALID"
-      FAIL_REASON="Report-only execution is supported only for Todo task sources"
-    elif [ ! -s "$STDOUT_FILE" ]; then
-      SUCCESS="false"
-      FAILURE_CODE="REPORT_ONLY_ANSWER_EMPTY"
-      FAIL_REASON="Report-only agent returned no answer to persist"
-    else
-      local REPORT_ANSWER REPORT_RECEIPT REPORT_DELIVERY_RC REPORT_ROOT_ID REPORT_RESULT_ID REPORT_DIGEST
-      REPORT_ANSWER="$(python3 - "$STDOUT_FILE" <<'PY_REPORT_ANSWER'
-import re
-import sys
-from pathlib import Path
-
-output = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
-lines = [line for line in output.splitlines() if not re.match(r"^TASK_(?:DONE|COMPLETED)(?:\s|:|$)", line)]
-print("\n".join(lines).strip())
-PY_REPORT_ANSWER
-)" || REPORT_ANSWER=""
-      if [ -z "$(printf '%s' "$REPORT_ANSWER" | tr -d '[:space:]')" ]; then
-        SUCCESS="false"
-        FAILURE_CODE="REPORT_ONLY_ANSWER_EMPTY"
-        FAIL_REASON="Report-only agent emitted TASK_DONE without a non-empty answer"
-      else
-        REPORT_DELIVERY_RC=0
-        REPORT_RECEIPT="$(task_source_report_deliver "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" "$REPORT_ANSWER")" || REPORT_DELIVERY_RC=$?
-        REPORT_ROOT_ID="${TASK_SOURCE_ID%%@*}"
-        if [ "$REPORT_DELIVERY_RC" -ne 0 ] || ! jq -e --arg sourceId "$TASK_SOURCE_ID" --argjson rootId "$REPORT_ROOT_ID" '
-          .sourceId == $sourceId
-          and .rootTaskId == $rootId
-          and (.answer | type == "string" and length > 0)
-          and (.resultTaskId | type == "number" and . > 0)
-          and (.answerSha256 | type == "string" and test("^[0-9a-f]{64}$"))
-        ' <<<"$REPORT_RECEIPT" >/dev/null 2>&1; then
-          SUCCESS="false"
-          FAILURE_CODE="TODO_REPORT_DELIVERY_FAILED"
-          FAIL_REASON="The report answer could not be persisted and verified as a Todo subtask; the Todo root remains active"
-          log "ERROR: report-only delivery failed for Todo source $TASK_SOURCE_ID (rc=$REPORT_DELIVERY_RC)"
-          lc_log "TODO_REPORT_DELIVERY_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE rc=$REPORT_DELIVERY_RC"
-        else
-          REPORT_RESULT_ID="$(jq -r '.resultTaskId' <<<"$REPORT_RECEIPT")"
-          REPORT_DIGEST="$(jq -r '.answerSha256' <<<"$REPORT_RECEIPT")"
-          local safe_report_receipt safe_report_summary report_update_result report_update_changes
-          safe_report_receipt="$(sql_escape "$REPORT_RECEIPT")"
-          safe_report_summary="$(sql_escape "Verified Todo report subtask #$REPORT_RESULT_ID (sha256 $REPORT_DIGEST)")"
-          report_update_result="$(sqlite3 "$DB" "UPDATE processed_comments SET resultJson='$safe_report_receipt', resultSummary='$safe_report_summary' WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token'; SELECT changes();" 2>>"$LOG")" || report_update_result=""
-          report_update_changes="$(printf '%s\n' "$report_update_result" | tail -n 1)"
-          if [ "$report_update_changes" != "1" ]; then
-            SUCCESS="false"
-            FAILURE_CODE="TODO_REPORT_RECEIPT_PERSIST_FAILED"
-            FAIL_REASON="Todo contains the verified report subtask, but Manul could not persist its local delivery receipt; retry will safely reuse the same subtask"
-            log "ERROR: could not persist report-only receipt for task $COMMENT_ID (changes=${report_update_changes:-unknown})"
-            lc_log "TODO_REPORT_RECEIPT_PERSIST_FAILED" "task=$COMMENT_ID result=$REPORT_RESULT_ID"
-          else
-            log "dispatch: report-only answer verified in Todo subtask #$REPORT_RESULT_ID (sha256=$REPORT_DIGEST)"
-            lc_log "TODO_REPORT_DELIVERY_VERIFIED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE result=$REPORT_RESULT_ID sha256=$REPORT_DIGEST"
-            FINAL_COMMENT="Report saved as Todo subtask #$REPORT_RESULT_ID."
-          fi
-        fi
-      fi
-    fi
-  fi
   # GitHub-rooted tasks require a deterministic result-comment receipt.
   # Todo tasks instead use the source MCP and do not have a GitHub issue thread.
   # The comment-only base-branch verifier already checked this exact marker and
@@ -3897,11 +3848,7 @@ PY_REPORT_ANSWER
     else
       SUCCESS="false"
       FAILURE_CODE="TODO_SOURCE_UPDATE_FAILED"
-      if [ "$TASK_EXECUTION_KIND" = "report_only" ]; then
-        FAIL_REASON="The Todo report was saved, but the task tree could not be marked done. The Todo root remains open and the result subtask can be safely reused on retry."
-      else
-        FAIL_REASON="Repository delivery was verified, but the Todo task tree could not be marked done. The Todo source remains open."
-      fi
+      FAIL_REASON="Repository delivery was verified, but the Todo task tree could not be marked done. The Todo source remains open."
       log "ERROR: Todo source completion failed for task $TASK_SOURCE_ID"
       lc_log "TODO_SOURCE_COMPLETION_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
     fi
@@ -4290,7 +4237,21 @@ dispatch_once() {
         log "dispatch: repaired missing workspace context for legacy source task $COMMENT_ID ($TASK_SOURCE_TYPE:$TASK_SOURCE_ID -> $CONVERSATION_ID)"
       fi
     fi
-    if [ "$TASK_EXECUTION_KIND" = "report_only" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+    if [ "$TASK_EXECUTION_KIND" = "report_only" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+      local legacy_report_receipt legacy_report_summary
+      legacy_report_summary="To zadanie było zapisane w wyłączonym trybie report-only. Zadania Todo MCP muszą mieć przypisane repozytorium i używać normalnego wykonania. Uzupełnij dokładne owner/repo lub alias projektu w tym podzadaniu; po edycji Manul ponowi routing."
+      if legacy_report_receipt="$(task_source_publish_update "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" needs_input "$legacy_report_summary" 2>&1)"; then
+        log "dispatch: legacy report-only Todo task $COMMENT_ID was stopped and a repository-routing subtask was verified"
+        mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
+      else
+        log "ERROR: could not publish a migration blocker for legacy report-only Todo task $COMMENT_ID: ${legacy_report_receipt:-unknown error}"
+        # Do not discard the legacy row before the user-visible update is saved.
+        requeue_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$REPLY_TO" "$ACTUAL_ATTEMPTS"
+      fi
+      release_task_lock
+      set_activity "none" "idle"
+      return 0
+    elif [ "$TASK_EXECUTION_KIND" = "report_only" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
       log "dispatch: refusing report-only execution for non-Todo source $TASK_SOURCE_TYPE"
       mark_task_stale "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN"
       release_task_lock
@@ -4598,18 +4559,17 @@ PROMPT_EOF
     if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
       cat >> "$TASK_PROMPT_FILE" <<'TODO_SOURCE_PROMPT'
 
-## Todo Source Delivery Override — takes precedence over the generic GitHub comment instructions above
+## Todo Source Delivery — repository-backed execution only
 
-This task originates from a Todo task tree, not a GitHub issue or comment.
-- Do NOT post a GitHub issue comment, PR conversation comment, PR review comment, or a Manul result-marker comment. The source URL is a Todo MCP identifier, not a GitHub URL.
-- Do NOT call `gh issue comment` or GitHub comment APIs for this task.
-- The task root and its ordered subtask tree are supplied above. Treat the subtasks as the implementation plan: execute pending steps in the exact order shown; keep nested children immediately after their parent; [DONE] steps are context and must not be repeated.
-- Preserve the order from Todo; do not sort or parallelize steps by priority, title, or perceived complexity.
-- Make repository changes using the normal Manul branch/commit/push/PR workflow. A real PR and its updated description remain required whenever repository files change. Include the Todo task ID in the branch name, PR title, and PR body so the work can be traced to the source task.
-- A task that is informational or genuinely requires no repository change may finish without a PR, but must still give a concrete result in the final agent response.
-- Do NOT change Todo task completion state yourself. After delivery verification, Manul will re-read the source tree and mark the root and every descendant subtask done through the same MCP source adapter. Do not mark a step done early.
-- Do NOT emit a TASK_NEEDS_USER block: Todo sources have no GitHub conversation or /manul continue reply channel. Resolve routine ambiguity autonomously. If a material decision truly requires the user, stop and emit TASK_FAILED: with the exact missing input, what you checked, and the available choices; leave the Todo task open. The user can update the Todo description/subtasks with that input, producing a new structural source version.
-- Finish with the existing TASK_DONE / TASK_FAILED protocol. Do not emit a GitHub result comment as part of that protocol.
+This task originates from a Todo task tree. Every Todo MCP task must run in the normal repository workspace; report-only execution is disabled.
+- A repository has already been resolved and assigned by Manul. Use that exact repository; never guess another repository or silently switch to report-only.
+- Treat the supplied Todo root and ordered descendants as the task plan. Execute pending steps in their exact order; completed steps are context and must not be repeated.
+- Make repository changes using the normal branch/commit/push/PR workflow. A real PR and verified description are required whenever repository files change. A genuinely read-only task may finish with a clear result and no PR.
+- Do NOT post GitHub issue/PR comments for a Todo source and do NOT change Todo task completion state yourself.
+- If any material input is missing or a user decision is essential, inspect the assigned repository, original description, and all supplied subtasks first. Then emit exactly one complete TASK_NEEDS_USER_BEGIN/END block containing: what you checked, what remains unknown, why it blocks correct work, and the precise information/action needed. Manul will save this summary as an OPEN subtask under the Todo root. Do not use TASK_FAILED just to request information.
+- If implementation or execution genuinely fails, emit TASK_FAILED: <brief reason>. Manul will publish the failure and its diagnosis as an OPEN Todo subtask; the root stays open.
+- Do not mark Todo subtasks done early. Manul marks the tree complete only after delivery verification.
+- Finish using the TASK_DONE / TASK_FAILED / TASK_NEEDS_USER protocol. Do not emit GitHub result comments.
 
 TODO_SOURCE_PROMPT
     fi
@@ -5408,13 +5368,26 @@ SDD_CHECKPOINT_PROTOCOL
     # worker failure/retry path. The daemon asks the user and then waits for an
     # explicit /manul continue response.
     if task_needs_user_input; then
-      if mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$USER_QUESTION"; then
+      local todo_input_receipt todo_input_rc
+      todo_input_rc=0
+      if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+        todo_input_receipt="$(task_source_publish_update "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" needs_input "$USER_QUESTION" 2>&1)" || todo_input_rc=$?
+        if [ "$todo_input_rc" -ne 0 ]; then
+          FAIL_REASON="Manul potrzebował informacji od użytkownika, ale nie udało się zapisać pytania jako podzadania Todo: ${todo_input_receipt:-unknown error}"
+          FAILURE_CODE="TODO_STATUS_UPDATE_FAILED"
+          log "ERROR: failed to persist missing-input subtask for Todo task $COMMENT_ID: $todo_input_receipt"
+          update_task_completion "$COMMENT_ID" "failed" "$FAIL_REASON" "$CLAIM_TOKEN" || log "ERROR: could not mark Todo task $COMMENT_ID failed after question publication failed"
+          NEEDS_USER_INPUT="false"
+        fi
+      fi
+
+      if [ "$NEEDS_USER_INPUT" = "true" ] && mark_task_blocked_user "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$USER_QUESTION"; then
         if task_has_workspace; then
           workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || log "WARN: failed to release workspace after user-blocked task $COMMENT_ID"
         fi
         if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
-          log "Todo task $TASK_SOURCE_ID blocked for user input; question saved in resultSummary. Edit the Todo task to create a new source version."
-          lc_log "TODO_SOURCE_BLOCKED_USER" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+          log "Todo task $TASK_SOURCE_ID blocked for user input; verified open subtask was saved"
+          lc_log "TODO_SOURCE_BLOCKED_USER" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE receipt=$todo_input_receipt"
         elif ! post_task_needs_user_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$USER_QUESTION" "$REPLY_TO"; then
           log "WARN: failed to post TASK_NEEDS_USER comment for $COMMENT_ID"
         fi
@@ -5422,13 +5395,14 @@ SDD_CHECKPOINT_PROTOCOL
         release_task_repo_lock "$REPO"
         release_task_lock
         set_activity "$COMMENT_ID" "blocked_user"
-       [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
+        [ "$TASK_EXECUTION_KIND" != "report_only" ] || report_only_workspace_cleanup "$REPORT_ONLY_DIR" || log "WARN: failed to clean report-only workspace for task $COMMENT_ID"
         return 0
       fi
-      log "ERROR: could not transition $COMMENT_ID to blocked_user; falling through to failure handling"
-      NEEDS_USER_INPUT="false"
+      if [ "$NEEDS_USER_INPUT" = "true" ]; then
+        log "ERROR: could not transition $COMMENT_ID to blocked_user; falling through to failure handling"
+        NEEDS_USER_INPUT="false"
+      fi
     fi
-
     # Map local variables (set by evaluate_task_completion)
     COMPLETION_SUCCESS="${COMPLETION_SUCCESS:-false}"
     FINAL_COMMENT="${FINAL_COMMENT:-}"
@@ -5452,9 +5426,32 @@ SDD_CHECKPOINT_PROTOCOL
     # 9. Persist terminal result comments before attempting GitHub publication.
     # Non-terminal retry comments remain ordinary result text without machine markers.
     local COMMENT_POST_SUCCESS="false"
+    if task_source_is_todo_type "$TASK_SOURCE_TYPE" && [ "$task_final_status" = "failed" ]; then
+      local todo_failure_summary todo_failure_receipt todo_failure_attempt
+      todo_failure_summary="Manul zakończył wykonanie zadania błędem.
+
+**Etap:** ${FAILURE_CODE:-task execution}
+
+**Przyczyna:**
+$(manul_redact_failure_details "${FAIL_REASON:-${FINAL_COMMENT}}")
+
+Zadanie główne pozostaje otwarte. Usuń przeszkodę i edytuj to podzadanie, aby ponowić pracę."
+      for todo_failure_attempt in 1 2 3; do
+        if todo_failure_receipt="$(task_source_publish_update "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" failed "$todo_failure_summary" 2>&1)"; then
+          COMMENT_POST_SUCCESS="true"
+          log "dispatch: published verified Todo failure update for $COMMENT_ID (receipt=$todo_failure_receipt)"
+          lc_log "TODO_TASK_FAILURE_UPDATE_CONFIRMED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE try=$todo_failure_attempt"
+          break
+        fi
+        log "WARN: failed to publish Todo failure update for $COMMENT_ID (try=$todo_failure_attempt/3): $todo_failure_receipt"
+        if [ "$todo_failure_attempt" -lt 3 ]; then sleep "$todo_failure_attempt"; fi
+      done
+      if [ "$COMMENT_POST_SUCCESS" != "true" ]; then
+        lc_log "TODO_TASK_FAILURE_UPDATE_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+      fi
+    fi
     if [ -n "$FINAL_COMMENT" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
-      # Todo has no GitHub comment protocol; its answer is saved as a verified
-      # child task and the local receipt is stored in processed_comments.
+      # Todo failures are published as verified OPEN child tasks via the MCP adapter.
       if [ "$task_final_status" = "completed" ] || [ "$task_final_status" = "failed" ]; then
         local terminal_event_type="TASK_DONE"
         [ "$task_final_status" = "failed" ] && terminal_event_type="TASK_FAILED"
@@ -5469,7 +5466,6 @@ SDD_CHECKPOINT_PROTOCOL
         log "ERROR: failed to post non-terminal result comment for $COMMENT_ID"
       fi
     fi
-
     # The evaluator is the single authority for running→completed/queued/failed.
     # Never perform a second state transition here after evaluation.
     if [ "$COMPLETION_SUCCESS" = "true" ]; then
