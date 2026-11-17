@@ -311,16 +311,17 @@ PROMPT_APPEND
 - For repository changes, **branch preparation is a mandatory precondition to every edit**: do not edit, patch, generate, format, or otherwise modify repository files until the branch preflight below has succeeded.
 - Preserve existing changes. Never use `git reset --hard`, `git clean`, or discard unknown work. If the checkout is dirty or the branch cannot be established safely, stop before editing and report the exact blocker.
 - Create the branch yourself before committing or pushing changes, and before the first repository edit.
-- Use `__INITIAL_BASE_BRANCH__` as the base unless the task explicitly requires another base. Example (replace `<short-description>` with a lowercase kebab-case summary):
+- Choose a short, natural branch name based on the actual requested change; do not include task-source/provider, runtime/agent, comment, task, or attempt metadata.
+- Follow repository-local naming conventions; if none exist, use a semantic lowercase kebab-case name with a conventional type prefix only when that repository normally uses one.
+- Use `__INITIAL_BASE_BRANCH__` as the base unless the task explicitly requires another base. Example (replace `<short-description>` with a few lowercase kebab-case words describing the outcome):
   ```bash
   WORKDIR="__WORKDIR__"
   BASE_BRANCH="__INITIAL_BASE_BRANCH__"
-  TASK_SUFFIX="$(printf '%s' '__COMMENT_ID__-attempt-__CURRENT_ATTEMPT__' | tr -cs '[:alnum:]-' '-')"
-  TASK_BRANCH="feature/__ISSUE_NUM__-manul-<short-description>-$TASK_SUFFIX"
+  TASK_BRANCH="feature/<short-description>"
   git -C "$WORKDIR" fetch origin "$BASE_BRANCH" &&
     git -C "$WORKDIR" switch --create "$TASK_BRANCH" "origin/$BASE_BRANCH"
   ```
-- Verify `git -C "$WORKDIR" branch --show-current` equals the new task branch before modifying files. If fetching or branch creation fails, do not continue with edits or commits; report the cause. Do not overwrite or reuse a stale branch from an earlier attempt; use a unique task/attempt suffix.
+- Verify `git -C "$WORKDIR" branch --show-current` equals the new task branch before modifying files. If fetching or branch creation fails, do not continue with edits or commits; report the cause. Do not overwrite or reuse a stale branch from an earlier attempt; if the semantic branch name is already taken, append a plain numeric suffix such as -2 or -3.
 - If the task explicitly requires another branch as the base, including another feature branch, fetch that exact remote base before creating your branch and use it as the PR base.
 - Never commit or push repository changes directly to the prepared/base/default branch
 PROMPT_APPEND
@@ -823,6 +824,11 @@ if assert_file_contains "production prompt enforces canonical path handling" "$S
 if assert_file_contains "execution context carries a primary checkout path" "$SCRIPT_DIR/manul-daemon.sh" '--arg workdir "$WORKDIR"'; then :; else :; fi
 if assert_file_contains "execution context carries the task workspace root" "$SCRIPT_DIR/manul-daemon.sh" '--arg workspaceRoot "$workspace_path"'; then :; else :; fi
 if assert_file_contains "production daemon refreshes after every later push" "$SCRIPT_DIR/manul-daemon.sh" "After EVERY later push to a branch with an open PR"; then :; else :; fi
+if assert_file_contains "production prompt requires task-focused branch names" "$SCRIPT_DIR/manul-daemon.sh" "Choose a short, natural branch name based on the actual requested code change"; then :; else :; fi
+if assert_file_contains "production prompt keeps branch names free of orchestration metadata" "$SCRIPT_DIR/manul-daemon.sh" "Do not include Manul, Todo, MCP"; then :; else :; fi
+if assert_file_contains "production prompt uses ordinary numeric suffixes for branch collisions" "$SCRIPT_DIR/manul-daemon.sh" "plain numeric suffix such as `-2`, `-3`"; then :; else :; fi
+if assert_file_not_contains "production branch template no longer exposes Manul/task attempt metadata" "$SCRIPT_DIR/manul-daemon.sh" 'TASK_BRANCH="feature/__ISSUE_NUM__-manul-'; then :; else :; fi
+if assert_file_contains "production task prompt applies human-facing output contract in every mode" "$SCRIPT_DIR/manul-daemon.sh" "Human-facing output (all modes and runtimes)"; then :; else :; fi
 
 # ─── Results summary ───────────────────────────────────────────────────────────
 echo ""
