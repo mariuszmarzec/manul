@@ -56,7 +56,7 @@ cat > "$START_CANONICAL/manul-platform.sh" <<'PLATFORM'
 manul_platform_prepare() { return 0; }
 manul_platform_reexec_if_needed() { return 0; }
 PLATFORM
-printf '#!/usr/bin/env bash\\r\\nprintf "daemon-stop-ok\\\\n" >> "$START_TEST_LOG"\\r\\n' > "$START_CANONICAL/manul-daemon.sh"\nprintf \\\"daemon-stop-ok\\\\n\\\" >> \\\"$START_TEST_LOG\\\"\\r\\n' > "$START_CANONICAL/manul-daemon.sh"
+printf '#!/usr/bin/env bash\r\nprintf "daemon-stop-ok\\n" >> "$START_TEST_LOG"\r\n' > "$START_CANONICAL/manul-daemon.sh"
 chmod +x "$START_CANONICAL/manul-daemon.sh"
 ln -s "$START_CANONICAL/manul-daemon.sh" "$START_RUNTIME/manul-daemon.sh"
 cat > "$START_BIN/crontab" <<'CRONTAB'
@@ -75,7 +75,7 @@ if [ -f "$START_LOG" ] && grep -q "daemon-stop-ok" "$START_LOG"; then
 else
     bad "automation stop did not execute the repaired daemon (output: $START_OUTPUT)"
 fi
-if LC_ALL=C grep -q "$(printf '\\r')" "$START_CANONICAL/manul-daemon.sh"; then
+if LC_ALL=C grep -q "$(printf '\r')" "$START_CANONICAL/manul-daemon.sh"; then
     bad "automation stop leaves no CRLF in daemon script"
 else
     ok "automation stop normalizes daemon script to LF"
