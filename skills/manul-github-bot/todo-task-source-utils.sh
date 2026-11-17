@@ -702,7 +702,7 @@ sys.stdout.write("\n".join(result))
 # the Todo task-list preview.
 todo_task_report_markdown() {
   local generated_answer="$1" source_type="$2" root_json="$3"
-  local formatted_answer source_label task_description
+  local formatted_answer task_description
 
   formatted_answer="$(todo_task_markdown_format <<<"$generated_answer")" || return 1
   task_description="$(jq -r '.description // empty' <<<"$root_json")"
@@ -710,14 +710,12 @@ todo_task_report_markdown() {
   [ -n "$task_description" ] || task_description="Brak opisu zadania."
 
   case "$source_type" in
-    todo_local_mcp) source_label="Todo Local" ;;
-    todo_remote_mcp) source_label="Fiteo Backend" ;;
+    todo_local_mcp|todo_remote_mcp) ;;
     *) return 2 ;;
   esac
 
   {
-    printf '%s\n\n---\n\n## Kontekst zadania\n\n' "$formatted_answer"
-    printf -- '- **Źródło:** %s\n' "$source_label"
+    printf '%s\n\n---\n\n## Zadanie\n\n' "$formatted_answer"
     printf -- '- **Zadanie:** %s\n' "$task_description"
   } | todo_task_markdown_format
 }
