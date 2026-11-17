@@ -333,7 +333,7 @@ report_marker_pattern = re.compile(
 )
 update_marker_pattern = re.compile(
     r"<!-- MANUL_TASK_UPDATE:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});"
-    r"status=(?:needs_input|failed);sha256=([0-9a-f]{64}) -->"
+    r"status=(?:needs_input|failed|answered);sha256=([0-9a-f]{64}) -->"
 )
 for index, child in enumerate(root.get("subTasks") or []):
     description = child.get("description")
@@ -448,8 +448,33 @@ todo_strip_manul_trigger() {
   ' <<<"$1"
 }
 
+# Route clear natural-language questions to the dedicated tool-free answer path.
+# This is deliberately conservative: implementation commands still require a
+# uniquely allowlisted repository and create a routing blocker when missing.
+todo_task_is_answer_request() {
+  local task_json="$1" description
+  description="$(jq -r '
+    def strip_trigger:
+      gsub("(?m)^[[:space:]]*/manul([[:space:]]+report)?([[:space:]]+|$)"; "");
+    def task_descriptions:
+      ((.description // "") | strip_trigger),
+      (.subTasks[]? | task_descriptions);
+    [task_descriptions] | join("\n")
+  ' <<<"$task_json")" || return 1
+  [ -n "$(printf '%s' "$description" | tr -d '[:space:]')" ] || return 1
+
+  # Explicit change/delivery instructions must never be downgraded to answers.
+  if grep -Eiq '(^|[^[:alnum:]_])(implement|implementing|fix|fixes|create|add|modify|update|refactor|deploy|merge|commit|open[[:space:]]+a?[[:space:]]*(pull[[:space:]]+request|pr)|zaimplementuj|implementuj|napraw|dodaj|utw[oó]rz|zmie[nń]|popraw|zrefaktoryzuj|wdro[zż]|scal|merguj|zmergeuj|napisz[[:space:]]+kod|zmie[nń][[:space:]]+plik)([^[:alnum:]_]|$)' <<<"$description"; then
+    return 1
+  fi
+
+  # Require a question/explanation cue; arbitrary un-routed work remains blocked.
+  grep -Eiq '(^|[[:space:][:punct:]])(what|what.s|which|who|when|where|why|how|is|are|am|can|could|do|does|did|will|would|should|has|have|explain|describe|summari[sz]e|tell[[:space:]]+me|jaki|jaka|jakie|jak|co|kiedy|gdzie|dlaczego|czy|kto|ile|kt[oó]ry|kt[oó]ra|kt[oó]re|wyja[sś]nij|wyt[lł]umacz|opisz|stre[sś][cć]|podsumuj|powiedz|podaj|daj[[:space:]]+zna[cć]|sprawd[zź])([[:space:][:punct:]]|$)|[?？]' <<<"$description"
+}
+
 todo_task_prompt() {
-  local task_json="$1" source_id="${2:-}" prompt_text steps_json steps_markdown description task_id
+  local task_json="$1" source_id="${2:-}" execution_kind="${3:-repository}"
+  local prompt_text steps_json steps_markdown description task_id answer_current_date
   description="$(jq -r '.description // ""' <<<"$task_json")"
   task_id="$(jq -r '.id // "unknown"' <<<"$task_json")"
   prompt_text="$(todo_strip_manul_trigger "$description")"
@@ -474,23 +499,38 @@ todo_task_prompt() {
     fi
     if [ -n "$steps_markdown" ]; then
       printf '\n## Ordered subtask steps\n\n%s\n' "$steps_markdown"
-      printf '\nExecute the pending subtask steps in the exact order shown. Preserve the existing order; nested subtasks follow their parent step immediately. Steps marked [DONE] are context and must not be repeated.\n'
+      printf '\nExecute pending subtask steps in their exact order. Preserve the existing order; nested subtasks follow their parent step immediately. Steps marked [DONE] are context and must not be repeated.\n'
     fi
-    printf '\nTreat this as repository-backed work. Investigate the assigned repository and complete the requested change or analysis there. Create a branch and PR when repository files change; a genuinely read-only answer may finish without a PR.\n'
-    printf 'If the repository or other material input is missing, inspect the full task tree and repository context first, then emit TASK_NEEDS_USER_BEGIN/END with a concise summary of what you checked and the exact information needed. Manul will save that request as an open subtask under this root task. Do not guess a repository and do not switch to report-only mode.\n'
-    printf 'After verified delivery, Manul will mark the root task and its subtasks done. Do not change Todo completion state yourself.\n'
+    if [ "$execution_kind" = "answer" ]; then
+      answer_current_date="$(TZ=Europe/Warsaw LC_ALL=C date '+%A, %Y-%m-%d %H:%M %Z' 2>/dev/null || date '+%A, %Y-%m-%d %H:%M %Z')"
+      printf '\n## Direct answer task\n\n'
+      printf 'This is a normal informational answer, not repository implementation and not a report-only task.\n'
+      printf 'No repository is assigned or needed. Answer the user directly and clearly in the same language as the request. Do not ask for a repository merely because none was supplied.\n'
+      printf 'The current date and time in the user timezone (Europe/Warsaw) is: %s. Use this exact date when answering questions such as the current weekday; do not infer today from model training data.\n' "$answer_current_date"
+      printf 'This execution is tool-free and has no repository, shell, filesystem, browser, GitHub, or MCP access. Answer from the supplied task and general knowledge. When a live external fact cannot be established from the supplied context, state that limitation rather than inventing it.\n'
+      printf 'Do not create code, branches, commits, or PRs. Do not emit TASK_NEEDS_USER just because there is no repository. When the answer is complete, emit TASK_DONE on a standalone final line and put no prose after it.\n'
+    else
+      printf '\nTreat this as repository-backed work. Investigate the assigned repository and complete the requested change or analysis there. Create a branch and PR when repository files change; a genuinely read-only answer may finish without a PR.\n'
+      printf 'If the repository or other material input is missing, inspect the full task tree and repository context first, then emit TASK_NEEDS_USER_BEGIN/END with a concise summary of what you checked and the exact information needed. Manul will save this as an open subtask under the root task. Do not guess a repository or switch execution modes.\n'
+      printf 'After verified delivery, Manul will mark the root task and its subtasks done. Do not change Todo task completion state yourself.\n'
+    fi
   }
 }
-
 todo_task_to_source_json() {
   local task_json="$1" source_type="$2" resolution_json="${3-}"
-  local repository task_id fingerprint source_id source_url title body prompt ids created updated matched_alias project_skill_context resolution_method
+  local repository execution_kind task_id fingerprint source_id source_url title body prompt ids created updated matched_alias project_skill_context resolution_method action
   [ -n "$resolution_json" ] || resolution_json='{}'
   repository="$(jq -r '.repository // empty' <<<"$resolution_json")"
-  [ -n "$repository" ] || {
+  execution_kind="$(jq -r '.executionKind // "repository"' <<<"$resolution_json")"
+  if [ "$execution_kind" = "repository" ] && [ -z "$repository" ]; then
     echo "Todo implementation task cannot be queued without an allowlisted repository" >&2
     return 1
-  }
+  fi
+  if [ "$execution_kind" = "answer" ] && [ -n "$repository" ]; then
+    echo "Todo answer tasks must not be assigned a repository" >&2
+    return 1
+  fi
+  case "$execution_kind" in repository|answer) ;; *) return 2 ;; esac
   task_id="$(jq -r '.id // empty' <<<"$task_json")"
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
   fingerprint="$(todo_task_fingerprint "$task_json")" || return 1
@@ -502,21 +542,26 @@ todo_task_to_source_json() {
   esac
   title="$(jq -r '.description // "Todo task"' <<<"$task_json")"
   body="$title"
-  prompt="$(todo_task_prompt "$task_json" "$source_id")"
-  resolution_method="$(jq -r '.method // "unknown"' <<<"$resolution_json")"
-  prompt+=$'\n\n## Repository routing\n\nTarget repository: '
-  prompt+="$repository"
-  prompt+=$'\nResolution method: '
-  prompt+="$resolution_method"
-  matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
-  if [ -n "$matched_alias" ]; then
-    prompt+=$'\nMatched project alias: '
-    prompt+="$matched_alias"
-  fi
-  project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
-  if [ -n "$project_skill_context" ]; then
-    prompt+=$'\n\n## Relevant project skills (included below)\n\n'
-    prompt+="$project_skill_context"
+  prompt="$(todo_task_prompt "$task_json" "$source_id" "$execution_kind")"
+  action="IMPLEMENT"
+  if [ "$execution_kind" = "answer" ]; then
+    action="ANSWER"
+  else
+    resolution_method="$(jq -r '.method // "unknown"' <<<"$resolution_json")"
+    prompt+=$'\n\n## Repository routing\n\nTarget repository: '
+    prompt+="$repository"
+    prompt+=$'\nResolution method: '
+    prompt+="$resolution_method"
+    matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
+    if [ -n "$matched_alias" ]; then
+      prompt+=$'\nMatched project alias: '
+      prompt+="$matched_alias"
+    fi
+    project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
+    if [ -n "$project_skill_context" ]; then
+      prompt+=$'\n\n## Relevant project skills (included below)\n\n'
+      prompt+="$project_skill_context"
+    fi
   fi
   ids="$(todo_task_ids_json "$task_json")"
   created="$(jq -r '.addedTime // ""' <<<"$task_json")"
@@ -528,9 +573,11 @@ todo_task_to_source_json() {
     --arg title "$title" \
     --arg body "$body" \
     --arg prompt "$prompt" \
+    --arg action "$action" \
     --arg created "$created" \
     --arg updated "$updated" \
     --arg repository "$repository" \
+    --arg executionKind "$execution_kind" \
     --argjson resolution "$resolution_json" \
     --argjson taskId "$task_id" \
     --argjson stepIds "$ids" \
@@ -541,18 +588,16 @@ todo_task_to_source_json() {
       title:$title,
       body:$body,
       prompt:$prompt,
-      action:"IMPLEMENT",
+      action:$action,
       createdAt:$created,
       updatedAt:$updated,
       state:"OPEN",
-      metadata:{
+      metadata:({
         issueNumber:0,
         todoTaskId:$taskId,
-        stepIds:$stepIds,
-        repository:$repository,
-        repositoryResolution:$resolution
-      },
-      execution:{kind:"repository"}
+        stepIds:$stepIds
+      } + (if $repository != "" then {repository:$repository,repositoryResolution:$resolution} else {repositoryResolution:$resolution} end)),
+      execution:{kind:$executionKind}
     }'
 }
 todo_task_is_active() {
@@ -709,7 +754,7 @@ todo_task_publish_update() {
   task_id="$(todo_task_id_from_source_id "$source_id")"
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
-  case "$status" in needs_input|failed) ;; *) echo "Unsupported Todo update status: $status" >&2; return 2 ;; esac
+  case "$status" in needs_input|failed|answered) ;; *) echo "Unsupported Todo update status: $status" >&2; return 2 ;; esac
 
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
   root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1
@@ -744,14 +789,16 @@ todo_task_publish_update() {
     result_id="$(jq -r '.id // empty' <<<"$result_json")"
     result_description="$(jq -r '.description // empty' <<<"$result_json")"
     [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
-    [ "$(jq -r '.isToDo // true' <<<"$result_json")" = "true" ] || {
+    if [ "$status" != "answered" ] && [ "$(jq -r '.isToDo // true' <<<"$result_json")" != "true" ]; then
       echo "Generated Todo status subtask is no longer open" >&2
       return 1
-    }
+    fi
   else
     local heading
     if [ "$status" = "needs_input" ]; then
       heading="Wymagane informacje do kontynuacji"
+    elif [ "$status" = "answered" ]; then
+      heading="Odpowiedź"
     else
       heading="Wykonanie zadania nie powiodło się"
     fi
@@ -783,7 +830,9 @@ todo_task_publish_update() {
   result_description="$(jq -r '.description // empty' <<<"$result_json")"
   [[ "$result_id" =~ ^[1-9][0-9]*$ ]] || return 1
   [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
-  [ "$(jq -r '.isToDo // true' <<<"$result_json")" = "true" ] || return 1
+  if [ "$status" != "answered" ] && [ "$(jq -r '.isToDo // true' <<<"$result_json")" != "true" ]; then
+    return 1
+  fi
   actual_version="$(todo_task_fingerprint "$root_json")" || return 1
   [ "$actual_version" = "$expected_version" ] || {
     echo "Todo status update changed the original source identity" >&2

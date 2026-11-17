@@ -91,20 +91,28 @@ Task sources
 
 A pull request is never a root task source. A GitHub Issue or Jira task may have one or more PRs attached as implementation context. This distinction is persisted as `taskSourceType` + `taskSourceId` on queued tasks.
 
-Todo sources have two execution variants. Repository-backed tasks use an
-explicit, allowlisted GitHub URL or an unambiguous alias from the optional
-project catalog and follow the normal checkout/branch/PR path. Todo work always
-requires one allowlisted repository and uses a normal leased repository
-workspace. There is no Todo report-only mode, scratch execution, or fallback
-when routing fails. If no unique target can be resolved, the adapter creates
+Todo sources have two explicit execution variants. A clear informational
+question with no repository target is queued as `execution.kind=answer` and
+`action=ANSWER`. It uses the validated, disposable
+`MANUL_WORKSPACE/operator-query/oq-*` workspace and the existing tool-free
+operator-query runtime; no repository checkout, shell, filesystem, browser,
+GitHub or MCP tools are available. Manul injects the current Europe/Warsaw
+date/time, persists the non-empty answer as a verified Todo child, and marks
+the whole tree done only after that read-back succeeds.
+
+Implementation and repository-investigation tasks use
+`execution.kind=repository` and a normal leased repository workspace. They
+require one allowlisted GitHub URL or unambiguous alias from the optional
+project catalog and follow the normal checkout/branch/PR path. There is no Todo
+`report_only` mode. If no unique target can be resolved, the adapter creates
 and verifies an OPEN Todo child task explaining what it checked and asking for
 the exact repository or a correction to the conflicting reference. During
 execution, missing required input is captured in an OPEN child task, and
 terminal failures are published as OPEN children with their stage and
 redacted reason. Generated feedback children carry digest-bound markers; only
 an unchanged verified marker is excluded from the source fingerprint so edits
-by the user produce a new source version. The Todo root is marked done last,
-only after normal repository delivery has been verified.
+by the user produce a new source version. A repository-backed root is marked
+done only after normal repository delivery has been verified.
 
 The shared Todo MCP transport and local endpoint resolver are owned by
 globalskills/aicode and passed to Manul through exported environment paths.

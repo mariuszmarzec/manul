@@ -66,6 +66,9 @@ task_source_todo_local_poll() {
     resolution_rc=$?
     if [ "$resolution_rc" -eq 0 ]; then
       resolution="$resolution_output"
+    elif [ "$resolution_rc" -eq 3 ] && todo_task_is_answer_request "$task_json"; then
+      resolution='{"executionKind":"answer","method":"question_without_repository"}'
+      echo "task-source: todo_local_mcp Todo task $task_id routed to a direct answer; no repository is required" >&2
     else
       task_fingerprint="$(todo_task_fingerprint "$task_json")" || continue
       source_id="${task_id}@${task_fingerprint}"
