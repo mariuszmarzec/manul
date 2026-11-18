@@ -95,6 +95,9 @@ DAEMON_OWNER_LOCK_FILE="$MANUL_LOCKS_DIR/daemon-owner.flock"
 # OS-level lock for the singleton task dispatcher. Unlike the legacy .daemon-lock
 # directory, flock is automatically released when the owning worker process dies.
 TASK_LOCK_FILE="$MANUL_LOCKS_DIR/task-dispatch.flock"
+# Track ownership in this worker shell so later cleanup paths can safely call
+# release_task_lock() again after the dispatcher critical section has ended.
+TASK_DISPATCH_LOCK_HELD=false
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="$MANUL_DB"
 
@@ -299,8 +302,8 @@ repo_cache_remote_branch() {
 }
 
 # Ensure target repository exists in Manul workspace. The shared repo cache is
-# protected for the whole task: the lock is acquired before any fetch/reset
-# and is released by the task finalization/error paths.
+# protected while it is fetched/reset and copied into the task-owned workspace.
+# The per-repository lock is released as soon as those shared-cache operations end.
 ensure_repo() {
   local repo="$1"
   local repo_slug
@@ -708,7 +711,9 @@ complete_task_with_verification() {
   return 0
 }
 
-# Acquire singleton lock BEFORE claiming a task to prevent concurrent daemon races.
+# Acquire the short-lived dispatcher lock before selecting/claiming a task and
+# preparing its isolated workspace. dispatch_once() releases it before policy
+# checks and agent execution so configured workers can execute concurrently.
 #
 # The task dispatcher used to coordinate ownership through $MANUL_DIR/.daemon-lock
 # plus daemon.pid. That protocol is unsafe after a restart: the old directory can
@@ -738,15 +743,23 @@ acquire_task_lock() {
     if [ "$attempts" -ge "$max_attempts" ]; then
       log "WARN: could not acquire task lock after ${max_wait}s"
       exec 210>&-
+      TASK_DISPATCH_LOCK_HELD=false
       return 1
     fi
   done
+  TASK_DISPATCH_LOCK_HELD=true
   return 0
 }
 
 release_task_lock() {
+  # dispatch_once() now releases this lock before SDD/runtime execution. Many
+  # later error/finalization paths still call this cleanup helper; make those
+  # calls harmless so they cannot unlock a descriptor that has since been
+  # reused for an unrelated file in this worker process.
+  [ "${TASK_DISPATCH_LOCK_HELD:-false}" = "true" ] || return 0
   flock -u 210 2>/dev/null || true
   exec 210>&- 2>/dev/null || true
+  TASK_DISPATCH_LOCK_HELD=false
   # Remove the legacy directory if a previous Manul revision left it behind.
   # It is no longer authoritative for task-lock ownership.
   rmdir "$MANUL_DIR/.daemon-lock" 2>/dev/null || true
@@ -4078,8 +4091,9 @@ dispatch_once() {
   log "dispatch: SQLite has eligible queued task(s); attempting dispatch"
   lc_log "QUEUE_WAKEUP" "eligible=$eligible_queued"
 
-  # Serialize shared workspace reconciliation with task claiming. With a
-  # short consumer interval, several workers can see the same queued row at once.
+  # Serialize workspace-pool reconciliation, task claiming and shared-cache
+  # preparation. The lock is released once the task owns an isolated workspace;
+  # it must never remain held while SDD/runtime checks or the agent are running.
   if ! acquire_task_lock; then
     log "dispatch: could not acquire lock, skipping"
     lc_log "LOCK_FAIL" "could_not_acquire"
@@ -5118,6 +5132,16 @@ PROMPT_APPEND
 
     fi
 
+    # Every execution kind now owns a dedicated task workspace (repository
+    # checkout, answer scratch space, or legacy report scratch space). Shared
+    # workspace reconciliation and shared repository-cache preparation are done:
+    # the repo lock was released after its cache was copied into this workspace.
+    # Release the global dispatcher lock before SDD/MCP preflight or agent work.
+    # This is the critical boundary that allows another consumer to claim and
+    # prepare a different task while this worker runs its isolated executor.
+    log "dispatch: releasing dispatcher lock after workspace preparation for task $COMMENT_ID"
+    release_task_lock
+    lc_log "DISPATCH_LOCK_RELEASED" "task=$COMMENT_ID phase=workspace_prepared"
 
     # Apply repository-level SDD policy before any model/runtime invocation.
     # Missing config keeps the ordinary workflow; only explicit "sdd bootstrap"
@@ -5362,9 +5386,9 @@ SDD_CHECKPOINT_PROTOCOL
 
      # Run the controller in a dedicated process group. The task-local PID file
      # lets watchdog/recovery terminate a hung executor without killing the worker.
-     # FD 210 owns task-dispatch.flock in this worker. Do not let the isolated
-     # executor or any descendants inherit it: their lifetime may outlive the
-     # worker and would keep the dispatcher lock held across a restart.
+     # The dispatcher lock was released after workspace preparation. Keep FD 210
+     # explicitly closed in the isolated runner as defense in depth, including
+     # compatibility paths that may invoke it while still holding the lock.
      setsid --wait "$DAEMON_SCRIPT_DIR/agent-task-runner.sh" "$EXEC_CTX_FILE" "$executor_pid_file" 210>&- >"$executor_result_file" 2>>"$STDERR_FILE" &
      local executor_launcher_pid=$!
      local rc=0
