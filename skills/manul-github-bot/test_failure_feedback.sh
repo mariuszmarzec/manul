@@ -163,8 +163,8 @@ count_task_started() {
 # Exercise the production pre-agent recovery function with only its
 # external side effects stubbed. The SQLite claim/attempt transition itself
 # remains the production implementation under test.
-CONFIG="$MANUL_DIR/config.json"
-RETRY_DELAY_SECONDS=1
+export CONFIG="$MANUL_DIR/config.json"
+export RETRY_DELAY_SECONDS=1
 sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 manul_redact_failure_details() { printf '%s' "$1"; }
 ensure_recovery_tracking_columns() { return 0; }
