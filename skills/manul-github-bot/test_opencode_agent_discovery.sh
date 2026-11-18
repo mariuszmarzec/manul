@@ -57,10 +57,14 @@ MOCK
     cat >"$case_dir/bin/sleep" <<'MOCK_SLEEP'
 #!/usr/bin/env bash
 set -euo pipefail
-if [ -n "${MOCK_SLEEP_CALLS:-}" ]; then
-    printf '%s\n' "$1" >>"$MOCK_SLEEP_CALLS"
-    exit 0
-fi
+case "${1:-}" in
+    0.010|0.020|0.040)
+        if [ -n "${MOCK_SLEEP_CALLS:-}" ]; then
+            printf '%s\\n' "$1" >>"$MOCK_SLEEP_CALLS"
+            exit 0
+        fi
+        ;;
+esac
 exec /bin/sleep "$@"
 MOCK_SLEEP
     chmod +x "$case_dir/bin/sleep"
