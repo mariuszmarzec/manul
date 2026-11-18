@@ -310,6 +310,7 @@ mkdir -p "$START_RUNTIME" "$CANONICAL_RUNTIME" "$FAKE_BIN"
 # test exercises startup/symlink behavior rather than a deliberately incomplete
 # fixture.
 cp "$SCRIPT_DIR"/*.sh "$CANONICAL_RUNTIME/"
+cp "$SCRIPT_DIR"/*.py "$CANONICAL_RUNTIME/"
 cp "$SCRIPT_DIR/orchestrator.prompt.md" "$CANONICAL_RUNTIME/orchestrator.prompt.md"
 chmod +x "$CANONICAL_RUNTIME"/*.sh
 
