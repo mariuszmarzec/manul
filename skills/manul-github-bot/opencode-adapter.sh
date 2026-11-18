@@ -1570,6 +1570,18 @@ else
         _status="NEEDS_CONTINUATION"
         _exit_code=1
         _summary="OpenCode reached its step limit without a completion marker; existing session can continue"
+    elif [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] &&
+         [ "$pr_rc" -eq 0 ] &&
+         [ -n "$(tr -d '[:space:]' < "$OPT_STDOUT_FILE" 2>/dev/null)" ]; then
+        # Operator queries are read-only, tool-free one-shot answers. Some
+        # OpenCode versions return a complete text response and a session ID
+        # but omit the explicit TASK_DONE line despite a clean process exit.
+        # In this restricted mode only, non-empty normalized text plus rc=0 is
+        # sufficient completion evidence; implementation tasks remain fail-closed.
+        _status="COMPLETED"
+        _exit_code=0
+        _summary="OpenCode returned a non-empty read-only operator-query answer without TASK_DONE; accepting the clean response"
+        log "operator query completed with non-empty text and clean exit but no TASK_DONE marker; accepting tool-free response"
     elif [ "$pr_rc" -eq 0 ] && [ -n "$session_id" ]; then
         _status="FAILED"
         _exit_code=1
