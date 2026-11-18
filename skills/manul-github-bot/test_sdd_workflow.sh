@@ -25,7 +25,7 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
     v2-malformed) printf '%s\n' 'not-json'; exit 0 ;;
     v2-error) printf '%s\n' 'OpenCode server unavailable' >&2; exit 7 ;;
     v2-flaky) if [ -f "$MOCK_CALL_FILE" ] && [ "$(cat "$MOCK_CALL_FILE" 2>/dev/null || echo 0)" = "1" ]; then printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0; fi; printf '1' > "$MOCK_CALL_FILE"; printf '%s\n' 'not-json'; exit 0 ;;
-    v2-timeout) exec python3 -c 'import time; time.sleep(5)' ;;
+    v2-timeout) count="$(cat "$MOCK_CALL_FILE" 2>/dev/null || echo 0)"; count="$((count + 1))"; printf '%s' "$count" > "$MOCK_CALL_FILE"; exec python3 -c 'import time; time.sleep(5)' ;;
     v1-found|v1-missing-sdd) printf '%s\n' 'ERROR: Unknown subcommand "agents" for "opencode debug"' >&2; exit 1 ;;
     *) exit 64 ;;
   esac
@@ -166,6 +166,7 @@ expect_retry_exhausted_fails_closed() {
   local out
   out="$(check_json 2>/dev/null || true)"
   jq -e '.ok == false and (.error | contains("could not verify") and contains("timed out") and contains("category: timeout"))' <<<"$out" >/dev/null
+  [ "$(cat "$MOCK_CALL_FILE")" = "3" ]
 }
 run_case "real subprocess timeouts retry and fail closed after exhaustion" expect_retry_exhausted_fails_closed
 
