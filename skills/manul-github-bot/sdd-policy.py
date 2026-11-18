@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Fail-closed repository policy inspection for Manul SDD routing."""
 from __future__ import annotations
-import argparse, json, os, re, shutil, subprocess, sys, time
+import argparse, json, math, os, re, shutil, subprocess, sys, time
 from pathlib import Path
+from typing import Callable, TypeVar
+
+T = TypeVar("T", int, float)
+DISCOVERY_TIMEOUT_EXIT_CODE = -1000
 
 def emit(ok: bool, **values: object) -> int:
     print(json.dumps({"ok": ok, **values}, ensure_ascii=False, sort_keys=True))
@@ -73,7 +77,12 @@ def _run_debug_agents(binary, root, timeout: int) -> tuple[int, str, str, float]
         duration = time.monotonic() - start
         stdout = exc.stdout or ""
         stderr = exc.stderr or ""
-        return 124, stdout, stderr, duration
+        # TimeoutExpired may expose captured output as bytes even with text=True.
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        return DISCOVERY_TIMEOUT_EXIT_CODE, stdout, stderr, duration
     except OSError as exc:
         duration = time.monotonic() - start
         return 1, "", str(exc), duration
@@ -81,7 +90,7 @@ def _run_debug_agents(binary, root, timeout: int) -> tuple[int, str, str, float]
     return result.returncode, result.stdout, result.stderr, duration
 
 
-def _parse_agent_list(stdout: str) -> tuple[str, str]:
+def _parse_agent_list(stdout: str) -> tuple[str, list[dict[str, object]] | str]:
     """Parse JSON agent list. Returns (status, detail)."""
     try:
         agents = json.loads(stdout)
@@ -137,17 +146,16 @@ def _retry_params() -> tuple[int, int, int, float]:
 
     Invalid, non-numeric, or non-positive values fall back to defaults.
     """
-    def _env(name: str, cast, default):
+    def _env(name: str, cast: Callable[[str], T], default: T) -> T:
         raw = os.environ.get(name, "").strip()
         if not raw:
             return default
         try:
             value = cast(raw)
-        except ValueError:
+        except (ValueError, OverflowError):
             return default
-        # Reject non-positive numeric values: zero/negative attempts or
-        # timeouts would produce nonsensical retry loops or immediate kills.
-        if isinstance(value, (int, float)) and value <= 0:
+        # Reject zero/negative values and non-finite floats (nan/inf).
+        if value <= 0 or (isinstance(value, float) and not math.isfinite(value)):
             return default
         return value
     return (
@@ -165,10 +173,14 @@ def _timeout_for_attempt(attempt: int, base_timeout: int, max_timeout: int) -> i
     must reach the full budget, not 45s. ``attempt`` is 1-based; values
     outside the schedule clamp to the nearest bound.
     """
-    if attempt < 1:
-        return base_timeout
-    schedule = (base_timeout, base_timeout * 2, max_timeout)
-    return schedule[min(attempt - 1, len(schedule) - 1)]
+    # Treat inputs defensively even though _retry_params() already validates
+    # environment values. The configured maximum is a hard upper bound for
+    # every attempt, including the first one when base_timeout > max_timeout.
+    base = max(1, base_timeout)
+    maximum = max(1, max_timeout)
+    schedule = (min(base, maximum), min(base * 2, maximum), maximum)
+    index = max(0, min(attempt - 1, len(schedule) - 1))
+    return schedule[index]
 
 
 def probe_opencode_agent(binary, role, root):
@@ -219,10 +231,15 @@ def probe_opencode_agent(binary, role, root):
                     f"[SDD-POLICY] V1 fallback role={role} status={v1_status} duration={v1_duration:.3f}s\n"
                 )
                 return v1_status, v1_detail
-            # Other V2 runtime error
-            last_error_detail = f"OpenCode debug agents failed with exit code {exit_code}"
-            last_error_category = "runtime_error"
-            sys.stderr.write(f"[SDD-POLICY] discovery role={role} attempt={attempt} runtime_error exit_code={exit_code}\n")
+            if exit_code == DISCOVERY_TIMEOUT_EXIT_CODE:
+                last_error_detail = f"OpenCode debug agents timed out after {timeout}s"
+                last_error_category = "timeout"
+                sys.stderr.write(f"[SDD-POLICY] discovery role={role} attempt={attempt} timeout after {timeout}s\n")
+            else:
+                # Other V2 runtime errors are retried but never treated as V1 support.
+                last_error_detail = f"OpenCode debug agents failed with exit code {exit_code}"
+                last_error_category = "runtime_error"
+                sys.stderr.write(f"[SDD-POLICY] discovery role={role} attempt={attempt} runtime_error exit_code={exit_code}\n")
 
         # Backoff before retry (except on last attempt)
         if attempt < max_attempts:
@@ -262,9 +279,14 @@ def discover_all_agents(binary, root):
             if _classify_v2_error(stdout, stderr):
                 # V2 unsupported — signal to caller that V1 fallback is needed per-role
                 return "v1_fallback", None
-            last_error_detail = f"OpenCode debug agents failed with exit code {exit_code}"
-            last_error_category = "runtime_error"
-            sys.stderr.write(f"[SDD-POLICY] discovery_all attempt={attempt} runtime_error exit_code={exit_code}\n")
+            if exit_code == DISCOVERY_TIMEOUT_EXIT_CODE:
+                last_error_detail = f"OpenCode debug agents timed out after {timeout}s"
+                last_error_category = "timeout"
+                sys.stderr.write(f"[SDD-POLICY] discovery_all attempt={attempt} timeout after {timeout}s\n")
+            else:
+                last_error_detail = f"OpenCode debug agents failed with exit code {exit_code}"
+                last_error_category = "runtime_error"
+                sys.stderr.write(f"[SDD-POLICY] discovery_all attempt={attempt} runtime_error exit_code={exit_code}\n")
 
         if attempt < max_attempts:
             sleep_time = backoff_base * (2 ** (attempt - 1))
