@@ -1019,6 +1019,11 @@ opencode_agent_discovery() {
         esac
         [ "$timeout" -le "$max_timeout" ] || timeout="$max_timeout"
 
+        # ProcessRunner appends to caller-supplied capture files. Each retry
+        # must parse only that attempt's response, not concatenate earlier
+        # malformed JSON or transient stderr from previous attempts.
+        : >"$stdout_file"
+        : >"$stderr_file"
         ProcessRunner_TmpStdout="$stdout_file"
         ProcessRunner_TmpStderr="$stderr_file"
         result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents)"
