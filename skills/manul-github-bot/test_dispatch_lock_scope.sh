@@ -62,7 +62,10 @@ wait_for_file() {
 positions="$(
   awk '
     /^dispatch_once\(\)/ { in_dispatch=1 }
-    in_dispatch && index($0, "release_task_repo_lock \"$REPO\"") > 0 { repo_release=NR }
+    in_dispatch && index($0, "release_task_repo_lock \"$REPO\"") > 0 {
+      repo_release=NR
+      dispatcher_release=0
+    }
     in_dispatch && repo_release > 0 && dispatcher_release == 0 &&
       index($0, "release_task_lock") > 0 { dispatcher_release=NR }
     in_dispatch && index($0, "# Apply repository-level SDD policy") > 0 { sdd=NR; exit }
