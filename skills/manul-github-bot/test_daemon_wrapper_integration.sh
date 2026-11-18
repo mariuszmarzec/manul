@@ -1030,7 +1030,7 @@ sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,c
 STDOUT_FILE="$TEST_TMPDIR/stdoutS.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="IMPLEMENT"
 evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_S" "" "$INITIAL_HEAD_S" "master" "master" "" "" "" "" ""
-if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "VERIFICATION_FAILED" ]; then echo "FAIL: implementation without PR must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_MISSING" ]; then echo "FAIL: implementation without a PR and without a valid result receipt must fail with DELIVERY_COMMENT_MISSING ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
 echo "[OK] Test S: PASSED"
 
 # ─── Test U: failed agent attempts must transition running -> queued ──────────
