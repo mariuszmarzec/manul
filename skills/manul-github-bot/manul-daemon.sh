@@ -95,6 +95,9 @@ DAEMON_OWNER_LOCK_FILE="$MANUL_LOCKS_DIR/daemon-owner.flock"
 # OS-level lock for the singleton task dispatcher. Unlike the legacy .daemon-lock
 # directory, flock is automatically released when the owning worker process dies.
 TASK_LOCK_FILE="$MANUL_LOCKS_DIR/task-dispatch.flock"
+# Track ownership in this worker shell so later cleanup paths can safely call
+# release_task_lock() again after the dispatcher critical section has ended.
+TASK_DISPATCH_LOCK_HELD=false
 # DB on native ext4 (NOT on 9p /mnt/f)
 DB="$MANUL_DB"
 
@@ -740,15 +743,23 @@ acquire_task_lock() {
     if [ "$attempts" -ge "$max_attempts" ]; then
       log "WARN: could not acquire task lock after ${max_wait}s"
       exec 210>&-
+      TASK_DISPATCH_LOCK_HELD=false
       return 1
     fi
   done
+  TASK_DISPATCH_LOCK_HELD=true
   return 0
 }
 
 release_task_lock() {
+  # dispatch_once() now releases this lock before SDD/runtime execution. Many
+  # later error/finalization paths still call this cleanup helper; make those
+  # calls harmless so they cannot unlock a descriptor that has since been
+  # reused for an unrelated file in this worker process.
+  [ "${TASK_DISPATCH_LOCK_HELD:-false}" = "true" ] || return 0
   flock -u 210 2>/dev/null || true
   exec 210>&- 2>/dev/null || true
+  TASK_DISPATCH_LOCK_HELD=false
   # Remove the legacy directory if a previous Manul revision left it behind.
   # It is no longer authoritative for task-lock ownership.
   rmdir "$MANUL_DIR/.daemon-lock" 2>/dev/null || true
