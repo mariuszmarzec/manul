@@ -30,6 +30,11 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
         v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
         v2-missing) printf '%s\n' '[{"id":"orchestrator"}]'; exit 0 ;;
         v2-error) printf '%s\n' 'OpenCode server unavailable' >&2; exit 7 ;;
+        v2-flaky)
+            calls="$(wc -l <"$MOCK_DISCOVERY_CALLS")"
+            if [ "$calls" -eq 1 ]; then printf '%s\n' 'not-json'; exit 0; fi
+            printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
+        v2-timeout) exec python3 -c 'import time; time.sleep(5)' ;;
         v1-found|v1-missing) printf '%s\n' 'ERROR: Unknown subcommand "agents" for "opencode debug"' >&2; exit 1 ;;
         *) exit 64 ;;
     esac
@@ -48,7 +53,8 @@ MOCK
     set +e
     output="$(HOME="$case_dir/home" PATH="$case_dir/bin:$PATH" OPENCODE_BIN="$case_dir/bin/opencode" \
         MOCK_AGENT_MODE="$mode" MOCK_DISCOVERY_CALLS="$case_dir/discovery.calls" \
-        MOCK_RUN_ARGS="$case_dir/run.args" AGENT_RUNTIME=opencode MANUL_DIR="$case_dir/runtime" \
+        MOCK_RUN_ARGS="$case_dir/run.args" SDD_DISCOVERY_ATTEMPTS=3 SDD_DISCOVERY_BASE_TIMEOUT=1 \
+        SDD_DISCOVERY_MAX_TIMEOUT=2 SDD_DISCOVERY_BACKOFF=0.01 AGENT_RUNTIME=opencode MANUL_DIR="$case_dir/runtime" \
         MANUL_WORKSPACE="$case_dir/runtime/workspace" MANUL_TASK_WORKSPACE_ROOT="$case_dir/runtime/workspace/ws-$mode" \
         bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id "sdd-discovery-$mode" \
         --prompt "$case_dir/prompt" --workspace "$case_dir/runtime/workspace/ws-$mode" --agent sdd \
@@ -75,11 +81,24 @@ assert_json_status "$(cat "$result")" "FAILED" "Missing SDD agent fails closed"
 jq -e '.failure_code == "SDD_PREREQUISITE_MISSING" and (.summary | contains("was not listed"))' "$result" >/dev/null 2>&1 && ok "Missing SDD agent has an accurate prerequisite diagnostic" || fail "Missing SDD diagnostic was inaccurate"
 [ ! -s "$TMP_ROOT/v2-missing/run.args" ] && ok "Missing SDD agent is rejected before model execution" || fail "Model execution started despite missing SDD agent"
 
+run_case v2-flaky
+result="$TMP_ROOT/v2-flaky/result.json"
+assert_json_status "$(cat "$result")" "COMPLETED" "Transient malformed OpenCode listing recovers on retry"
+[ "$(wc -l <"$TMP_ROOT/v2-flaky/discovery.calls")" -eq 2 ] && ok "Flaky OpenCode listing is retried exactly once" || fail "Flaky listing call count was $(wc -l <"$TMP_ROOT/v2-flaky/discovery.calls")"
+
+run_case v2-timeout
+result="$TMP_ROOT/v2-timeout/result.json"
+assert_json_status "$(cat "$result")" "FAILED" "Repeated OpenCode discovery timeouts fail closed"
+[ "$(cat "$TMP_ROOT/v2-timeout/exit-code")" = "66" ] && ok "Discovery timeouts return fail-closed exit code 66" || fail "Timeout exit code was $(cat "$TMP_ROOT/v2-timeout/exit-code")"
+[ "$(wc -l <"$TMP_ROOT/v2-timeout/discovery.calls")" -eq 3 ] && ok "Actual ProcessRunner timeouts exhaust all three attempts" || fail "Timeout call count was $(wc -l <"$TMP_ROOT/v2-timeout/discovery.calls")"
+[ ! -s "$TMP_ROOT/v2-timeout/run.args" ] && ok "Timed-out discovery blocks model execution" || fail "Model execution started after discovery timeout"
+
 run_case v2-error
 result="$TMP_ROOT/v2-error/result.json"
 assert_json_status "$(cat "$result")" "FAILED" "OpenCode V2 discovery errors fail closed"
 [ "$(cat "$TMP_ROOT/v2-error/exit-code")" = "66" ] && ok "Discovery error returns exit code 66" || fail "Discovery error exit code was $(cat "$TMP_ROOT/v2-error/exit-code")"
 jq -e '.failure_code == "SDD_AGENT_DISCOVERY_FAILED" and (.summary | contains("Could not verify"))' "$result" >/dev/null 2>&1 && ok "Discovery error is not mislabeled as a missing agent" || fail "Discovery error was mislabeled"
+[ "$(wc -l <"$TMP_ROOT/v2-error/discovery.calls")" -eq 3 ] && ok "OpenCode runtime errors are retried three times" || fail "Runtime error call count was $(wc -l <"$TMP_ROOT/v2-error/discovery.calls")"
 [ ! -s "$TMP_ROOT/v2-error/run.args" ] && ok "Discovery error blocks model execution" || fail "Model execution started after discovery error"
 
 run_case v1-found
