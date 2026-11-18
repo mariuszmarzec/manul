@@ -220,11 +220,6 @@ OPENCODE_PROOF_FILE="$TEST_ROOT/opencode-proof"
 cat >"$FAKE_BIN/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-# Match the V2 discovery API used by the production adapter before the task run.
-if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
-  printf '%s\n' '[{"id":"coder-cheap"}]'
-  exit 0
-fi
 printf 'called\n' >>"$OPENCODE_PROOF_FILE"
 printf 'args=%s\n' "$*" >>"$OPENCODE_PROOF_FILE"
 printf '%s\n' '{"type":"text","part":{"text":"TASK_DONE opencode-role-routing"}}'
