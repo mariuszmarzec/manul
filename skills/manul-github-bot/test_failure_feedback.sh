@@ -111,7 +111,10 @@ gh() {
 export -f gh
 
 DAEMON="$SCRIPT_DIR/manul-daemon.sh"
-eval "$(sed -n '/^log() {/,/^}/p' "$DAEMON")"
+# The production log() helper is a one-line function followed by daemon
+# initialization; a sed range ending at a standalone brace would also eval
+# that initialization. Keep this test logger local and side-effect-free.
+log() { echo "[$(date -Is)] $*" >>"$LOG"; }
 eval "$(sed -n '/^lc_log() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^post_github_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^post_lifecycle_comment() {/,/^}/p' "$DAEMON" | sed 's/^post_lifecycle_comment()/post_lifecycle_comment_original()/')"
@@ -163,8 +166,8 @@ count_task_started() {
 # Exercise the production pre-agent recovery function with only its
 # external side effects stubbed. The SQLite claim/attempt transition itself
 # remains the production implementation under test.
-export CONFIG="$MANUL_DIR/config.json"
-export RETRY_DELAY_SECONDS=1
+CONFIG="$MANUL_DIR/config.json"
+RETRY_DELAY_SECONDS=1
 sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 manul_redact_failure_details() { printf '%s' "$1"; }
 ensure_recovery_tracking_columns() { return 0; }
