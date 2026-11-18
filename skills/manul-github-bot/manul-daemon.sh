@@ -31,7 +31,13 @@ trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]
 # `command -v opencode` returned nothing and every opencode agent died with
 # exit 127 before logging a single line. Add the OpenCode bin dir here so the
 # OpenCode adapter (and any other tool installed there) is reachable.
-_NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -n1)"
+_NVM_NODE_BIN=""
+for _NVM_NODE_CANDIDATE in "$HOME"/.nvm/versions/node/*/bin; do
+  if [ -d "$_NVM_NODE_CANDIDATE" ]; then
+    _NVM_NODE_BIN="$_NVM_NODE_CANDIDATE"
+    break
+  fi
+done
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
