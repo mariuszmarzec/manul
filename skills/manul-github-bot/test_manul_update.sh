@@ -174,7 +174,6 @@ assert_contains "non-default branch failure explains the required branch" "$bran
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
-\\r
 CLI_CANONICAL="$TEST_DIR/cli-canonical"
 mkdir -p "$CLI_CANONICAL"
 cp "$SCRIPT_DIR/manul-shell.zsh" "$CLI_CANONICAL/manul-shell.zsh"
