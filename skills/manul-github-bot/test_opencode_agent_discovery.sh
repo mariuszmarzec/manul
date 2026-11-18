@@ -60,7 +60,7 @@ set -euo pipefail
 case "${1:-}" in
     0.010|0.020|0.040)
         if [ -n "${MOCK_SLEEP_CALLS:-}" ]; then
-            printf '%s\\n' "$1" >>"$MOCK_SLEEP_CALLS"
+            printf '%s\n' "$1" >>"$MOCK_SLEEP_CALLS"
             exit 0
         fi
         ;;
