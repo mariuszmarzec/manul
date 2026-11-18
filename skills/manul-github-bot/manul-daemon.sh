@@ -3563,6 +3563,8 @@ evaluate_task_completion() {
     FAIL_REASON="${FAILURE_CODE}: ${FAIL_REASON}"
   fi
   
+  local current_branch=""
+  local repo_changed="false"
   local SUCCESS="false"
   local COMMENT_ONLY_DELIVERY="false"
   local IMPLEMENT_COMMENT_ONLY_FAILURE_CODE=""
@@ -3672,10 +3674,9 @@ evaluate_task_completion() {
   # including issue-body tasks (issuebody:*). The task identifier format must
   # never weaken the implementation PR requirement.
   if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
-    local repo_changed="false"
+    repo_changed="false"
     if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
     if [ "$repo_changed" = "true" ]; then
-      local current_branch
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ]; then
         SUCCESS="false"
@@ -3737,7 +3738,7 @@ else
        # missing instead of collapsing everything to a generic verification failure.
        # Only runs when the repository actually changed; informational tasks with no
        # diff have nothing to deliver and must not be rejected here.
-       if [ "$SUCCESS" = "true" ]; then
+       if [ "$SUCCESS" = "true" ] && [ "$repo_changed" = "true" ]; then
          local has_origin_remote="false"
          local remote_branch_sha=""
          if git -C "$WORKDIR" remote get-url origin >/dev/null 2>&1; then
