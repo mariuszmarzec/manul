@@ -39,14 +39,8 @@ chmod +x "$FAKE_BIN/openclaw"
 export PATH="$FAKE_BIN:$PATH"
 
 # Load the production lock helpers with an isolated temporary runtime.
-echo "DEBUG: before sourcing daemon test helpers" >&2
-PS4="+ ${BASH_SOURCE[0]}:${LINENO}: "
-set -x
 source "$SCRIPT_DIR/manul-daemon.sh"
-source_status=$?
-set +x
-echo "DEBUG: daemon source returned $source_status; MANUL_TESTING=${MANUL_TESTING:-unset}" >&2
-if [ "$source_status" -ne 0 ]; then echo "FAIL: daemon test helper source failed with status $source_status" >&2; exit "$source_status"; fi
+[ "${MANUL_TESTING:-false}" = "true" ] || { echo "FAIL: daemon source did not remain in test mode" >&2; exit 1; }
 TASK_LOCK_FILE="$TEST_DIR/task-dispatch.flock"
 MANUL_TASK_LOCK_TIMEOUT_SECONDS=5
 
@@ -80,7 +74,6 @@ positions="$(
   ' "$SCRIPT_DIR/manul-daemon.sh"
 )"
 read -r repo_release dispatcher_release sdd_gate <<<"$positions"
-echo "DEBUG: static lock-order positions: $positions" >&2
 [[ "$repo_release" =~ ^[1-9][0-9]*$ ]] || fail "repo-cache lock release not found in dispatch_once"
 [[ "$dispatcher_release" =~ ^[1-9][0-9]*$ ]] || fail "dispatcher lock release not found after repo-cache release"
 [[ "$sdd_gate" =~ ^[1-9][0-9]*$ ]] || fail "SDD gate not found in dispatch_once"
