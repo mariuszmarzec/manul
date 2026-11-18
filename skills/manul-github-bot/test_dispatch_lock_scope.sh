@@ -40,8 +40,11 @@ export PATH="$FAKE_BIN:$PATH"
 
 # Load the production lock helpers with an isolated temporary runtime.
 echo "DEBUG: before sourcing daemon test helpers" >&2
+PS4="+ ${BASH_SOURCE[0]}:${LINENO}: "
+set -x
 source "$SCRIPT_DIR/manul-daemon.sh"
 source_status=$?
+set +x
 echo "DEBUG: daemon source returned $source_status; MANUL_TESTING=${MANUL_TESTING:-unset}" >&2
 if [ "$source_status" -ne 0 ]; then echo "FAIL: daemon test helper source failed with status $source_status" >&2; exit "$source_status"; fi
 TASK_LOCK_FILE="$TEST_DIR/task-dispatch.flock"
