@@ -1071,10 +1071,7 @@ opencode_agent_discovery() {
 
         # Exponential backoff before the next attempt; no sleep after the last.
         if [ "$attempt" -lt "$max_attempts" ]; then
-            sleep_for="$backoff_base"
-            if [ "$attempt" -eq 2 ]; then
-                sleep_for="$(awk -v value="$backoff_base" 'BEGIN { printf "%.3f", value * 2 }')"
-            fi
+            sleep_for="$(awk -v value="$backoff_base" -v exponent="$((attempt - 1))" 'BEGIN { printf "%.3f", value * (2 ^ exponent) }')"
             sleep "$sleep_for"
         fi
     done
