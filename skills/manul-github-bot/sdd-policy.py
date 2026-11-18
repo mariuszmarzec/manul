@@ -128,27 +128,47 @@ def _run_v1_probe(binary, role, root, timeout: int) -> tuple[str, str, float]:
     return "error", f"OpenCode V1 agent discovery failed with exit code {legacy.returncode}", duration
 
 
-def _retry_params() -> tuple[int,int,int,float]:
+def _retry_params() -> tuple[int, int, int, float]:
     """Retry/timeout schedule. Defaults are production values; environment
     overrides exist only so the test suite can exercise the same logic with
     short budgets. ``SDD_DISCOVERY_ATTEMPTS``, ``SDD_DISCOVERY_BASE_TIMEOUT``,
     ``SDD_DISCOVERY_MAX_TIMEOUT`` (seconds) and ``SDD_DISCOVERY_BACKOFF``
     (seconds) are read at call time.
+
+    Invalid, non-numeric, or non-positive values fall back to defaults.
     """
-    def _env(name, cast, default):
+    def _env(name: str, cast, default):
         raw = os.environ.get(name, "").strip()
         if not raw:
             return default
         try:
-            return cast(raw)
+            value = cast(raw)
         except ValueError:
             return default
+        # Reject non-positive numeric values: zero/negative attempts or
+        # timeouts would produce nonsensical retry loops or immediate kills.
+        if isinstance(value, (int, float)) and value <= 0:
+            return default
+        return value
     return (
         _env("SDD_DISCOVERY_ATTEMPTS", int, 3),
         _env("SDD_DISCOVERY_BASE_TIMEOUT", int, 15),
         _env("SDD_DISCOVERY_MAX_TIMEOUT", int, 60),
         _env("SDD_DISCOVERY_BACKOFF", float, 0.5),
     )
+
+
+def _timeout_for_attempt(attempt: int, base_timeout: int, max_timeout: int) -> int:
+    """Per-attempt timeout: 15s, 30s, 60s (capped at max_timeout).
+
+    Linear growth capped at max_timeout is intentional: the third attempt
+    must reach the full budget, not 45s. ``attempt`` is 1-based; values
+    outside the schedule clamp to the nearest bound.
+    """
+    if attempt < 1:
+        return base_timeout
+    schedule = (base_timeout, base_timeout * 2, max_timeout)
+    return schedule[min(attempt - 1, len(schedule) - 1)]
 
 
 def probe_opencode_agent(binary, role, root):
@@ -165,7 +185,7 @@ def probe_opencode_agent(binary, role, root):
     last_error_category = ""
 
     for attempt in range(1, max_attempts + 1):
-        timeout = min(base_timeout * attempt, max_timeout)
+        timeout = _timeout_for_attempt(attempt, base_timeout, max_timeout)
         exit_code, stdout, stderr, duration = _run_debug_agents(binary, root, timeout)
 
         stdout_len = len(stdout)
@@ -221,7 +241,7 @@ def discover_all_agents(binary, root):
     last_error_category = ""
 
     for attempt in range(1, max_attempts + 1):
-        timeout = min(base_timeout * attempt, max_timeout)
+        timeout = _timeout_for_attempt(attempt, base_timeout, max_timeout)
         exit_code, stdout, stderr, duration = _run_debug_agents(binary, root, timeout)
 
         stdout_len = len(stdout)
