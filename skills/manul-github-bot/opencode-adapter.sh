@@ -974,44 +974,117 @@ fi
 # OpenCode V2 lists native agents as a JSON array via `debug agents`.
 # V1 compatibility falls back to the old singular `debug agent <name>`
 # command only when the plural command itself is unsupported.
+#
+# Discovery resilience: a single transient stall (I/O pressure, truncated
+# stdout, a stalled runtime) must not be mistaken for proof that an agent
+# is missing. Invalid or incomplete JSON, non-zero exits, and timeouts are
+# retried with a short backoff; a valid V2 listing is authoritative, so a
+# missing ID is never retried through the legacy command.
+_sdd_discovery_positive_int() {
+    local value="${1:-}" fallback="$2" limit="$3"
+    if [[ "$value" =~ ^[1-9][0-9]{0,3}$ ]] && [ "$value" -le "$limit" ]; then
+        printf '%s' "$value"
+    else
+        printf '%s' "$fallback"
+    fi
+}
+
+_sdd_discovery_backoff() {
+    local value="${1:-}" fallback=0.5
+    if [[ "$value" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]] \
+        && awk -v value="$value" 'BEGIN { exit !(value > 0 && value <= 10) }'; then
+        printf '%s' "$value"
+    else
+        printf '%s' "$fallback"
+    fi
+}
+
 opencode_agent_discovery() {
     local role="$1" stdout_file="$2" stderr_file="$3"
-    local result header rc
+    local result header rc duration stdout_size stderr_size category sleep_for
+    local attempt timeout timed_out
+    local max_attempts base_timeout max_timeout backoff_base
 
-    ProcessRunner_TmpStdout="$stdout_file"
-    ProcessRunner_TmpStderr="$stderr_file"
-    result="$(ProcessRunner.run --timeout 15 --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents)"
-    header="$(printf '%s\n' "$result" | head -n 1)"
-    rc="${header%%|*}"
+    max_attempts="$(_sdd_discovery_positive_int "${SDD_DISCOVERY_ATTEMPTS:-3}" 3 10)"
+    base_timeout="$(_sdd_discovery_positive_int "${SDD_DISCOVERY_BASE_TIMEOUT:-15}" 15 3600)"
+    max_timeout="$(_sdd_discovery_positive_int "${SDD_DISCOVERY_MAX_TIMEOUT:-60}" 60 3600)"
+    backoff_base="$(_sdd_discovery_backoff "${SDD_DISCOVERY_BACKOFF:-0.5}")"
 
-    if [ "$rc" = "0" ]; then
-        ProcessRunner_TmpStdout=""
-        ProcessRunner_TmpStderr=""
-        if ! jq -e 'type == "array" and all(.[]; type == "object" and (.id | type == "string"))' "$stdout_file" >/dev/null 2>&1; then
-            printf '%s' "error"
-        elif jq -e --arg role "$role" 'any(.[]; .id == $role)' "$stdout_file" >/dev/null 2>&1; then
-            printf '%s' "found"
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        # Same 1-based schedule as sdd-policy.py: base, 2x base, then max.
+        case "$attempt" in
+            1) timeout="$base_timeout" ;;
+            2) timeout=$((base_timeout * 2)) ;;
+            *) timeout="$max_timeout" ;;
+        esac
+        [ "$timeout" -le "$max_timeout" ] || timeout="$max_timeout"
+
+        # ProcessRunner appends to caller-supplied capture files. Each retry
+        # must parse only that attempt's response, not concatenate earlier
+        # malformed JSON or transient stderr from previous attempts.
+        : >"$stdout_file"
+        : >"$stderr_file"
+        ProcessRunner_TmpStdout="$stdout_file"
+        ProcessRunner_TmpStderr="$stderr_file"
+        result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents)"
+        header="$(printf '%s\n' "$result" | head -n 1)"
+        rc="${header%%|*}"
+        duration="$(printf '%s\n' "$result" | head -n 1 | cut -d'|' -f2)"
+        timed_out="$(printf '%s\n' "$result" | head -n 1 | cut -d'|' -f4)"
+        stdout_size="$(wc -c <"$stdout_file" 2>/dev/null || printf 0)"
+        stderr_size="$(wc -c <"$stderr_file" 2>/dev/null || printf 0)"
+
+        if [ "$rc" = "0" ]; then
+            if jq -e 'type == "array" and all(.[]; type == "object" and (.id | type == "string"))' "$stdout_file" >/dev/null 2>&1; then
+                ProcessRunner_TmpStdout=""
+                ProcessRunner_TmpStderr=""
+                category="valid"
+                log "agent-discovery role=$role attempt=$attempt exit_code=$rc duration=${duration}s stdout_bytes=$stdout_size stderr_bytes=$stderr_size category=$category"
+                if jq -e --arg role "$role" 'any(.[]; .id == $role)' "$stdout_file" >/dev/null 2>&1; then
+                    printf '%s' "found"
+                else
+                    # A successful response is authoritative: no retry here.
+                    printf '%s' "missing"
+                fi
+                return
+            fi
+            # Exit 0 but empty/invalid JSON: transient discovery failure.
+            category="invalid_json"
+        elif [ "$timed_out" = "true" ]; then
+            category="timeout"
         else
-            printf '%s' "missing"
+            # Fall back only for the V1 CLI's unsupported plural command. A
+            # real V2 server/runtime failure stays a retried probe error,
+            # never a false missing role.
+            if grep -Eiq 'unknown (subcommand|command)|no command named|unrecognized command' "$stderr_file" "$stdout_file" 2>/dev/null; then
+                ProcessRunner_TmpStdout=""
+                ProcessRunner_TmpStderr=""
+                category="v1_unsupported"
+                log "agent-discovery role=$role attempt=$attempt exit_code=$rc duration=${duration}s stdout_bytes=$stdout_size stderr_bytes=$stderr_size category=$category"
+                result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agent "$role")"
+                header="$(printf '%s\n' "$result" | head -n 1)"
+                rc="${header%%|*}"
+                ProcessRunner_TmpStdout=""
+                ProcessRunner_TmpStderr=""
+                if [ "$rc" = "0" ]; then printf '%s' "found"; else printf '%s' "error"; fi
+                return
+            fi
+            category="runtime_error"
         fi
-        return
-    fi
 
-    # Fall back only for the V1 CLI's unsupported plural command. A real V2
-    # server/runtime failure must remain a probe error, not a false missing role.
-    if ! grep -Eiq 'unknown (subcommand|command)|no command named|unrecognized command' "$stderr_file" "$stdout_file" 2>/dev/null; then
-        ProcessRunner_TmpStdout=""
-        ProcessRunner_TmpStderr=""
-        printf '%s' "error"
-        return
-    fi
+        log "agent-discovery role=$role attempt=$attempt exit_code=$rc duration=${duration}s stdout_bytes=$stdout_size stderr_bytes=$stderr_size category=$category (retrying)"
 
-    result="$(ProcessRunner.run --timeout 15 --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agent "$role")"
-    header="$(printf '%s\n' "$result" | head -n 1)"
-    rc="${header%%|*}"
+        # Exponential backoff before the next attempt; no sleep after the last.
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            sleep_for="$(awk -v value="$backoff_base" -v exponent="$((attempt - 1))" 'BEGIN { printf "%.3f", value * (2 ^ exponent) }')"
+            sleep "$sleep_for"
+        fi
+    done
+
     ProcessRunner_TmpStdout=""
     ProcessRunner_TmpStderr=""
-    if [ "$rc" = "0" ]; then printf '%s' "found"; else printf '%s' "error"; fi
+    log "agent-discovery role=$role exhausted $max_attempts attempts category=$category"
+    printf '%s' "error"
 }
 
 # A missing native OpenCode agent definition is optional for ordinary roles.
