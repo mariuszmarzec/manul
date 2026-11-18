@@ -3761,7 +3761,7 @@ else
            log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
          fi
        fi
-     elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+     elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [ "$TASK_ACTION" = "IMPLEMENT" ]; then
       # IMPLEMENT work normally must finish on its own feature branch. A no-op
       # on the base branch is accepted only when an existing PR for this same
       # issue has been independently re-verified, or the agent posted a valid
@@ -3827,7 +3827,7 @@ else
           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
         fi
       fi
-    else
+    elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
       # A TASK_DONE from an IMPLEMENT task is only informational when the agent
       # genuinely made no repository changes. Keep this explicit so issuebody:*
       # tasks cannot accidentally bypass the repository/PR verification above.
