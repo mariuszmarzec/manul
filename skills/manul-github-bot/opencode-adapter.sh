@@ -980,17 +980,44 @@ fi
 # is missing. Invalid or incomplete JSON, non-zero exits, and timeouts are
 # retried with a short backoff; a valid V2 listing is authoritative, so a
 # missing ID is never retried through the legacy command.
+_sdd_discovery_positive_int() {
+    local value="${1:-}" fallback="$2" limit="$3"
+    if [[ "$value" =~ ^[1-9][0-9]{0,3}$ ]] && [ "$value" -le "$limit" ]; then
+        printf '%s' "$value"
+    else
+        printf '%s' "$fallback"
+    fi
+}
+
+_sdd_discovery_backoff() {
+    local value="${1:-}" fallback=0.5
+    if [[ "$value" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]] \
+        && awk -v value="$value" 'BEGIN { exit !(value > 0 && value <= 10) }'; then
+        printf '%s' "$value"
+    else
+        printf '%s' "$fallback"
+    fi
+}
+
 opencode_agent_discovery() {
     local role="$1" stdout_file="$2" stderr_file="$3"
-    local result header rc duration stdout_size stderr_size category sleep
-    local attempt max_attempts=3
+    local result header rc duration stdout_size stderr_size category sleep_for
+    local attempt timeout timed_out
+    local max_attempts base_timeout max_timeout backoff_base
 
-    for attempt in 1 2 3; do
-        [ "$attempt" -le "$max_attempts" ] || break
-        # Timeout grows per attempt: 15s, 30s, up to 60s.
-        local timeout=15
-        [ "$attempt" -eq 2 ] && timeout=30
-        [ "$attempt" -eq 3 ] && timeout=60
+    max_attempts="$(_sdd_discovery_positive_int "${SDD_DISCOVERY_ATTEMPTS:-3}" 3 10)"
+    base_timeout="$(_sdd_discovery_positive_int "${SDD_DISCOVERY_BASE_TIMEOUT:-15}" 15 3600)"
+    max_timeout="$(_sdd_discovery_positive_int "${SDD_DISCOVERY_MAX_TIMEOUT:-60}" 60 3600)"
+    backoff_base="$(_sdd_discovery_backoff "${SDD_DISCOVERY_BACKOFF:-0.5}")"
+
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        # Same 1-based schedule as sdd-policy.py: base, 2x base, then max.
+        case "$attempt" in
+            1) timeout="$base_timeout" ;;
+            2) timeout=$((base_timeout * 2)) ;;
+            *) timeout="$max_timeout" ;;
+        esac
+        [ "$timeout" -le "$max_timeout" ] || timeout="$max_timeout"
 
         ProcessRunner_TmpStdout="$stdout_file"
         ProcessRunner_TmpStderr="$stderr_file"
@@ -998,7 +1025,6 @@ opencode_agent_discovery() {
         header="$(printf '%s\n' "$result" | head -n 1)"
         rc="${header%%|*}"
         duration="$(printf '%s\n' "$result" | head -n 1 | cut -d'|' -f2)"
-        local timed_out
         timed_out="$(printf '%s\n' "$result" | head -n 1 | cut -d'|' -f4)"
         stdout_size="$(wc -c <"$stdout_file" 2>/dev/null || printf 0)"
         stderr_size="$(wc -c <"$stderr_file" 2>/dev/null || printf 0)"
@@ -1043,11 +1069,13 @@ opencode_agent_discovery() {
 
         log "agent-discovery role=$role attempt=$attempt exit_code=$rc duration=${duration}s stdout_bytes=$stdout_size stderr_bytes=$stderr_size category=$category (retrying)"
 
-        # Backoff before the next attempt; no sleep after the last one.
-        sleep=0.5
-        [ "$attempt" -eq 2 ] && sleep=1
+        # Exponential backoff before the next attempt; no sleep after the last.
         if [ "$attempt" -lt "$max_attempts" ]; then
-            sleep "$sleep"
+            sleep_for="$backoff_base"
+            if [ "$attempt" -eq 2 ]; then
+                sleep_for="$(awk -v value="$backoff_base" 'BEGIN { printf "%.3f", value * 2 }')"
+            fi
+            sleep "$sleep_for"
         fi
     done
 
