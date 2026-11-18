@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
@@ -76,10 +76,10 @@ read -r repo_release dispatcher_release sdd_gate <<<"$positions"
 (( repo_release < dispatcher_release && dispatcher_release < sdd_gate )) ||
   fail "lock release order is unsafe (repo=$repo_release dispatcher=$dispatcher_release sdd=$sdd_gate)"
 
-if ! sed -n "\${dispatcher_release}p" "$SCRIPT_DIR/manul-daemon.sh" | grep -q 'release_task_lock'; then
+if ! sed -n "${dispatcher_release}p" "$SCRIPT_DIR/manul-daemon.sh" | grep -q 'release_task_lock'; then
   fail "expected dispatcher lock release at line $dispatcher_release"
 fi
-if ! sed -n "\${dispatcher_release},\${sdd_gate}p" "$SCRIPT_DIR/manul-daemon.sh" | grep -q 'DISPATCH_LOCK_RELEASED'; then
+if ! sed -n "${dispatcher_release},${sdd_gate}p" "$SCRIPT_DIR/manul-daemon.sh" | grep -q 'DISPATCH_LOCK_RELEASED'; then
   fail "missing structured dispatcher-lock release event"
 fi
 echo "PASS: dispatcher lock is released after isolated workspace preparation and before SDD"
