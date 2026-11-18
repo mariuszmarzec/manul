@@ -30,6 +30,11 @@ jobs:
         run: python3 skills/manul-github-bot/test_manul_operator_context.py
       - name: Test Sphinx Slack intake security contract
         run: python3 skills/manul-github-bot/test_slack_intake_contract.py
+      - name: Run SDD Policy Gate regression tests
+        run: |
+          set -euo pipefail
+          bash skills/manul-github-bot/test_sdd_workflow.sh </dev/null
+          bash skills/manul-github-bot/test_opencode_agent_discovery.sh </dev/null
       - name: Run hermetic Manul shell tests
         run: |
           set -euo pipefail
@@ -39,33 +44,8 @@ jobs:
                 echo "SKIP $test (host integration or operator-state test)"
                 continue
                 ;;
-              test_daemon_wrapper_integration.sh)
-                # This pre-existing daemon test currently aborts on an unset current_branch in manul-daemon.sh.
-                # Daemon/lock behavior is intentionally outside the scope of the SDD policy-gate PR.
-                echo "SKIP $test (known daemon current_branch failure; daemon/locks are out of scope)"
-                continue
-                ;;
-              test_failure_feedback.sh)
-                # The unchanged master fixture evals lc_log before initializing CONFIG under set -u.
-                # Failure-feedback behavior is outside this SDD discovery change.
-                echo "SKIP $test (pre-existing CONFIG initialization order in test fixture)"
-                continue
-                ;;
-              test_manul_environment.sh)
-                # This unchanged startup/watchdog integration fixture fails in the hosted runner;
-                # environment/bootstrap behavior is outside the SDD discovery change.
-                echo "SKIP $test (pre-existing startup/watchdog fixture failure on master)"
-                continue
-                ;;
-              test_manul_update.sh)
-                # The unchanged master fixture emits a literal \\r command after its CRLF checks.
-                # CLI/update behavior is outside the SDD discovery change.
-                echo "SKIP $test (pre-existing CRLF fixture command failure on master)"
-                continue
-                ;;
             esac
             echo "::group::$(basename "$test")"
-            # Test scripts may read stdin; keep them from consuming the find loop input.
-            bash "$test" </dev/null
+            bash "$test"
             echo "::endgroup::"
           done < <(find skills/manul-github-bot -maxdepth 1 -type f -name 'test_*.sh' -print | sort)
