@@ -43,7 +43,7 @@ echo "DEBUG: before sourcing daemon test helpers" >&2
 source "$SCRIPT_DIR/manul-daemon.sh"
 source_status=$?
 echo "DEBUG: daemon source returned $source_status; MANUL_TESTING=${MANUL_TESTING:-unset}" >&2
-[ "$source_status" -eq 0 ] || fail "daemon test helper source failed with status $source_status"
+if [ "$source_status" -ne 0 ]; then echo "FAIL: daemon test helper source failed with status $source_status" >&2; exit "$source_status"; fi
 TASK_LOCK_FILE="$TEST_DIR/task-dispatch.flock"
 MANUL_TASK_LOCK_TIMEOUT_SECONDS=5
 
