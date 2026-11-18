@@ -24,6 +24,8 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
     v2-missing-sdd) printf '%s\n' '[{"id":"orchestrator"}]'; exit 0 ;;
     v2-malformed) printf '%s\n' 'not-json'; exit 0 ;;
     v2-error) printf '%s\n' 'OpenCode server unavailable' >&2; exit 7 ;;
+    v2-flaky) if [ -f "$MOCK_CALL_FILE" ] && [ "$(cat "$MOCK_CALL_FILE" 2>/dev/null || echo 0)" = "1" ]; then printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0; fi; printf '1' > "$MOCK_CALL_FILE"; printf '%s\n' 'not-json'; exit 0 ;;
+    v2-timeout) if [ -f "$MOCK_CALL_FILE" ]; then cnt="$(cat "$MOCK_CALL_FILE" 2>/dev/null)"; cnt="${cnt:-0}"; if [ "$cnt" -lt 3 ]; then printf '%s' $((cnt + 1)) > "$MOCK_CALL_FILE"; exit 124; fi; fi; printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
     v1-found|v1-missing-sdd) printf '%s\n' 'ERROR: Unknown subcommand "agents" for "opencode debug"' >&2; exit 1 ;;
     *) exit 64 ;;
   esac
@@ -43,6 +45,7 @@ export MOCK_TRACE_FILE="$TEST_DIR/opencode.trace"
 : > "$MOCK_TRACE_FILE"
 
 check_json() {
+  SDD_DISCOVERY_ATTEMPTS=3 SDD_DISCOVERY_BASE_TIMEOUT=1 SDD_DISCOVERY_MAX_TIMEOUT=3 SDD_DISCOVERY_BACKOFF=0.01 \
   python3 "$POLICY" inspect --repo-root "$REPO_ROOT" --agent "$AGENT" --prompt "$PROMPT" \
     --action "$ACTION" --runtime "$RUNTIME" --manul-config "$MANUL_CONFIG" \
     --role-dir "$ROLE_DIR" --skills-dir "$SKILLS_DIR"
@@ -110,6 +113,26 @@ expect_agent_listing_error() {
   jq -e '.ok == false and (.error | contains("could not verify") and contains("exit code 7"))' <<<"$out" >/dev/null
 }
 run_case "V2 agent-list runtime failure is not mislabeled as a missing agent" expect_agent_listing_error
+
+expect_retry_recovers() {
+  MOCK_CALL_FILE="$TEST_DIR/calls.flaky" MOCK_OPENCODE_MODE="v2-flaky"
+  : > "$MOCK_CALL_FILE"
+  export MOCK_CALL_FILE MOCK_OPENCODE_MODE
+  local out
+  out="$(check_json 2>/dev/null || true)"
+  jq -e '.ok == true and .mode == "bootstrap"' <<<"$out" >/dev/null
+}
+run_case "flaky malformed JSON recovers on retry" expect_retry_recovers
+
+expect_retry_exhausted_fails_closed() {
+  MOCK_CALL_FILE="$TEST_DIR/calls.timeout" MOCK_OPENCODE_MODE="v2-timeout"
+  : > "$MOCK_CALL_FILE"
+  export MOCK_CALL_FILE MOCK_OPENCODE_MODE
+  local out
+  out="$(check_json 2>/dev/null || true)"
+  jq -e '.ok == false and (.error | contains("could not verify"))' <<<"$out" >/dev/null
+}
+run_case "timeout after retries exhausted fails closed" expect_retry_exhausted_fails_closed
 
 expect_v1_fallback() {
   MOCK_OPENCODE_MODE="v1-found"

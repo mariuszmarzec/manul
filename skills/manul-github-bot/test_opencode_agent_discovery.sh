@@ -18,6 +18,8 @@ assert_json_status() {
 run_case() {
     local mode="$1" case_dir="$TMP_ROOT/$1" output rc
     mkdir -p "$case_dir/bin" "$case_dir/workspace" "$case_dir/home"
+    mkdir -p "$case_dir/runtime/workspace"
+    mkdir -p "$case_dir/runtime/workspace/ws-$mode"
     printf '%s\n' 'Execute the SDD task' >"$case_dir/prompt"
     cat >"$case_dir/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
@@ -47,8 +49,9 @@ MOCK
     output="$(HOME="$case_dir/home" PATH="$case_dir/bin:$PATH" OPENCODE_BIN="$case_dir/bin/opencode" \
         MOCK_AGENT_MODE="$mode" MOCK_DISCOVERY_CALLS="$case_dir/discovery.calls" \
         MOCK_RUN_ARGS="$case_dir/run.args" AGENT_RUNTIME=opencode MANUL_DIR="$case_dir/runtime" \
+        MANUL_WORKSPACE="$case_dir/runtime/workspace" MANUL_TASK_WORKSPACE_ROOT="$case_dir/runtime/workspace/ws-$mode" \
         bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id "sdd-discovery-$mode" \
-        --prompt "$case_dir/prompt" --workspace "$case_dir/workspace" --agent sdd \
+        --prompt "$case_dir/prompt" --workspace "$case_dir/runtime/workspace/ws-$mode" --agent sdd \
         --attempt 1 --timeout 30 --session-id "" --stdout-file "$case_dir/stdout" \
         --stderr-file "$case_dir/stderr" 2>/dev/null)"
     rc=$?
