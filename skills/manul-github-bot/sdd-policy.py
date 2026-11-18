@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 T = TypeVar("T", int, float)
-DISCOVERY_TIMEOUT_EXIT_CODE = -1000
 
 def emit(ok: bool, **values: object) -> int:
     print(json.dumps({"ok": ok, **values}, ensure_ascii=False, sort_keys=True))
@@ -60,7 +59,7 @@ def opencode_binary():
              "/usr/local/bin/opencode","/usr/bin/opencode"]
     return next((p for p in options if p and Path(p).is_file() and os.access(p,os.X_OK)),None)
 
-def _run_debug_agents(binary, root, timeout: int) -> tuple[int, str, str, float]:
+def _run_debug_agents(binary, root, timeout: int) -> tuple[int | None, str, str, float]:
     """Run `opencode debug agents` and return (exit_code, stdout, stderr, duration)."""
     start = time.monotonic()
     try:
@@ -82,7 +81,7 @@ def _run_debug_agents(binary, root, timeout: int) -> tuple[int, str, str, float]
             stdout = stdout.decode("utf-8", errors="replace")
         if isinstance(stderr, bytes):
             stderr = stderr.decode("utf-8", errors="replace")
-        return DISCOVERY_TIMEOUT_EXIT_CODE, stdout, stderr, duration
+        return None, stdout, stderr, duration
     except OSError as exc:
         duration = time.monotonic() - start
         return 1, "", str(exc), duration
@@ -200,12 +199,13 @@ def probe_opencode_agent(binary, role, root):
         timeout = _timeout_for_attempt(attempt, base_timeout, max_timeout)
         exit_code, stdout, stderr, duration = _run_debug_agents(binary, root, timeout)
 
-        stdout_len = len(stdout)
-        stderr_len = len(stderr)
+        stdout_len = len(stdout.encode("utf-8", errors="replace"))
+        stderr_len = len(stderr.encode("utf-8", errors="replace"))
+        exit_code_label = "timeout" if exit_code is None else str(exit_code)
         # Log discovery attempt details
         sys.stderr.write(
             f"[SDD-POLICY] discovery role={role} attempt={attempt}/{max_attempts} "
-            f"exit_code={exit_code} duration={duration:.3f}s stdout_bytes={stdout_len} stderr_bytes={stderr_len}\n"
+            f"exit_code={exit_code_label} duration={duration:.3f}s stdout_bytes={stdout_len} stderr_bytes={stderr_len}\n"
         )
 
         if exit_code == 0:
@@ -223,18 +223,19 @@ def probe_opencode_agent(binary, role, root):
             # Retry on parse error (transient I/O)
         else:
             # Non-zero exit code
-            if _classify_v2_error(stdout, stderr):
-                # V2 unsupported — try V1 fallback once
+            if exit_code is None:
+                # Timeout is not a CLI incompatibility and must never trigger V1 fallback.
+                last_error_detail = f"OpenCode debug agents timed out after {timeout}s"
+                last_error_category = "timeout"
+                sys.stderr.write(f"[SDD-POLICY] discovery role={role} attempt={attempt} timeout after {timeout}s\n")
+            elif _classify_v2_error(stdout, stderr):
+                # V2 unsupported — try V1 fallback once.
                 sys.stderr.write(f"[SDD-POLICY] discovery role={role} V2 unsupported, trying V1 fallback\n")
                 v1_status, v1_detail, v1_duration = _run_v1_probe(binary, role, root, timeout)
                 sys.stderr.write(
                     f"[SDD-POLICY] V1 fallback role={role} status={v1_status} duration={v1_duration:.3f}s\n"
                 )
                 return v1_status, v1_detail
-            if exit_code == DISCOVERY_TIMEOUT_EXIT_CODE:
-                last_error_detail = f"OpenCode debug agents timed out after {timeout}s"
-                last_error_category = "timeout"
-                sys.stderr.write(f"[SDD-POLICY] discovery role={role} attempt={attempt} timeout after {timeout}s\n")
             else:
                 # Other V2 runtime errors are retried but never treated as V1 support.
                 last_error_detail = f"OpenCode debug agents failed with exit code {exit_code}"
@@ -261,11 +262,12 @@ def discover_all_agents(binary, root):
         timeout = _timeout_for_attempt(attempt, base_timeout, max_timeout)
         exit_code, stdout, stderr, duration = _run_debug_agents(binary, root, timeout)
 
-        stdout_len = len(stdout)
-        stderr_len = len(stderr)
+        stdout_len = len(stdout.encode("utf-8", errors="replace"))
+        stderr_len = len(stderr.encode("utf-8", errors="replace"))
+        exit_code_label = "timeout" if exit_code is None else str(exit_code)
         sys.stderr.write(
             f"[SDD-POLICY] discovery_all attempt={attempt}/{max_attempts} "
-            f"exit_code={exit_code} duration={duration:.3f}s stdout_bytes={stdout_len} stderr_bytes={stderr_len}\n"
+            f"exit_code={exit_code_label} duration={duration:.3f}s stdout_bytes={stdout_len} stderr_bytes={stderr_len}\n"
         )
 
         if exit_code == 0:
@@ -276,13 +278,13 @@ def discover_all_agents(binary, root):
             last_error_category = "invalid_json"
             sys.stderr.write(f"[SDD-POLICY] discovery_all attempt={attempt} parse_error={agents}\n")
         else:
-            if _classify_v2_error(stdout, stderr):
-                # V2 unsupported — signal to caller that V1 fallback is needed per-role
-                return "v1_fallback", None
-            if exit_code == DISCOVERY_TIMEOUT_EXIT_CODE:
+            if exit_code is None:
                 last_error_detail = f"OpenCode debug agents timed out after {timeout}s"
                 last_error_category = "timeout"
                 sys.stderr.write(f"[SDD-POLICY] discovery_all attempt={attempt} timeout after {timeout}s\n")
+            elif _classify_v2_error(stdout, stderr):
+                # V2 unsupported — signal to caller that V1 fallback is needed per-role.
+                return "v1_fallback", None
             else:
                 last_error_detail = f"OpenCode debug agents failed with exit code {exit_code}"
                 last_error_category = "runtime_error"
