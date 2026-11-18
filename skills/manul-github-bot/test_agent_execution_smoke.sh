@@ -220,6 +220,13 @@ OPENCODE_PROOF_FILE="$TEST_ROOT/opencode-proof"
 cat >"$FAKE_BIN/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
+  # OpenCode V2 role discovery is authoritative; expose the explicit roles
+  # this smoke test later asks the adapter to pass to "opencode run".
+  printf '%s\n' '[{"id":"coder"},{"id":"coder-cheap"}]'
+  exit 0
+fi
+[ "${1:-}" = "run" ] || { echo "unexpected OpenCode invocation" >&2; exit 91; }
 printf 'called\n' >>"$OPENCODE_PROOF_FILE"
 printf 'args=%s\n' "$*" >>"$OPENCODE_PROOF_FILE"
 printf '%s\n' '{"type":"text","part":{"text":"TASK_DONE opencode-role-routing"}}'
