@@ -25,7 +25,7 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
     v2-malformed) printf '%s\n' 'not-json'; exit 0 ;;
     v2-error) printf '%s\n' 'OpenCode server unavailable' >&2; exit 7 ;;
     v2-flaky) if [ -f "$MOCK_CALL_FILE" ] && [ "$(cat "$MOCK_CALL_FILE" 2>/dev/null || echo 0)" = "1" ]; then printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0; fi; printf '1' > "$MOCK_CALL_FILE"; printf '%s\n' 'not-json'; exit 0 ;;
-    v2-timeout) if [ -f "$MOCK_CALL_FILE" ]; then cnt="$(cat "$MOCK_CALL_FILE" 2>/dev/null)"; cnt="${cnt:-0}"; if [ "$cnt" -lt 3 ]; then printf '%s' $((cnt + 1)) > "$MOCK_CALL_FILE"; exit 124; fi; fi; printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
+    v2-timeout) exec python3 -c 'import time; time.sleep(5)' ;;
     v1-found|v1-missing-sdd) printf '%s\n' 'ERROR: Unknown subcommand "agents" for "opencode debug"' >&2; exit 1 ;;
     *) exit 64 ;;
   esac
@@ -83,6 +83,41 @@ expect_sdd_agent_route() {
     return 1
   fi
 }
+expect_timeout_schedule_is_capped() {
+  python3 - "$POLICY" <<'PY'
+import importlib.util
+import os
+import sys
+
+spec = importlib.util.spec_from_file_location("sdd_policy", sys.argv[1])
+assert spec and spec.loader
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
+
+cases = (
+    (1, 15, 60, 15),
+    (2, 15, 60, 30),
+    (3, 15, 60, 60),
+    (9, 15, 60, 60),
+    (1, 40, 60, 40),
+    (2, 40, 60, 60),
+    (3, 40, 60, 60),
+    (1, 60, 40, 40),
+    (2, 15, 10, 10),
+    (0, 15, 60, 15),
+)
+for attempt, base, maximum, expected in cases:
+    actual = policy._timeout_for_attempt(attempt, base, maximum)
+    assert actual == expected, (attempt, base, maximum, actual, expected)
+
+os.environ["SDD_DISCOVERY_BACKOFF"] = "nan"
+assert policy._retry_params()[3] == 0.5
+os.environ["SDD_DISCOVERY_BACKOFF"] = "inf"
+assert policy._retry_params()[3] == 0.5
+PY
+}
+run_case "retry timeout schedule is bounded and rejects non-finite backoff" expect_timeout_schedule_is_capped
+
 run_case "repo without config stays on standard workflow" expect_standard
 AGENT=sdd; PROMPT="Add a feature"
 run_case "SDD agent without config fails instead of bootstrapping" expect_blocked
@@ -130,9 +165,9 @@ expect_retry_exhausted_fails_closed() {
   export MOCK_CALL_FILE MOCK_OPENCODE_MODE
   local out
   out="$(check_json 2>/dev/null || true)"
-  jq -e '.ok == false and (.error | contains("could not verify"))' <<<"$out" >/dev/null
+  jq -e '.ok == false and (.error | contains("could not verify") and contains("timed out") and contains("category: timeout"))' <<<"$out" >/dev/null
 }
-run_case "timeout after retries exhausted fails closed" expect_retry_exhausted_fails_closed
+run_case "real subprocess timeouts retry and fail closed after exhaustion" expect_retry_exhausted_fails_closed
 
 expect_v1_fallback() {
   MOCK_OPENCODE_MODE="v1-found"
