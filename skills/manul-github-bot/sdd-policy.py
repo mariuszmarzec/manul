@@ -60,7 +60,7 @@ def opencode_binary():
     return next((p for p in options if p and Path(p).is_file() and os.access(p,os.X_OK)),None)
 
 def _run_debug_agents(binary, root, timeout: int) -> tuple[int | None, str, str, float]:
-    """Run `opencode debug agents` and return (exit_code, stdout, stderr, duration)."""
+    """Run discovery; exit_code is None on timeout, otherwise the process return code."""
     start = time.monotonic()
     try:
         result = subprocess.run(
