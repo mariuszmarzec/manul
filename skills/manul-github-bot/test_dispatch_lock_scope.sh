@@ -94,12 +94,23 @@ LOCK_HELD="$TEST_DIR/worker-1-lock-held"
 RUNTIME_PID_FILE="$TEST_DIR/worker-1-runtime.pid"
 WORKER_2_ACQUIRED="$TEST_DIR/worker-2-acquired"
 OVERLAP_CONFIRMED="$TEST_DIR/overlap-confirmed"
+REUSED_FD="$TEST_DIR/reused-fd"
+IDEMPOTENT_RELEASE_CONFIRMED="$TEST_DIR/idempotent-release-confirmed"
 
 (
   acquire_task_lock
   : >"$LOCK_HELD"
   sleep 0.8
   release_task_lock
+
+  # Simulate a later cleanup path calling release_task_lock() after another
+  # operation has reused FD 210. The helper must not close that unrelated FD.
+  exec 210>"$REUSED_FD"
+  release_task_lock
+  if [ "$(readlink "/proc/$BASHPID/fd/210" 2>/dev/null || true)" = "$REUSED_FD" ]; then
+    : >"$IDEMPOTENT_RELEASE_CONFIRMED"
+  fi
+  exec 210>&-
 
   sleep 3 &
   runtime_pid=$!
@@ -129,5 +140,7 @@ sleep 0.3
 wait "$worker_2_pid" || fail "second worker could not acquire dispatcher lock"
 [ -e "$OVERLAP_CONFIRMED" ] || fail "second worker did not acquire the lock while the first executor was running"
 wait "$worker_1_pid" || fail "first worker did not finish its fake executor"
+[ -e "$IDEMPOTENT_RELEASE_CONFIRMED" ] || fail "a repeated release closed an unrelated descriptor reused as FD 210"
 
 echo "PASS: two workers can overlap execution without overlapping the claim/preparation critical section"
+echo "PASS: repeated lock release is a no-op after this worker has relinquished ownership"
