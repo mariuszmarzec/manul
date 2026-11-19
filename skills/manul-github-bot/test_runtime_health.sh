@@ -461,13 +461,24 @@ CANON="$CLI_ROOT/canonical"
 RUN="$CLI_ROOT/runtime"
 mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+# The symlink installer also deploys Python runtime helpers. Keep this fixture
+# complete; otherwise installation fails on missing todo-mcp-client.py and
+# manul-operator-context.py even though the shell sources are present.
+cp "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
 [ -f "$SCRIPT_DIR/state/manul.db" ] && cp "$SCRIPT_DIR/state/manul.db" "$CANON/" 2>/dev/null || true
 
-# Deploy a real runtime so the CLI can actually run
+# Deploy a real runtime so the CLI can actually run. Retain diagnostics so a
+# future fixture regression reports the missing canonical source directly.
+CLI_INSTALL_LOG="$CLI_ROOT/install-runtime.log"
 set +e
 OPENCODE_CONFIG_DIR="$CLI_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
-  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >"$CLI_INSTALL_LOG" 2>&1
+CLI_INSTALL_RC=$?
 set -e
+if [ "$CLI_INSTALL_RC" -ne 0 ]; then
+  cat "$CLI_INSTALL_LOG" >&2
+  fail "Initial runtime deployment failed (rc=$CLI_INSTALL_RC)"
+fi
 
 # 1) All three CLI entrypoints exist as symlinks in the runtime
 for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
