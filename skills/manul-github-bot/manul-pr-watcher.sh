@@ -87,13 +87,40 @@ pr_watcher_pr_in_scope() {
 
 pr_watcher_ensure_pr_conversation() {
   local repo="$1" pr_number="$2" pr_url="$3"
-  local now conv_id safe_repo safe_url
+  local now conv_id safe_repo safe_url existing_conv
   [[ "$pr_number" =~ ^[0-9]+$ ]] || return 1
   [ -n "$pr_url" ] || return 1
-  conv_id="$(generate_conversation_id "$repo" "$pr_number" "pr-top-level")" || return 1
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   safe_repo="$(sql_escape "$repo")"
   safe_url="$(sql_escape "$pr_url")"
+
+  # Prefer the source task's established conversation (including completed
+  # tasks); CI/review work must continue in that history rather than creating
+  # a disconnected PR conversation.
+  existing_conv="$(sqlite3 "$DB" "
+    SELECT conversationId
+    FROM processed_comments
+    WHERE repository='$safe_repo'
+      AND prNumber=$pr_number
+      AND status!='failed'
+      AND action!='REVIEW'
+      AND conversationId IS NOT NULL
+      AND conversationId!=''
+    ORDER BY createdAt DESC
+    LIMIT 1;
+  " 2>>"$LOG" || true)"
+  if [ -z "$existing_conv" ]; then
+    existing_conv="$(sqlite3 "$DB" "
+      SELECT conversationId
+      FROM conversations
+      WHERE repository='$safe_repo'
+        AND activePrNumber=$pr_number
+      ORDER BY updatedAt DESC
+      LIMIT 1;
+    " 2>>"$LOG" || true)"
+  fi
+  conv_id="${existing_conv:-$(generate_conversation_id "$repo" "$pr_number" "pr-top-level")}"
+  [ -n "$conv_id" ] || return 1
 
   # A PR must remain discoverable even if it has no source task or its source
   # task/conversation was already completed. Existing task rows remain intact.
