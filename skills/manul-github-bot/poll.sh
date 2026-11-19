@@ -1630,7 +1630,7 @@ process_repo_body() {
         review_author="$(jq -r '.user.login // "unknown"' <<<"$review")"
         review_author_type="$(jq -r '.user.type // "User"' <<<"$review")"
         [ "$review_author_type" != "Bot" ] || continue
-        review_created="$(jq -r '.submitted_at // empty' <<<"$review")
+        review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
         [ -n "$review_created" ] || review_created="$now"
 
         # Keep only new root comments from this review. Replies are persisted
