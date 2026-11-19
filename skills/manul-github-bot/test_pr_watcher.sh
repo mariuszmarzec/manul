@@ -53,7 +53,15 @@ CREATE TABLE conversations(
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
-CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY);
+CREATE TABLE processed_comments(
+  commentId TEXT PRIMARY KEY,
+  repository TEXT,
+  prNumber INTEGER,
+  status TEXT,
+  action TEXT,
+  conversationId TEXT,
+  createdAt TEXT
+);
 CREATE TABLE conversation_messages(commentId TEXT);
 "
 
@@ -129,6 +137,34 @@ pr_watcher_pr_in_scope "test/repo" "42" "https://github.com/test/repo/pull/42" "
 if pr_watcher_pr_in_scope "test/repo" "42" "https://github.com/test/repo/pull/42" "other-user" "AllUserAuthoredPr"; then
   echo "FAIL unapproved PR author passed AllUserAuthoredPr" >&2; exit 1
 fi
+
+# A completed source task keeps its established PR conversation. The
+# watcher must not create a disconnected deterministic PR conversation.
+sqlite3 "$DB" "
+INSERT INTO processed_comments(commentId, repository, prNumber, status, action, conversationId, createdAt)
+VALUES('source-task-43', 'test/repo', 43, 'completed', 'IMPLEMENT', 'conv-source-task-43', '2026-01-01T00:00:00Z');
+"
+pr_watcher_ensure_pr_conversation "test/repo" "43" "https://github.com/test/repo/pull/43"
+[ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversations WHERE conversationId='conv-source-task-43';")" = "1" ] || {
+  echo "FAIL completed source conversation was not reused" >&2; exit 1;
+}
+[ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversations WHERE conversationId='conv-test/repo-issue-43';")" = "0" ] || {
+  echo "FAIL watcher created a duplicate PR conversation" >&2; exit 1;
+}
+
+# Failed proactive handler state must be retried; only a successful task
+# creation state suppresses another poll.
+sqlite3 "$DB" "
+INSERT INTO processed_comments(commentId, status)
+VALUES('review:proactive-comment-999', 'failed');
+"
+if pr_watcher_comment_was_handled "999"; then
+  echo "FAIL failed proactive event was treated as handled" >&2; exit 1
+fi
+sqlite3 "$DB" "UPDATE processed_comments SET status='task_created' WHERE commentId='review:proactive-comment-999';"
+pr_watcher_comment_was_handled "999" || {
+  echo "FAIL successfully created proactive task was not deduplicated" >&2; exit 1;
+}
 
 # A configured empty allow-list inherits allowedUsers.
 cat >"$CONFIG" <<'JSON'
