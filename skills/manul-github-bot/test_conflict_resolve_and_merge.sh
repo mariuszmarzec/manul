@@ -179,6 +179,10 @@ cat >"$CONFIG" <<'JSON'
 }
 JSON
 CONFLICT_RESOLVE_AND_MERGE_ENABLED=true
+conflict_resolve_and_merge_enabled || {
+  echo "FAIL: enabled=true was not recognized" >&2
+  exit 1
+}
 CONFLICT_RESOLVE_AND_MERGE_PR_SCOPE="$(conflict_resolve_and_merge_scope)"
 scan_conflicted_prs "test/repo"
 
