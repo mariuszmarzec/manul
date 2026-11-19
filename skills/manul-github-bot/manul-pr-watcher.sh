@@ -36,20 +36,33 @@ pr_watcher_ci_scope() {
 # list. This deliberately reuses poll.sh's per-repository owner fallback when
 # allowedUsers contains only an unresolved template placeholder.
 pr_watcher_author_allowlist_json() {
-  local configured configured_count
+  local configured configured_count sanitized sanitized_count
   configured="$(jq -c '.proactivity.prAuthorAllowed // [] | if type == "array" then . else [] end' "$CONFIG" 2>/dev/null || echo '[]')"
   configured_count="$(jq -r 'length' <<<"$configured" 2>/dev/null || echo 0)"
   if [ "${configured_count:-0}" -eq 0 ]; then
     configured="${ALLOWED_JSON:-[]}"
   fi
-  jq -c '
+  sanitized="$(jq -c '
     [.[]?
       | select(type == "string")
       | gsub("^\\s+|\\s+$"; "")
       | select(length > 0)
       | select(test("[<>]") | not)
     ] | unique
-  ' <<<"$configured" 2>/dev/null || echo '[]'
+  ' <<<"$configured" 2>/dev/null || echo '[]')"
+  sanitized_count="$(jq -r 'length' <<<"$sanitized" 2>/dev/null || echo 0)"
+  # An array containing only unresolved placeholders is effectively empty too.
+  if [ "${sanitized_count:-0}" -eq 0 ] && [ "${configured_count:-0}" -gt 0 ]; then
+    sanitized="$(jq -c '
+      [.[]?
+        | select(type == "string")
+        | gsub("^\\s+|\\s+$"; "")
+        | select(length > 0)
+        | select(test("[<>]") | not)
+      ] | unique
+    ' <<<"${ALLOWED_JSON:-[]}" 2>/dev/null || echo '[]')"
+  fi
+  printf '%s' "$sanitized"
 }
 
 # pr_watcher_pr_in_scope <repo> <number> <url> <author> <scope>
@@ -108,6 +121,8 @@ pr_watcher_comment_was_handled() {
   local raw_id="$1"
   [[ "$raw_id" =~ ^[0-9]+$ ]] || return 1
   local found
+  # Conversation history is not proof that an event was handled: the poller
+  # stores comments there even when a previous delivery attempt failed.
   found="$(sqlite3 "$DB" "
     SELECT 1 FROM processed_comments
     WHERE commentId IN (
@@ -116,8 +131,6 @@ pr_watcher_comment_was_handled() {
       'review:proactive-comment-$raw_id',
       'review:proactive-inline-$raw_id'
     )
-    UNION ALL
-    SELECT 1 FROM conversation_messages WHERE commentId='$raw_id'
     LIMIT 1;
   " 2>/dev/null || true)"
   [ "$found" = "1" ]
@@ -149,6 +162,26 @@ pr_watcher_submit_feedback() {
   return 1
 }
 
+
+# Use a watcher-specific one-time baseline so enabling the feature does not
+# backfill every historical comment/review since the original Manul install.
+pr_watcher_ensure_baseline() {
+  local current baseline
+  current="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if ! sqlite3 "$DB" "
+    INSERT OR IGNORE INTO meta(key, value) VALUES('pr_watcher_baseline', '$current');
+  " 2>>"$LOG"; then
+    log "WARN: could not initialize proactive PR watcher baseline"
+    return 1
+  fi
+  baseline="$(sqlite3 "$DB" "SELECT value FROM meta WHERE key='pr_watcher_baseline' LIMIT 1;" 2>>"$LOG" || true)"
+  [ -n "$baseline" ] || {
+    log "WARN: proactive PR watcher baseline is empty; refusing historical backfill"
+    return 1
+  }
+  printf '%s' "$baseline"
+}
+
 # scan_proactive_pr_comments <repo>
 # Scans new PR discussion comments and standalone inline comments. Submitted
 # reviews (and their inline comments) are grouped by the existing review
@@ -157,8 +190,9 @@ scan_proactive_pr_comments() {
   local repo="$1"
   pr_watcher_enabled || return 0
 
-  local scope prs_json issue_comments_json inline_comments_json
+  local scope prs_json issue_comments_json inline_comments_json watcher_baseline
   scope="$(pr_watcher_scope)"
+  watcher_baseline="$(pr_watcher_ensure_baseline)" || return 0
   prs_json="$(gh pr list --repo "$repo" --state open --limit 100 --json number,author,url,title 2>>"$LOG" | jq -c '[.[] | {number: .number, author: (.author.login // ""), url: .url, title: (.title // "")}]' 2>>"$LOG" || echo '[]')"
   [ -n "$prs_json" ] || prs_json='[]'
   issue_comments_json="$(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" || echo '[]')"
