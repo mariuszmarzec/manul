@@ -1123,6 +1123,14 @@ scan_failing_ci() {
       local failing_count
       failing_count="$(printf '%s' "$checks_json" | jq 'length')"
       [ "$failing_count" -gt 0 ] || { i=$((i+1)); continue; }
+      # CI scope is independent of comment automation. Ensure a PR conversation
+      # exists even when the user PR has no Manul source task and the proactive
+      # comment watcher is disabled.
+      if ! pr_watcher_ensure_pr_conversation "$repo" "$pr_num" "$pr_url"; then
+        log "WARN: could not ensure PR conversation for CI fix $repo#$pr_num"
+        i=$((i+1))
+        continue
+      fi
       log "found $failing_count failing check(s) on $repo#$pr_num ($pr_branch)"
       local j=0
       while [ $j -lt "$failing_count" ] && [ $j -lt "$CI_FIX_MAX_ATTEMPTS" ]; do
