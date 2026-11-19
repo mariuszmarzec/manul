@@ -1598,8 +1598,9 @@ process_repo_body() {
   # Individual comment ingestion above excludes review-associated comments so a
   # multi-comment review cannot fan out into multiple Manul tasks.
   if pr_watcher_enabled && [ -f "$MANUL_DIR/manul-pr-review.sh" ]; then
-    local proactive_pr_scope
+    local proactive_pr_scope proactive_pr_baseline
     proactive_pr_scope="$(pr_watcher_scope)"
+    proactive_pr_baseline="$(pr_watcher_ensure_baseline)" || proactive_pr_baseline=""
     while IFS= read -r pr_obj; do
       [ -n "$pr_obj" ] || continue
       pr_num="$(jq -r '.number' <<<"$pr_obj")"
@@ -1610,6 +1611,10 @@ process_repo_body() {
       review_pr_author="$(jq -r '.author.login // empty' <<<"$pr_obj")"
       if ! pr_watcher_pr_in_scope "$repo" "$pr_num" "$review_pr_url" "$review_pr_author" "$proactive_pr_scope"; then
         log "skipping proactive review handling for $repo#$pr_num — PR is outside proactivity.fixAndAnswerComments.prScope=$proactive_pr_scope (author=$review_pr_author)"
+        continue
+      fi
+      if ! pr_watcher_ensure_pr_conversation "$repo" "$pr_num" "$review_pr_url"; then
+        log "WARN: could not ensure PR conversation before review handling for $repo#$pr_num"
         continue
       fi
 
@@ -1658,11 +1663,11 @@ process_repo_body() {
         if [ "$review_state" = "CHANGES_REQUESTED" ]; then
           should_handle_review=true
         elif [ "$review_inline_count" -gt 0 ] && [ -n "$review_handler_state" ] && [ "$review_state" != "DISMISSED" ]; then
-          if [[ "$review_created" == "$BASELINE" || "$review_created" > "$BASELINE" ]]; then
+          if [ -n "$proactive_pr_baseline" ] && { [[ "$review_created" == "$proactive_pr_baseline" ]] || [[ "$review_created" > "$proactive_pr_baseline" ]]; }; then
             should_handle_review=true
           fi
-        elif [ "$review_state" = "COMMENTED" ] && [ -n "$(printf '%s' "$review_body" | tr -d '[:space:]')" ]; then
-          if [[ "$review_created" == "$BASELINE" || "$review_created" > "$BASELINE" ]]; then
+        elif { [ "$review_state" = "COMMENTED" ] || [ "$review_state" = "APPROVED" ]; } && [ -n "$(printf '%s' "$review_body" | tr -d '[:space:]')" ]; then
+          if [ -n "$proactive_pr_baseline" ] && { [[ "$review_created" == "$proactive_pr_baseline" ]] || [[ "$review_created" > "$proactive_pr_baseline" ]]; }; then
             should_handle_review=true
           fi
         fi
