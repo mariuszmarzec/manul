@@ -526,1022 +526,1023 @@ $review_prompt"
       | join("\n\n")
     ' <<<"$review_comments_json")"
 
-    # Keep every comment from this submitted review in one task, while letting
-    # the agent choose the most efficient safe implementation plan.
-    review_prompt+=$'\n\n'
-    review_prompt+="All inline comments below were submitted together as one GitHub review. Treat them as one coordinated request set: inventory every comment before editing, then choose the most efficient safe plan. Combine related or dependent feedback into a cohesive change; split independent, conflicting, or separately verifiable feedback into distinct ordered workstreams/subtasks; parallelize only when the runtime supports it and the changes cannot conflict. Address every comment and preserve its acceptance criteria. After the work, post a concise reply in every distinct inline thread identified by its Thread root ID, explaining how that feedback was handled (including if it was already fixed or no change was appropriate). Use the GitHub pull-request review-comment reply API with the thread root comment ID; only reply once when multiple comments share a root. These per-thread replies are supplementary and MUST NOT contain the Manul task/attempt marker. Also post exactly one canonical result comment on this task's PR conversation containing the normal marker. Do not report completion until all distinct threads have replies and the canonical result comment is verified."
-    review_prompt+=$'\n\n'
+    # Keep the whole review in one task and let the agent plan its workstreams.
+    # Reply to each distinct inline thread and reserve the marker for the
+    # canonical result comment.
+    review_prompt+=
+  fi
+
+  # State machine: handle based on existing review status
+  case "$review_status" in
+    completed)
+      # Already completed successfully - skip
+      local result
+      result=$(jq -n \
+        --arg reviewId "$review_id" \
+        --arg action "$action" \
+        --arg conversationId "$conv_id" \
+        --arg parentTaskId "${task_id:-}" \
+        --argjson prNumber "$PR_NUMBER" \
+        --arg reviewPrompt "${review_prompt:0:200}" \
+        '{
+          reviewId: $reviewId,
+          action: $action,
+          conversationId: $conversationId,
+          newTaskId: null,
+          parentTaskId: $parentTaskId,
+          prNumber: $prNumber,
+          reviewPrompt: $reviewPrompt,
+           createdTask: false,
+           duplicate: true,
+           skipped: true,
+           timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+         }')
+       echo "$result" | jq .
+       return 0
+       ;;
+
+    task_created)
+      # Task was created in a previous run - reuse it (crash recovery)
+      if [ -n "$existing_task_id" ]; then
+        echo "dispatch: review $review_id already has task $existing_task_id, reusing" >&2
+        local result
+        result=$(jq -n \
+          --arg reviewId "$review_id" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg newTaskId "$existing_task_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          --arg reviewPrompt "${review_prompt:0:200}" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: $newTaskId,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            reviewPrompt: $reviewPrompt,
+             createdTask: true,
+             reused: true,
+             skipped: true,
+             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+           }')
+         echo "$result" | jq .
+         return 0
+       else
+         # Corrupted state: task_created but no taskId - treat as pending
+        echo "dispatch: review $review_id has task_created without taskId, recovering" >&2
+        review_status=""
+        existing_task_id=""
+      fi
+      ;;
+
+    pending)
+      # Review claimed but task not yet created - check if taskId was stored
+      if [ -n "$existing_task_id" ]; then
+        # Should not happen (task_created should have taskId), but handle gracefully
+        echo "dispatch: review $review_id has pending status with taskId $existing_task_id, updating to task_created" >&2
+      if [ -n "$DB" ] && [ -f "$DB" ]; then
+        sqlite3 "$DB" "UPDATE processed_comments SET status='task_created' WHERE commentId='$review_comment_id' AND status='pending';" || {
+          echo "ERROR: failed to update review $review_id status to task_created" >&2
+          return 1
+        }
+      fi
+        local result
+        result=$(jq -n \
+          --arg reviewId "$review_id" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg newTaskId "$existing_task_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          --arg reviewPrompt "${review_prompt:0:200}" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: $newTaskId,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            reviewPrompt: $reviewPrompt,
+             createdTask: true,
+             reused: true,
+             skipped: true,
+             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+           }')
+         echo "$result" | jq .
+         return 0
+       fi
+       # No taskId yet - proceed to create task (fall through)
+      ;;
+
+    failed)
+      # Previous attempt failed - retry without deleting (task may already exist)
+      echo "dispatch: review $review_id previously failed, retrying" >&2
+      review_status=""
+      existing_task_id=""
+      ;;
+
+    "")
+      # No existing record - proceed to create
+      ;;
+
+    *)
+      # Unknown state - retry without deleting (task may already exist)
+      echo "dispatch: review $review_id has unknown status '$review_status', retrying" >&2
+      review_status=""
+      existing_task_id=""
+      ;;
+  esac
+
+  # ========================================================================
+  # Phase 4: Claim the review (only if no existing record)
+  # ========================================================================
+  if [ -n "$DB" ] && [ -f "$DB" ] && [ -z "$review_status" ]; then
+    # No existing record - insert as pending
+    local insert_result
+    insert_result="$(sqlite3_retry "BEGIN IMMEDIATE; INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER); SELECT changes(); COMMIT;" 5)" || {
+      echo "ERROR: failed to claim review $review_id" >&2
+      return 1
+    }
+    local inserted="${insert_result%%$'
+'*}"
+    if [ "${inserted:-0}" -eq 0 ]; then
+      # Race condition: another process inserted first, read its state
+      echo "dispatch: duplicate review $review_id during claim (race), reading state" >&2
+       local race_status race_task
+       local race_retry=0
+       local race_max_retries=5
+       while [ $race_retry -lt $race_max_retries ]; do
+         if ! race_status="$(sqlite3_retry "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 3)"; then
+           echo "ERROR: SQLite query failed during race condition resolution for $review_id" >&2
+           return 1
+         fi
+         if [ -n "$race_status" ]; then
+          local rs rt
+          rs="$(echo "$race_status" | cut -d'|' -f1)"
+          rt="$(echo "$race_status" | cut -d'|' -f2)"
+          if [ "$rs" = "task_created" ] && [ -n "$rt" ]; then
+            local result
+            result=$(jq -n \
+              --arg reviewId "$review_id" \
+              --arg action "$action" \
+              --arg conversationId "$conv_id" \
+              --arg newTaskId "$rt" \
+              --arg parentTaskId "${task_id:-}" \
+              --argjson prNumber "$PR_NUMBER" \
+              '{
+                reviewId: $reviewId,
+                action: $action,
+                conversationId: $conversationId,
+                newTaskId: $newTaskId,
+                parentTaskId: $parentTaskId,
+                prNumber: $prNumber,
+                 createdTask: true,
+                 reused: true,
+                 skipped: true,
+                 timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+               }')
+             echo "$result" | jq .
+             return 0
+           fi
+           # Race resulted in pending or other state - wait and retry
+          if [ "$rs" = "pending" ] && [ $race_retry -lt $((race_max_retries - 1)) ]; then
+            race_retry=$((race_retry + 1))
+            sleep "0.0$((race_retry * 2))"
+            continue
+          fi
+         fi
+         # Fall through to create our own task
+         break
+       done
+    fi
+  fi
+
+  # ========================================================================
+  # Phase 5: Create REVIEW_FIX task via manul-conversation.sh
+  # ========================================================================
+  if [ -z "$conv_id" ]; then
+    error_exit "No conversation found for PR #$PR_NUMBER" 2
+  fi
+
+  local submit_args=(
+    --conversation-id "$conv_id"
+    --prompt "$review_prompt"
+    --action REVIEW_FIX
+    --pr-number "$PR_NUMBER"
+    --review-id "$REVIEW_ID"
+  )
+
+  if [ -n "$task_id" ]; then
+    submit_args+=(--parent-task-id "$task_id")
+  fi
+
+  local submit_output=""
+  if [ -f "${MANUL_DIR}/manul-conversation.sh" ]; then
+    submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || {
+      # Submit failed - check if concurrent process already created the task
+      local submit_fail_retry=0
+      local submit_fail_max_retries=3
+      local recovered_task_id=""
+      while [ $submit_fail_retry -lt $submit_fail_max_retries ]; do
+        if [ -n "$DB" ] && [ -f "$DB" ]; then
+          recovered_task_id="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' AND status='task_created' LIMIT 1;" 3)" || true
+        fi
+        if [ -n "$recovered_task_id" ]; then
+          echo "dispatch: review $review_id: submit failed but concurrent process created task $recovered_task_id, recovering" >&2
+          submit_output=$(jq -n \
+            --arg taskId "$recovered_task_id" \
+            '{taskId: $taskId}')
+          break
+        fi
+        # Wait and retry
+        if [ $submit_fail_retry -lt $((submit_fail_max_retries - 1)) ]; then
+          submit_fail_retry=$((submit_fail_retry + 1))
+          sleep "0.0$((submit_fail_retry * 2))"
+          continue
+        fi
+      done
+      if [ -z "$submit_output" ] || [ -z "$(echo "$submit_output" | jq -r '.taskId // empty')" ]; then
+        # No task found - update review to failed state (with retry for SQLite lock)
+        if [ -n "$DB" ] && [ -f "$DB" ]; then
+          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+        fi
+        local fail_result
+        fail_result=$(jq -n \
+          --arg reviewId "$REVIEW_ID" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: null,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            createdTask: false,
+            error: "submit_failed",
+            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+          }')
+        echo "$fail_result" | jq .
+        return 1
+      fi
+    }
+  else
+    # manul-conversation.sh not found - cannot create task
+    if [ -n "$DB" ] && [ -f "$DB" ]; then
+      sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+    fi
+    local fail_result
+    fail_result=$(jq -n \
+      --arg reviewId "$REVIEW_ID" \
+      --arg action "$action" \
+      --arg conversationId "$conv_id" \
+      --arg parentTaskId "${task_id:-}" \
+      --argjson prNumber "$PR_NUMBER" \
+      '{
+        reviewId: $reviewId,
+        action: $action,
+        conversationId: $conversationId,
+        newTaskId: null,
+        parentTaskId: $parentTaskId,
+        prNumber: $prNumber,
+        createdTask: false,
+        error: "conversation_script_missing",
+        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+      }')
+    echo "$fail_result" | jq .
+    return 1
+  fi
+
+  # ========================================================================
+  # Phase 6: Extract taskId and record atomically
+  # ========================================================================
+  local new_task_id=""
+  local submit_success=false
+
+  if [ -n "$submit_output" ]; then
+    new_task_id="$(echo "$submit_output" | jq -r '.taskId // empty')"
+    if [ -n "$new_task_id" ]; then
+      submit_success=true
+    fi
+  fi
+
+  if [ "$submit_success" = false ]; then
+    # Submit returned no taskId - check if concurrent process already created the task
+    local recovered_task_id=""
+    if [ "$action" = "REQUEST_CHANGES" ] && [ -n "$conv_id" ] && [ -n "$REVIEW_ID" ]; then
+      # For REVIEW_FIX actions, the task_id is deterministic: review-fix-{conv_id}-{review_id}
+      # Check if a concurrent process already created it
+      recovered_task_id="$(sqlite3_retry "SELECT commentId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
+    fi
+
+    if [ -n "$recovered_task_id" ]; then
+      # Concurrent process created the task - recover and use it
+      echo "dispatch: review $review_id: concurrent process created task $recovered_task_id, recovering" >&2
+      new_task_id="$recovered_task_id"
+      submit_success=true
+    else
+      # No task found - genuinely failed
+      if [ -n "$DB" ] && [ -f "$DB" ]; then
+        sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+      fi
+      local fail_result
+      fail_result=$(jq -n \
+        --arg reviewId "$REVIEW_ID" \
+        --arg action "$action" \
+        --arg conversationId "$conv_id" \
+        --arg parentTaskId "${task_id:-}" \
+        --argjson prNumber "$PR_NUMBER" \
+        '{
+          reviewId: $reviewId,
+          action: $action,
+          conversationId: $conversationId,
+          newTaskId: null,
+          parentTaskId: $parentTaskId,
+          prNumber: $prNumber,
+          createdTask: false,
+          error: "submit_failed",
+          timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+        }')
+      echo "$fail_result" | jq .
+      return 1
+    fi
+  fi
+
+  # ========================================================================
+  # Phase 6.5: Test crash injection point (kill after submit, before taskId record)
+  # ========================================================================
+  if [ "${MANUL_TEST_CRASH_AFTER_SUBMIT:-}" = "1" ]; then
+    echo "CRASHED_AFTER_SUBMIT" > "${TEST_DIR:-/tmp}/.crash_marker"
+    kill -9 "$BASHPID"
+  fi
+
+  # ========================================================================
+  # Phase 7: Record taskId atomically - transition pending -> task_created
+  # ========================================================================
+  if [ -n "$DB" ] && [ -f "$DB" ]; then
+    # Atomic transition: only update if still pending (prevents race with concurrent reviews)
+    local update_result
+    update_result="$(sqlite3_retry "BEGIN IMMEDIATE; UPDATE processed_comments SET status='task_created', taskId='$new_task_id', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending'; SELECT changes(); COMMIT;" 5)" || {
+      echo "ERROR: failed to record taskId for review $review_id" >&2
+      return 1
+    }
+    local rows_updated="${update_result%%$'
+'*}"
+    if [ "${rows_updated:-0}" -eq 0 ]; then
+      # Another process already claimed this review - look up their taskId
+      echo "dispatch: review $review_id was claimed by concurrent process, looking up taskId" >&2
+      local lookup_result
+      local lookup_retry=0
+      local lookup_max_retries=5
+      while [ $lookup_retry -lt $lookup_max_retries ]; do
+        lookup_result="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 5)" || {
+          echo "ERROR: SQLite query failed looking up concurrent taskId for $review_id" >&2
+          return 1
+        }
+        if [ -n "$lookup_result" ]; then
+          new_task_id="$lookup_result"
+          break
+        fi
+        # TaskId not set yet - wait and retry
+        if [ $lookup_retry -lt $((lookup_max_retries - 1)) ]; then
+          lookup_retry=$((lookup_retry + 1))
+          sleep "0.0$((lookup_retry * 2))"
+          continue
+        fi
+        # Max retries reached - check if REVIEW_FIX task exists
+        break
+      done
+      if [ -z "$new_task_id" ]; then
+        # Check if task was created by concurrent process before marking as failed
+        local existing_task
+        existing_task="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
+        if [ -n "$existing_task" ]; then
+          # Task exists - another process created it successfully
+          new_task_id="$existing_task"
+          echo "dispatch: review $review_id: concurrent process created task $existing_task, recovering" >&2
+        else
+          # Both processes failed - mark as failed
+          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+          local fail_result
+          fail_result=$(jq -n \
+            --arg reviewId "$REVIEW_ID" \
+            --arg action "$action" \
+            --arg conversationId "$conv_id" \
+            --arg parentTaskId "${task_id:-}" \
+            --argjson prNumber "$PR_NUMBER" \
+            '{
+              reviewId: $reviewId,
+              action: $action,
+              conversationId: $conversationId,
+              newTaskId: null,
+              parentTaskId: $parentTaskId,
+              prNumber: $prNumber,
+              createdTask: false,
+              error: "concurrent_claim_failed",
+              timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+            }')
+          echo "$fail_result" | jq .
+          return 1
+        fi
+      fi
+    fi
+  fi
+
+  # ========================================================================
+  # Phase 8: Return success with taskId
+  # ========================================================================
+  local result
+  result=$(jq -n \
+    --arg reviewId "$REVIEW_ID" \
+    --arg action "$action" \
+    --arg conversationId "$conv_id" \
+    --arg newTaskId "$new_task_id" \
+    --arg parentTaskId "${task_id:-}" \
+    --argjson prNumber "$PR_NUMBER" \
+    --arg reviewPrompt "${review_prompt:0:200}" \
+    '{
+      reviewId: $reviewId,
+      action: $action,
+      conversationId: $conversationId,
+      newTaskId: $newTaskId,
+      parentTaskId: $parentTaskId,
+      prNumber: $prNumber,
+      reviewPrompt: $reviewPrompt,
+      createdTask: true,
+      timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+    }')
+
+  echo "$result" | jq .
+  return 0
+}
+
+# Get conversation info for a PR
+cmd_get_conversation() {
+  if [ -z "$REPO" ] || [ -z "$PR_NUMBER" ]; then
+    error_exit "get-conversation requires --repo and --pr-number" 3
+  fi
+
+  get_pr_context "$REPO" "$PR_NUMBER"
+}
+
+# List reviews for a PR
+cmd_list_reviews() {
+  if [ -z "$REPO" ] || [ -z "$PR_NUMBER" ]; then
+    error_exit "list-reviews requires --repo and --pr-number" 3
+  fi
+
+  local reviews="[]"
+
+  if command -v gh >/dev/null 2>&1; then
+    reviews="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null | jq '.' || echo '[]')"
+  fi
+
+  local result
+  result=$(jq -n \
+    --argjson reviews "$reviews" \
+    --arg repo "$REPO" \
+    --argjson prNumber "$PR_NUMBER" \
+    '{
+      repo: $repo,
+      prNumber: $prNumber,
+      reviews: $reviews,
+      reviewCount: ($reviews | length)
+    }')
+
+  echo "$result" | jq .
+}
+
+# Main dispatch
+case "${ACTION:-}" in
+  handle) cmd_handle ;;
+  get-conversation) cmd_get_conversation ;;
+  list-reviews) cmd_list_reviews ;;
+  "")
+    echo "Usage: manul-pr-review.sh <command> [options]" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  handle           Handle an incoming PR review" >&2
+    echo "  get-conversation Get conversation context for a PR" >&2
+    echo "  list-reviews     List reviews for a PR" >&2
+    exit 3
+    ;;
+  *)
+    error_exit "Unknown command: $ACTION" 3
+    ;;
+esac
+\n\n'
+    review_prompt+="All inline comments below were submitted together as one GitHub review. Inventory every comment before editing and choose the most efficient safe plan. Combine related or dependent feedback into one cohesive change; split independent or conflicting feedback into distinct ordered workstreams/subtasks; parallelize only when the runtime supports it and the changes cannot conflict. Address every comment and preserve its acceptance criteria. After the work, post a concise reply in every distinct inline thread identified by its Thread root ID, explaining how that feedback was handled (including if it was already fixed or no change was appropriate). Use the GitHub pull-request review-comment reply API with the thread root comment ID; only reply once when multiple comments share a root. These per-thread replies are supplementary and MUST NOT contain the Manul task/attempt marker. Also post exactly one canonical result comment on this task's PR conversation containing the normal marker. Do not report completion until all distinct threads have replies and the canonical result comment is verified."
+    review_prompt+=
+  fi
+
+  # State machine: handle based on existing review status
+  case "$review_status" in
+    completed)
+      # Already completed successfully - skip
+      local result
+      result=$(jq -n \
+        --arg reviewId "$review_id" \
+        --arg action "$action" \
+        --arg conversationId "$conv_id" \
+        --arg parentTaskId "${task_id:-}" \
+        --argjson prNumber "$PR_NUMBER" \
+        --arg reviewPrompt "${review_prompt:0:200}" \
+        '{
+          reviewId: $reviewId,
+          action: $action,
+          conversationId: $conversationId,
+          newTaskId: null,
+          parentTaskId: $parentTaskId,
+          prNumber: $prNumber,
+          reviewPrompt: $reviewPrompt,
+           createdTask: false,
+           duplicate: true,
+           skipped: true,
+           timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+         }')
+       echo "$result" | jq .
+       return 0
+       ;;
+
+    task_created)
+      # Task was created in a previous run - reuse it (crash recovery)
+      if [ -n "$existing_task_id" ]; then
+        echo "dispatch: review $review_id already has task $existing_task_id, reusing" >&2
+        local result
+        result=$(jq -n \
+          --arg reviewId "$review_id" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg newTaskId "$existing_task_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          --arg reviewPrompt "${review_prompt:0:200}" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: $newTaskId,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            reviewPrompt: $reviewPrompt,
+             createdTask: true,
+             reused: true,
+             skipped: true,
+             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+           }')
+         echo "$result" | jq .
+         return 0
+       else
+         # Corrupted state: task_created but no taskId - treat as pending
+        echo "dispatch: review $review_id has task_created without taskId, recovering" >&2
+        review_status=""
+        existing_task_id=""
+      fi
+      ;;
+
+    pending)
+      # Review claimed but task not yet created - check if taskId was stored
+      if [ -n "$existing_task_id" ]; then
+        # Should not happen (task_created should have taskId), but handle gracefully
+        echo "dispatch: review $review_id has pending status with taskId $existing_task_id, updating to task_created" >&2
+      if [ -n "$DB" ] && [ -f "$DB" ]; then
+        sqlite3 "$DB" "UPDATE processed_comments SET status='task_created' WHERE commentId='$review_comment_id' AND status='pending';" || {
+          echo "ERROR: failed to update review $review_id status to task_created" >&2
+          return 1
+        }
+      fi
+        local result
+        result=$(jq -n \
+          --arg reviewId "$review_id" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg newTaskId "$existing_task_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          --arg reviewPrompt "${review_prompt:0:200}" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: $newTaskId,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            reviewPrompt: $reviewPrompt,
+             createdTask: true,
+             reused: true,
+             skipped: true,
+             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+           }')
+         echo "$result" | jq .
+         return 0
+       fi
+       # No taskId yet - proceed to create task (fall through)
+      ;;
+
+    failed)
+      # Previous attempt failed - retry without deleting (task may already exist)
+      echo "dispatch: review $review_id previously failed, retrying" >&2
+      review_status=""
+      existing_task_id=""
+      ;;
+
+    "")
+      # No existing record - proceed to create
+      ;;
+
+    *)
+      # Unknown state - retry without deleting (task may already exist)
+      echo "dispatch: review $review_id has unknown status '$review_status', retrying" >&2
+      review_status=""
+      existing_task_id=""
+      ;;
+  esac
+
+  # ========================================================================
+  # Phase 4: Claim the review (only if no existing record)
+  # ========================================================================
+  if [ -n "$DB" ] && [ -f "$DB" ] && [ -z "$review_status" ]; then
+    # No existing record - insert as pending
+    local insert_result
+    insert_result="$(sqlite3_retry "BEGIN IMMEDIATE; INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER); SELECT changes(); COMMIT;" 5)" || {
+      echo "ERROR: failed to claim review $review_id" >&2
+      return 1
+    }
+    local inserted="${insert_result%%$'
+'*}"
+    if [ "${inserted:-0}" -eq 0 ]; then
+      # Race condition: another process inserted first, read its state
+      echo "dispatch: duplicate review $review_id during claim (race), reading state" >&2
+       local race_status race_task
+       local race_retry=0
+       local race_max_retries=5
+       while [ $race_retry -lt $race_max_retries ]; do
+         if ! race_status="$(sqlite3_retry "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 3)"; then
+           echo "ERROR: SQLite query failed during race condition resolution for $review_id" >&2
+           return 1
+         fi
+         if [ -n "$race_status" ]; then
+          local rs rt
+          rs="$(echo "$race_status" | cut -d'|' -f1)"
+          rt="$(echo "$race_status" | cut -d'|' -f2)"
+          if [ "$rs" = "task_created" ] && [ -n "$rt" ]; then
+            local result
+            result=$(jq -n \
+              --arg reviewId "$review_id" \
+              --arg action "$action" \
+              --arg conversationId "$conv_id" \
+              --arg newTaskId "$rt" \
+              --arg parentTaskId "${task_id:-}" \
+              --argjson prNumber "$PR_NUMBER" \
+              '{
+                reviewId: $reviewId,
+                action: $action,
+                conversationId: $conversationId,
+                newTaskId: $newTaskId,
+                parentTaskId: $parentTaskId,
+                prNumber: $prNumber,
+                 createdTask: true,
+                 reused: true,
+                 skipped: true,
+                 timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+               }')
+             echo "$result" | jq .
+             return 0
+           fi
+           # Race resulted in pending or other state - wait and retry
+          if [ "$rs" = "pending" ] && [ $race_retry -lt $((race_max_retries - 1)) ]; then
+            race_retry=$((race_retry + 1))
+            sleep "0.0$((race_retry * 2))"
+            continue
+          fi
+         fi
+         # Fall through to create our own task
+         break
+       done
+    fi
+  fi
+
+  # ========================================================================
+  # Phase 5: Create REVIEW_FIX task via manul-conversation.sh
+  # ========================================================================
+  if [ -z "$conv_id" ]; then
+    error_exit "No conversation found for PR #$PR_NUMBER" 2
+  fi
+
+  local submit_args=(
+    --conversation-id "$conv_id"
+    --prompt "$review_prompt"
+    --action REVIEW_FIX
+    --pr-number "$PR_NUMBER"
+    --review-id "$REVIEW_ID"
+  )
+
+  if [ -n "$task_id" ]; then
+    submit_args+=(--parent-task-id "$task_id")
+  fi
+
+  local submit_output=""
+  if [ -f "${MANUL_DIR}/manul-conversation.sh" ]; then
+    submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || {
+      # Submit failed - check if concurrent process already created the task
+      local submit_fail_retry=0
+      local submit_fail_max_retries=3
+      local recovered_task_id=""
+      while [ $submit_fail_retry -lt $submit_fail_max_retries ]; do
+        if [ -n "$DB" ] && [ -f "$DB" ]; then
+          recovered_task_id="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' AND status='task_created' LIMIT 1;" 3)" || true
+        fi
+        if [ -n "$recovered_task_id" ]; then
+          echo "dispatch: review $review_id: submit failed but concurrent process created task $recovered_task_id, recovering" >&2
+          submit_output=$(jq -n \
+            --arg taskId "$recovered_task_id" \
+            '{taskId: $taskId}')
+          break
+        fi
+        # Wait and retry
+        if [ $submit_fail_retry -lt $((submit_fail_max_retries - 1)) ]; then
+          submit_fail_retry=$((submit_fail_retry + 1))
+          sleep "0.0$((submit_fail_retry * 2))"
+          continue
+        fi
+      done
+      if [ -z "$submit_output" ] || [ -z "$(echo "$submit_output" | jq -r '.taskId // empty')" ]; then
+        # No task found - update review to failed state (with retry for SQLite lock)
+        if [ -n "$DB" ] && [ -f "$DB" ]; then
+          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+        fi
+        local fail_result
+        fail_result=$(jq -n \
+          --arg reviewId "$REVIEW_ID" \
+          --arg action "$action" \
+          --arg conversationId "$conv_id" \
+          --arg parentTaskId "${task_id:-}" \
+          --argjson prNumber "$PR_NUMBER" \
+          '{
+            reviewId: $reviewId,
+            action: $action,
+            conversationId: $conversationId,
+            newTaskId: null,
+            parentTaskId: $parentTaskId,
+            prNumber: $prNumber,
+            createdTask: false,
+            error: "submit_failed",
+            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+          }')
+        echo "$fail_result" | jq .
+        return 1
+      fi
+    }
+  else
+    # manul-conversation.sh not found - cannot create task
+    if [ -n "$DB" ] && [ -f "$DB" ]; then
+      sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+    fi
+    local fail_result
+    fail_result=$(jq -n \
+      --arg reviewId "$REVIEW_ID" \
+      --arg action "$action" \
+      --arg conversationId "$conv_id" \
+      --arg parentTaskId "${task_id:-}" \
+      --argjson prNumber "$PR_NUMBER" \
+      '{
+        reviewId: $reviewId,
+        action: $action,
+        conversationId: $conversationId,
+        newTaskId: null,
+        parentTaskId: $parentTaskId,
+        prNumber: $prNumber,
+        createdTask: false,
+        error: "conversation_script_missing",
+        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+      }')
+    echo "$fail_result" | jq .
+    return 1
+  fi
+
+  # ========================================================================
+  # Phase 6: Extract taskId and record atomically
+  # ========================================================================
+  local new_task_id=""
+  local submit_success=false
+
+  if [ -n "$submit_output" ]; then
+    new_task_id="$(echo "$submit_output" | jq -r '.taskId // empty')"
+    if [ -n "$new_task_id" ]; then
+      submit_success=true
+    fi
+  fi
+
+  if [ "$submit_success" = false ]; then
+    # Submit returned no taskId - check if concurrent process already created the task
+    local recovered_task_id=""
+    if [ "$action" = "REQUEST_CHANGES" ] && [ -n "$conv_id" ] && [ -n "$REVIEW_ID" ]; then
+      # For REVIEW_FIX actions, the task_id is deterministic: review-fix-{conv_id}-{review_id}
+      # Check if a concurrent process already created it
+      recovered_task_id="$(sqlite3_retry "SELECT commentId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
+    fi
+
+    if [ -n "$recovered_task_id" ]; then
+      # Concurrent process created the task - recover and use it
+      echo "dispatch: review $review_id: concurrent process created task $recovered_task_id, recovering" >&2
+      new_task_id="$recovered_task_id"
+      submit_success=true
+    else
+      # No task found - genuinely failed
+      if [ -n "$DB" ] && [ -f "$DB" ]; then
+        sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+      fi
+      local fail_result
+      fail_result=$(jq -n \
+        --arg reviewId "$REVIEW_ID" \
+        --arg action "$action" \
+        --arg conversationId "$conv_id" \
+        --arg parentTaskId "${task_id:-}" \
+        --argjson prNumber "$PR_NUMBER" \
+        '{
+          reviewId: $reviewId,
+          action: $action,
+          conversationId: $conversationId,
+          newTaskId: null,
+          parentTaskId: $parentTaskId,
+          prNumber: $prNumber,
+          createdTask: false,
+          error: "submit_failed",
+          timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+        }')
+      echo "$fail_result" | jq .
+      return 1
+    fi
+  fi
+
+  # ========================================================================
+  # Phase 6.5: Test crash injection point (kill after submit, before taskId record)
+  # ========================================================================
+  if [ "${MANUL_TEST_CRASH_AFTER_SUBMIT:-}" = "1" ]; then
+    echo "CRASHED_AFTER_SUBMIT" > "${TEST_DIR:-/tmp}/.crash_marker"
+    kill -9 "$BASHPID"
+  fi
+
+  # ========================================================================
+  # Phase 7: Record taskId atomically - transition pending -> task_created
+  # ========================================================================
+  if [ -n "$DB" ] && [ -f "$DB" ]; then
+    # Atomic transition: only update if still pending (prevents race with concurrent reviews)
+    local update_result
+    update_result="$(sqlite3_retry "BEGIN IMMEDIATE; UPDATE processed_comments SET status='task_created', taskId='$new_task_id', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending'; SELECT changes(); COMMIT;" 5)" || {
+      echo "ERROR: failed to record taskId for review $review_id" >&2
+      return 1
+    }
+    local rows_updated="${update_result%%$'
+'*}"
+    if [ "${rows_updated:-0}" -eq 0 ]; then
+      # Another process already claimed this review - look up their taskId
+      echo "dispatch: review $review_id was claimed by concurrent process, looking up taskId" >&2
+      local lookup_result
+      local lookup_retry=0
+      local lookup_max_retries=5
+      while [ $lookup_retry -lt $lookup_max_retries ]; do
+        lookup_result="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 5)" || {
+          echo "ERROR: SQLite query failed looking up concurrent taskId for $review_id" >&2
+          return 1
+        }
+        if [ -n "$lookup_result" ]; then
+          new_task_id="$lookup_result"
+          break
+        fi
+        # TaskId not set yet - wait and retry
+        if [ $lookup_retry -lt $((lookup_max_retries - 1)) ]; then
+          lookup_retry=$((lookup_retry + 1))
+          sleep "0.0$((lookup_retry * 2))"
+          continue
+        fi
+        # Max retries reached - check if REVIEW_FIX task exists
+        break
+      done
+      if [ -z "$new_task_id" ]; then
+        # Check if task was created by concurrent process before marking as failed
+        local existing_task
+        existing_task="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
+        if [ -n "$existing_task" ]; then
+          # Task exists - another process created it successfully
+          new_task_id="$existing_task"
+          echo "dispatch: review $review_id: concurrent process created task $existing_task, recovering" >&2
+        else
+          # Both processes failed - mark as failed
+          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
+          local fail_result
+          fail_result=$(jq -n \
+            --arg reviewId "$REVIEW_ID" \
+            --arg action "$action" \
+            --arg conversationId "$conv_id" \
+            --arg parentTaskId "${task_id:-}" \
+            --argjson prNumber "$PR_NUMBER" \
+            '{
+              reviewId: $reviewId,
+              action: $action,
+              conversationId: $conversationId,
+              newTaskId: null,
+              parentTaskId: $parentTaskId,
+              prNumber: $prNumber,
+              createdTask: false,
+              error: "concurrent_claim_failed",
+              timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+            }')
+          echo "$fail_result" | jq .
+          return 1
+        fi
+      fi
+    fi
+  fi
+
+  # ========================================================================
+  # Phase 8: Return success with taskId
+  # ========================================================================
+  local result
+  result=$(jq -n \
+    --arg reviewId "$REVIEW_ID" \
+    --arg action "$action" \
+    --arg conversationId "$conv_id" \
+    --arg newTaskId "$new_task_id" \
+    --arg parentTaskId "${task_id:-}" \
+    --argjson prNumber "$PR_NUMBER" \
+    --arg reviewPrompt "${review_prompt:0:200}" \
+    '{
+      reviewId: $reviewId,
+      action: $action,
+      conversationId: $conversationId,
+      newTaskId: $newTaskId,
+      parentTaskId: $parentTaskId,
+      prNumber: $prNumber,
+      reviewPrompt: $reviewPrompt,
+      createdTask: true,
+      timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+    }')
+
+  echo "$result" | jq .
+  return 0
+}
+
+# Get conversation info for a PR
+cmd_get_conversation() {
+  if [ -z "$REPO" ] || [ -z "$PR_NUMBER" ]; then
+    error_exit "get-conversation requires --repo and --pr-number" 3
+  fi
+
+  get_pr_context "$REPO" "$PR_NUMBER"
+}
+
+# List reviews for a PR
+cmd_list_reviews() {
+  if [ -z "$REPO" ] || [ -z "$PR_NUMBER" ]; then
+    error_exit "list-reviews requires --repo and --pr-number" 3
+  fi
+
+  local reviews="[]"
+
+  if command -v gh >/dev/null 2>&1; then
+    reviews="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null | jq '.' || echo '[]')"
+  fi
+
+  local result
+  result=$(jq -n \
+    --argjson reviews "$reviews" \
+    --arg repo "$REPO" \
+    --argjson prNumber "$PR_NUMBER" \
+    '{
+      repo: $repo,
+      prNumber: $prNumber,
+      reviews: $reviews,
+      reviewCount: ($reviews | length)
+    }')
+
+  echo "$result" | jq .
+}
+
+# Main dispatch
+case "${ACTION:-}" in
+  handle) cmd_handle ;;
+  get-conversation) cmd_get_conversation ;;
+  list-reviews) cmd_list_reviews ;;
+  "")
+    echo "Usage: manul-pr-review.sh <command> [options]" >&2
+    echo "" >&2
+    echo "Commands:" >&2
+    echo "  handle           Handle an incoming PR review" >&2
+    echo "  get-conversation Get conversation context for a PR" >&2
+    echo "  list-reviews     List reviews for a PR" >&2
+    exit 3
+    ;;
+  *)
+    error_exit "Unknown command: $ACTION" 3
+    ;;
+esac
+\n\n'
     review_prompt+="Inline review comments:\n$inline_review_prompt"
-  fi
-
-  # State machine: handle based on existing review status
-  case "$review_status" in
-    completed)
-      # Already completed successfully - skip
-      local result
-      result=$(jq -n \
-        --arg reviewId "$review_id" \
-        --arg action "$action" \
-        --arg conversationId "$conv_id" \
-        --arg parentTaskId "${task_id:-}" \
-        --argjson prNumber "$PR_NUMBER" \
-        --arg reviewPrompt "${review_prompt:0:200}" \
-        '{
-          reviewId: $reviewId,
-          action: $action,
-          conversationId: $conversationId,
-          newTaskId: null,
-          parentTaskId: $parentTaskId,
-          prNumber: $prNumber,
-          reviewPrompt: $reviewPrompt,
-           createdTask: false,
-           duplicate: true,
-           skipped: true,
-           timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-         }')
-       echo "$result" | jq .
-       return 0
-       ;;
-
-    task_created)
-      # Task was created in a previous run - reuse it (crash recovery)
-      if [ -n "$existing_task_id" ]; then
-        echo "dispatch: review $review_id already has task $existing_task_id, reusing" >&2
-        local result
-        result=$(jq -n \
-          --arg reviewId "$review_id" \
-          --arg action "$action" \
-          --arg conversationId "$conv_id" \
-          --arg newTaskId "$existing_task_id" \
-          --arg parentTaskId "${task_id:-}" \
-          --argjson prNumber "$PR_NUMBER" \
-          --arg reviewPrompt "${review_prompt:0:200}" \
-          '{
-            reviewId: $reviewId,
-            action: $action,
-            conversationId: $conversationId,
-            newTaskId: $newTaskId,
-            parentTaskId: $parentTaskId,
-            prNumber: $prNumber,
-            reviewPrompt: $reviewPrompt,
-             createdTask: true,
-             reused: true,
-             skipped: true,
-             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-           }')
-         echo "$result" | jq .
-         return 0
-       else
-         # Corrupted state: task_created but no taskId - treat as pending
-        echo "dispatch: review $review_id has task_created without taskId, recovering" >&2
-        review_status=""
-        existing_task_id=""
-      fi
-      ;;
-
-    pending)
-      # Review claimed but task not yet created - check if taskId was stored
-      if [ -n "$existing_task_id" ]; then
-        # Should not happen (task_created should have taskId), but handle gracefully
-        echo "dispatch: review $review_id has pending status with taskId $existing_task_id, updating to task_created" >&2
-      if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3 "$DB" "UPDATE processed_comments SET status='task_created' WHERE commentId='$review_comment_id' AND status='pending';" || {
-          echo "ERROR: failed to update review $review_id status to task_created" >&2
-          return 1
-        }
-      fi
-        local result
-        result=$(jq -n \
-          --arg reviewId "$review_id" \
-          --arg action "$action" \
-          --arg conversationId "$conv_id" \
-          --arg newTaskId "$existing_task_id" \
-          --arg parentTaskId "${task_id:-}" \
-          --argjson prNumber "$PR_NUMBER" \
-          --arg reviewPrompt "${review_prompt:0:200}" \
-          '{
-            reviewId: $reviewId,
-            action: $action,
-            conversationId: $conversationId,
-            newTaskId: $newTaskId,
-            parentTaskId: $parentTaskId,
-            prNumber: $prNumber,
-            reviewPrompt: $reviewPrompt,
-             createdTask: true,
-             reused: true,
-             skipped: true,
-             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-           }')
-         echo "$result" | jq .
-         return 0
-       fi
-       # No taskId yet - proceed to create task (fall through)
-      ;;
-
-    failed)
-      # Previous attempt failed - retry without deleting (task may already exist)
-      echo "dispatch: review $review_id previously failed, retrying" >&2
-      review_status=""
-      existing_task_id=""
-      ;;
-
-    "")
-      # No existing record - proceed to create
-      ;;
-
-    *)
-      # Unknown state - retry without deleting (task may already exist)
-      echo "dispatch: review $review_id has unknown status '$review_status', retrying" >&2
-      review_status=""
-      existing_task_id=""
-      ;;
-  esac
-
-  # ========================================================================
-  # Phase 4: Claim the review (only if no existing record)
-  # ========================================================================
-  if [ -n "$DB" ] && [ -f "$DB" ] && [ -z "$review_status" ]; then
-    # No existing record - insert as pending
-    local insert_result
-    insert_result="$(sqlite3_retry "BEGIN IMMEDIATE; INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER); SELECT changes(); COMMIT;" 5)" || {
-      echo "ERROR: failed to claim review $review_id" >&2
-      return 1
-    }
-    local inserted="${insert_result%%$'
-'*}"
-    if [ "${inserted:-0}" -eq 0 ]; then
-      # Race condition: another process inserted first, read its state
-      echo "dispatch: duplicate review $review_id during claim (race), reading state" >&2
-       local race_status race_task
-       local race_retry=0
-       local race_max_retries=5
-       while [ $race_retry -lt $race_max_retries ]; do
-         if ! race_status="$(sqlite3_retry "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 3)"; then
-           echo "ERROR: SQLite query failed during race condition resolution for $review_id" >&2
-           return 1
-         fi
-         if [ -n "$race_status" ]; then
-          local rs rt
-          rs="$(echo "$race_status" | cut -d'|' -f1)"
-          rt="$(echo "$race_status" | cut -d'|' -f2)"
-          if [ "$rs" = "task_created" ] && [ -n "$rt" ]; then
-            local result
-            result=$(jq -n \
-              --arg reviewId "$review_id" \
-              --arg action "$action" \
-              --arg conversationId "$conv_id" \
-              --arg newTaskId "$rt" \
-              --arg parentTaskId "${task_id:-}" \
-              --argjson prNumber "$PR_NUMBER" \
-              '{
-                reviewId: $reviewId,
-                action: $action,
-                conversationId: $conversationId,
-                newTaskId: $newTaskId,
-                parentTaskId: $parentTaskId,
-                prNumber: $prNumber,
-                 createdTask: true,
-                 reused: true,
-                 skipped: true,
-                 timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-               }')
-             echo "$result" | jq .
-             return 0
-           fi
-           # Race resulted in pending or other state - wait and retry
-          if [ "$rs" = "pending" ] && [ $race_retry -lt $((race_max_retries - 1)) ]; then
-            race_retry=$((race_retry + 1))
-            sleep "0.0$((race_retry * 2))"
-            continue
-          fi
-         fi
-         # Fall through to create our own task
-         break
-       done
-    fi
-  fi
-
-  # ========================================================================
-  # Phase 5: Create REVIEW_FIX task via manul-conversation.sh
-  # ========================================================================
-  if [ -z "$conv_id" ]; then
-    error_exit "No conversation found for PR #$PR_NUMBER" 2
-  fi
-
-  local submit_args=(
-    --conversation-id "$conv_id"
-    --prompt "$review_prompt"
-    --action REVIEW_FIX
-    --pr-number "$PR_NUMBER"
-    --review-id "$REVIEW_ID"
-  )
-
-  if [ -n "$task_id" ]; then
-    submit_args+=(--parent-task-id "$task_id")
-  fi
-
-  local submit_output=""
-  if [ -f "${MANUL_DIR}/manul-conversation.sh" ]; then
-    submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || {
-      # Submit failed - check if concurrent process already created the task
-      local submit_fail_retry=0
-      local submit_fail_max_retries=3
-      local recovered_task_id=""
-      while [ $submit_fail_retry -lt $submit_fail_max_retries ]; do
-        if [ -n "$DB" ] && [ -f "$DB" ]; then
-          recovered_task_id="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' AND status='task_created' LIMIT 1;" 3)" || true
-        fi
-        if [ -n "$recovered_task_id" ]; then
-          echo "dispatch: review $review_id: submit failed but concurrent process created task $recovered_task_id, recovering" >&2
-          submit_output=$(jq -n \
-            --arg taskId "$recovered_task_id" \
-            '{taskId: $taskId}')
-          break
-        fi
-        # Wait and retry
-        if [ $submit_fail_retry -lt $((submit_fail_max_retries - 1)) ]; then
-          submit_fail_retry=$((submit_fail_retry + 1))
-          sleep "0.0$((submit_fail_retry * 2))"
-          continue
-        fi
-      done
-      if [ -z "$submit_output" ] || [ -z "$(echo "$submit_output" | jq -r '.taskId // empty')" ]; then
-        # No task found - update review to failed state (with retry for SQLite lock)
-        if [ -n "$DB" ] && [ -f "$DB" ]; then
-          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
-        fi
-        local fail_result
-        fail_result=$(jq -n \
-          --arg reviewId "$REVIEW_ID" \
-          --arg action "$action" \
-          --arg conversationId "$conv_id" \
-          --arg parentTaskId "${task_id:-}" \
-          --argjson prNumber "$PR_NUMBER" \
-          '{
-            reviewId: $reviewId,
-            action: $action,
-            conversationId: $conversationId,
-            newTaskId: null,
-            parentTaskId: $parentTaskId,
-            prNumber: $prNumber,
-            createdTask: false,
-            error: "submit_failed",
-            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-          }')
-        echo "$fail_result" | jq .
-        return 1
-      fi
-    }
-  else
-    # manul-conversation.sh not found - cannot create task
-    if [ -n "$DB" ] && [ -f "$DB" ]; then
-      sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
-    fi
-    local fail_result
-    fail_result=$(jq -n \
-      --arg reviewId "$REVIEW_ID" \
-      --arg action "$action" \
-      --arg conversationId "$conv_id" \
-      --arg parentTaskId "${task_id:-}" \
-      --argjson prNumber "$PR_NUMBER" \
-      '{
-        reviewId: $reviewId,
-        action: $action,
-        conversationId: $conversationId,
-        newTaskId: null,
-        parentTaskId: $parentTaskId,
-        prNumber: $prNumber,
-        createdTask: false,
-        error: "conversation_script_missing",
-        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-      }')
-    echo "$fail_result" | jq .
-    return 1
-  fi
-
-  # ========================================================================
-  # Phase 6: Extract taskId and record atomically
-  # ========================================================================
-  local new_task_id=""
-  local submit_success=false
-
-  if [ -n "$submit_output" ]; then
-    new_task_id="$(echo "$submit_output" | jq -r '.taskId // empty')"
-    if [ -n "$new_task_id" ]; then
-      submit_success=true
-    fi
-  fi
-
-  if [ "$submit_success" = false ]; then
-    # Submit returned no taskId - check if concurrent process already created the task
-    local recovered_task_id=""
-    if [ "$action" = "REQUEST_CHANGES" ] && [ -n "$conv_id" ] && [ -n "$REVIEW_ID" ]; then
-      # For REVIEW_FIX actions, the task_id is deterministic: review-fix-{conv_id}-{review_id}
-      # Check if a concurrent process already created it
-      recovered_task_id="$(sqlite3_retry "SELECT commentId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
-    fi
-
-    if [ -n "$recovered_task_id" ]; then
-      # Concurrent process created the task - recover and use it
-      echo "dispatch: review $review_id: concurrent process created task $recovered_task_id, recovering" >&2
-      new_task_id="$recovered_task_id"
-      submit_success=true
-    else
-      # No task found - genuinely failed
-      if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
-      fi
-      local fail_result
-      fail_result=$(jq -n \
-        --arg reviewId "$REVIEW_ID" \
-        --arg action "$action" \
-        --arg conversationId "$conv_id" \
-        --arg parentTaskId "${task_id:-}" \
-        --argjson prNumber "$PR_NUMBER" \
-        '{
-          reviewId: $reviewId,
-          action: $action,
-          conversationId: $conversationId,
-          newTaskId: null,
-          parentTaskId: $parentTaskId,
-          prNumber: $prNumber,
-          createdTask: false,
-          error: "submit_failed",
-          timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-        }')
-      echo "$fail_result" | jq .
-      return 1
-    fi
-  fi
-
-  # ========================================================================
-  # Phase 6.5: Test crash injection point (kill after submit, before taskId record)
-  # ========================================================================
-  if [ "${MANUL_TEST_CRASH_AFTER_SUBMIT:-}" = "1" ]; then
-    echo "CRASHED_AFTER_SUBMIT" > "${TEST_DIR:-/tmp}/.crash_marker"
-    kill -9 "$BASHPID"
-  fi
-
-  # ========================================================================
-  # Phase 7: Record taskId atomically - transition pending -> task_created
-  # ========================================================================
-  if [ -n "$DB" ] && [ -f "$DB" ]; then
-    # Atomic transition: only update if still pending (prevents race with concurrent reviews)
-    local update_result
-    update_result="$(sqlite3_retry "BEGIN IMMEDIATE; UPDATE processed_comments SET status='task_created', taskId='$new_task_id', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending'; SELECT changes(); COMMIT;" 5)" || {
-      echo "ERROR: failed to record taskId for review $review_id" >&2
-      return 1
-    }
-    local rows_updated="${update_result%%$'
-'*}"
-    if [ "${rows_updated:-0}" -eq 0 ]; then
-      # Another process already claimed this review - look up their taskId
-      echo "dispatch: review $review_id was claimed by concurrent process, looking up taskId" >&2
-      local lookup_result
-      local lookup_retry=0
-      local lookup_max_retries=5
-      while [ $lookup_retry -lt $lookup_max_retries ]; do
-        lookup_result="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 5)" || {
-          echo "ERROR: SQLite query failed looking up concurrent taskId for $review_id" >&2
-          return 1
-        }
-        if [ -n "$lookup_result" ]; then
-          new_task_id="$lookup_result"
-          break
-        fi
-        # TaskId not set yet - wait and retry
-        if [ $lookup_retry -lt $((lookup_max_retries - 1)) ]; then
-          lookup_retry=$((lookup_retry + 1))
-          sleep "0.0$((lookup_retry * 2))"
-          continue
-        fi
-        # Max retries reached - check if REVIEW_FIX task exists
-        break
-      done
-      if [ -z "$new_task_id" ]; then
-        # Check if task was created by concurrent process before marking as failed
-        local existing_task
-        existing_task="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
-        if [ -n "$existing_task" ]; then
-          # Task exists - another process created it successfully
-          new_task_id="$existing_task"
-          echo "dispatch: review $review_id: concurrent process created task $existing_task, recovering" >&2
-        else
-          # Both processes failed - mark as failed
-          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
-          local fail_result
-          fail_result=$(jq -n \
-            --arg reviewId "$REVIEW_ID" \
-            --arg action "$action" \
-            --arg conversationId "$conv_id" \
-            --arg parentTaskId "${task_id:-}" \
-            --argjson prNumber "$PR_NUMBER" \
-            '{
-              reviewId: $reviewId,
-              action: $action,
-              conversationId: $conversationId,
-              newTaskId: null,
-              parentTaskId: $parentTaskId,
-              prNumber: $prNumber,
-              createdTask: false,
-              error: "concurrent_claim_failed",
-              timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-            }')
-          echo "$fail_result" | jq .
-          return 1
-        fi
-      fi
-    fi
-  fi
-
-  # ========================================================================
-  # Phase 8: Return success with taskId
-  # ========================================================================
-  local result
-  result=$(jq -n \
-    --arg reviewId "$REVIEW_ID" \
-    --arg action "$action" \
-    --arg conversationId "$conv_id" \
-    --arg newTaskId "$new_task_id" \
-    --arg parentTaskId "${task_id:-}" \
-    --argjson prNumber "$PR_NUMBER" \
-    --arg reviewPrompt "${review_prompt:0:200}" \
-    '{
-      reviewId: $reviewId,
-      action: $action,
-      conversationId: $conversationId,
-      newTaskId: $newTaskId,
-      parentTaskId: $parentTaskId,
-      prNumber: $prNumber,
-      reviewPrompt: $reviewPrompt,
-      createdTask: true,
-      timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-    }')
-
-  echo "$result" | jq .
-  return 0
-}
-
-# Get conversation info for a PR
-cmd_get_conversation() {
-  if [ -z "$REPO" ] || [ -z "$PR_NUMBER" ]; then
-    error_exit "get-conversation requires --repo and --pr-number" 3
-  fi
-
-  get_pr_context "$REPO" "$PR_NUMBER"
-}
-
-# List reviews for a PR
-cmd_list_reviews() {
-  if [ -z "$REPO" ] || [ -z "$PR_NUMBER" ]; then
-    error_exit "list-reviews requires --repo and --pr-number" 3
-  fi
-
-  local reviews="[]"
-
-  if command -v gh >/dev/null 2>&1; then
-    reviews="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null | jq '.' || echo '[]')"
-  fi
-
-  local result
-  result=$(jq -n \
-    --argjson reviews "$reviews" \
-    --arg repo "$REPO" \
-    --argjson prNumber "$PR_NUMBER" \
-    '{
-      repo: $repo,
-      prNumber: $prNumber,
-      reviews: $reviews,
-      reviewCount: ($reviews | length)
-    }')
-
-  echo "$result" | jq .
-}
-
-# Main dispatch
-case "${ACTION:-}" in
-  handle) cmd_handle ;;
-  get-conversation) cmd_get_conversation ;;
-  list-reviews) cmd_list_reviews ;;
-  "")
-    echo "Usage: manul-pr-review.sh <command> [options]" >&2
-    echo "" >&2
-    echo "Commands:" >&2
-    echo "  handle           Handle an incoming PR review" >&2
-    echo "  get-conversation Get conversation context for a PR" >&2
-    echo "  list-reviews     List reviews for a PR" >&2
-    exit 3
-    ;;
-  *)
-    error_exit "Unknown command: $ACTION" 3
-    ;;
-esac
-\n\n'}All inline comments below were submitted together as one GitHub review. Treat them as one coordinated request set: inventory every comment before editing, then choose the most efficient safe plan. Combine related or dependent feedback into a cohesive change; split independent, conflicting, or separately verifiable feedback into distinct ordered workstreams/subtasks; parallelize only when the runtime supports it and the changes cannot conflict. Address every comment and preserve its acceptance criteria. After the work, post a concise reply in every distinct inline thread identified by its Thread root ID, explaining how that feedback was handled (including if it was already fixed or no change was appropriate). Use the GitHub pull-request review-comment reply API with the thread root comment ID; only reply once when multiple comments share a root. These per-thread replies are supplementary and MUST NOT contain the Manul task/attempt marker. Also post exactly one canonical result comment on this task's PR conversation containing the normal marker. Do not report completion until all distinct threads have replies and the canonical result comment is verified."
-  fi
-
-  # State machine: handle based on existing review status
-  case "$review_status" in
-    completed)
-      # Already completed successfully - skip
-      local result
-      result=$(jq -n \
-        --arg reviewId "$review_id" \
-        --arg action "$action" \
-        --arg conversationId "$conv_id" \
-        --arg parentTaskId "${task_id:-}" \
-        --argjson prNumber "$PR_NUMBER" \
-        --arg reviewPrompt "${review_prompt:0:200}" \
-        '{
-          reviewId: $reviewId,
-          action: $action,
-          conversationId: $conversationId,
-          newTaskId: null,
-          parentTaskId: $parentTaskId,
-          prNumber: $prNumber,
-          reviewPrompt: $reviewPrompt,
-           createdTask: false,
-           duplicate: true,
-           skipped: true,
-           timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-         }')
-       echo "$result" | jq .
-       return 0
-       ;;
-
-    task_created)
-      # Task was created in a previous run - reuse it (crash recovery)
-      if [ -n "$existing_task_id" ]; then
-        echo "dispatch: review $review_id already has task $existing_task_id, reusing" >&2
-        local result
-        result=$(jq -n \
-          --arg reviewId "$review_id" \
-          --arg action "$action" \
-          --arg conversationId "$conv_id" \
-          --arg newTaskId "$existing_task_id" \
-          --arg parentTaskId "${task_id:-}" \
-          --argjson prNumber "$PR_NUMBER" \
-          --arg reviewPrompt "${review_prompt:0:200}" \
-          '{
-            reviewId: $reviewId,
-            action: $action,
-            conversationId: $conversationId,
-            newTaskId: $newTaskId,
-            parentTaskId: $parentTaskId,
-            prNumber: $prNumber,
-            reviewPrompt: $reviewPrompt,
-             createdTask: true,
-             reused: true,
-             skipped: true,
-             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-           }')
-         echo "$result" | jq .
-         return 0
-       else
-         # Corrupted state: task_created but no taskId - treat as pending
-        echo "dispatch: review $review_id has task_created without taskId, recovering" >&2
-        review_status=""
-        existing_task_id=""
-      fi
-      ;;
-
-    pending)
-      # Review claimed but task not yet created - check if taskId was stored
-      if [ -n "$existing_task_id" ]; then
-        # Should not happen (task_created should have taskId), but handle gracefully
-        echo "dispatch: review $review_id has pending status with taskId $existing_task_id, updating to task_created" >&2
-      if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3 "$DB" "UPDATE processed_comments SET status='task_created' WHERE commentId='$review_comment_id' AND status='pending';" || {
-          echo "ERROR: failed to update review $review_id status to task_created" >&2
-          return 1
-        }
-      fi
-        local result
-        result=$(jq -n \
-          --arg reviewId "$review_id" \
-          --arg action "$action" \
-          --arg conversationId "$conv_id" \
-          --arg newTaskId "$existing_task_id" \
-          --arg parentTaskId "${task_id:-}" \
-          --argjson prNumber "$PR_NUMBER" \
-          --arg reviewPrompt "${review_prompt:0:200}" \
-          '{
-            reviewId: $reviewId,
-            action: $action,
-            conversationId: $conversationId,
-            newTaskId: $newTaskId,
-            parentTaskId: $parentTaskId,
-            prNumber: $prNumber,
-            reviewPrompt: $reviewPrompt,
-             createdTask: true,
-             reused: true,
-             skipped: true,
-             timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-           }')
-         echo "$result" | jq .
-         return 0
-       fi
-       # No taskId yet - proceed to create task (fall through)
-      ;;
-
-    failed)
-      # Previous attempt failed - retry without deleting (task may already exist)
-      echo "dispatch: review $review_id previously failed, retrying" >&2
-      review_status=""
-      existing_task_id=""
-      ;;
-
-    "")
-      # No existing record - proceed to create
-      ;;
-
-    *)
-      # Unknown state - retry without deleting (task may already exist)
-      echo "dispatch: review $review_id has unknown status '$review_status', retrying" >&2
-      review_status=""
-      existing_task_id=""
-      ;;
-  esac
-
-  # ========================================================================
-  # Phase 4: Claim the review (only if no existing record)
-  # ========================================================================
-  if [ -n "$DB" ] && [ -f "$DB" ] && [ -z "$review_status" ]; then
-    # No existing record - insert as pending
-    local insert_result
-    insert_result="$(sqlite3_retry "BEGIN IMMEDIATE; INSERT OR IGNORE INTO processed_comments(commentId, repository, issueNumber, commentUrl, author, prompt, action, status, createdAt, conversationId, prNumber) VALUES('$review_comment_id', '$(sql_escape "$REPO")', $PR_NUMBER, 'https://github.com/${REPO}/pull/${PR_NUMBER}', '$(sql_escape "${AUTHOR:-}")', '$(sql_escape "${BODY:-Review: $REVIEW_STATE}")', 'REVIEW', 'pending', '$now', '$(sql_escape "$conv_id")', $PR_NUMBER); SELECT changes(); COMMIT;" 5)" || {
-      echo "ERROR: failed to claim review $review_id" >&2
-      return 1
-    }
-    local inserted="${insert_result%%$'
-'*}"
-    if [ "${inserted:-0}" -eq 0 ]; then
-      # Race condition: another process inserted first, read its state
-      echo "dispatch: duplicate review $review_id during claim (race), reading state" >&2
-       local race_status race_task
-       local race_retry=0
-       local race_max_retries=5
-       while [ $race_retry -lt $race_max_retries ]; do
-         if ! race_status="$(sqlite3_retry "SELECT status, taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' LIMIT 1;" 3)"; then
-           echo "ERROR: SQLite query failed during race condition resolution for $review_id" >&2
-           return 1
-         fi
-         if [ -n "$race_status" ]; then
-          local rs rt
-          rs="$(echo "$race_status" | cut -d'|' -f1)"
-          rt="$(echo "$race_status" | cut -d'|' -f2)"
-          if [ "$rs" = "task_created" ] && [ -n "$rt" ]; then
-            local result
-            result=$(jq -n \
-              --arg reviewId "$review_id" \
-              --arg action "$action" \
-              --arg conversationId "$conv_id" \
-              --arg newTaskId "$rt" \
-              --arg parentTaskId "${task_id:-}" \
-              --argjson prNumber "$PR_NUMBER" \
-              '{
-                reviewId: $reviewId,
-                action: $action,
-                conversationId: $conversationId,
-                newTaskId: $newTaskId,
-                parentTaskId: $parentTaskId,
-                prNumber: $prNumber,
-                 createdTask: true,
-                 reused: true,
-                 skipped: true,
-                 timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-               }')
-             echo "$result" | jq .
-             return 0
-           fi
-           # Race resulted in pending or other state - wait and retry
-          if [ "$rs" = "pending" ] && [ $race_retry -lt $((race_max_retries - 1)) ]; then
-            race_retry=$((race_retry + 1))
-            sleep "0.0$((race_retry * 2))"
-            continue
-          fi
-         fi
-         # Fall through to create our own task
-         break
-       done
-    fi
-  fi
-
-  # ========================================================================
-  # Phase 5: Create REVIEW_FIX task via manul-conversation.sh
-  # ========================================================================
-  if [ -z "$conv_id" ]; then
-    error_exit "No conversation found for PR #$PR_NUMBER" 2
-  fi
-
-  local submit_args=(
-    --conversation-id "$conv_id"
-    --prompt "$review_prompt"
-    --action REVIEW_FIX
-    --pr-number "$PR_NUMBER"
-    --review-id "$REVIEW_ID"
-  )
-
-  if [ -n "$task_id" ]; then
-    submit_args+=(--parent-task-id "$task_id")
-  fi
-
-  local submit_output=""
-  if [ -f "${MANUL_DIR}/manul-conversation.sh" ]; then
-    submit_output="$(bash "${MANUL_DIR}/manul-conversation.sh" submit "${submit_args[@]}" --json 2>/dev/null)" || {
-      # Submit failed - check if concurrent process already created the task
-      local submit_fail_retry=0
-      local submit_fail_max_retries=3
-      local recovered_task_id=""
-      while [ $submit_fail_retry -lt $submit_fail_max_retries ]; do
-        if [ -n "$DB" ] && [ -f "$DB" ]; then
-          recovered_task_id="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' AND status='task_created' LIMIT 1;" 3)" || true
-        fi
-        if [ -n "$recovered_task_id" ]; then
-          echo "dispatch: review $review_id: submit failed but concurrent process created task $recovered_task_id, recovering" >&2
-          submit_output=$(jq -n \
-            --arg taskId "$recovered_task_id" \
-            '{taskId: $taskId}')
-          break
-        fi
-        # Wait and retry
-        if [ $submit_fail_retry -lt $((submit_fail_max_retries - 1)) ]; then
-          submit_fail_retry=$((submit_fail_retry + 1))
-          sleep "0.0$((submit_fail_retry * 2))"
-          continue
-        fi
-      done
-      if [ -z "$submit_output" ] || [ -z "$(echo "$submit_output" | jq -r '.taskId // empty')" ]; then
-        # No task found - update review to failed state (with retry for SQLite lock)
-        if [ -n "$DB" ] && [ -f "$DB" ]; then
-          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
-        fi
-        local fail_result
-        fail_result=$(jq -n \
-          --arg reviewId "$REVIEW_ID" \
-          --arg action "$action" \
-          --arg conversationId "$conv_id" \
-          --arg parentTaskId "${task_id:-}" \
-          --argjson prNumber "$PR_NUMBER" \
-          '{
-            reviewId: $reviewId,
-            action: $action,
-            conversationId: $conversationId,
-            newTaskId: null,
-            parentTaskId: $parentTaskId,
-            prNumber: $prNumber,
-            createdTask: false,
-            error: "submit_failed",
-            timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-          }')
-        echo "$fail_result" | jq .
-        return 1
-      fi
-    }
-  else
-    # manul-conversation.sh not found - cannot create task
-    if [ -n "$DB" ] && [ -f "$DB" ]; then
-      sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
-    fi
-    local fail_result
-    fail_result=$(jq -n \
-      --arg reviewId "$REVIEW_ID" \
-      --arg action "$action" \
-      --arg conversationId "$conv_id" \
-      --arg parentTaskId "${task_id:-}" \
-      --argjson prNumber "$PR_NUMBER" \
-      '{
-        reviewId: $reviewId,
-        action: $action,
-        conversationId: $conversationId,
-        newTaskId: null,
-        parentTaskId: $parentTaskId,
-        prNumber: $prNumber,
-        createdTask: false,
-        error: "conversation_script_missing",
-        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-      }')
-    echo "$fail_result" | jq .
-    return 1
-  fi
-
-  # ========================================================================
-  # Phase 6: Extract taskId and record atomically
-  # ========================================================================
-  local new_task_id=""
-  local submit_success=false
-
-  if [ -n "$submit_output" ]; then
-    new_task_id="$(echo "$submit_output" | jq -r '.taskId // empty')"
-    if [ -n "$new_task_id" ]; then
-      submit_success=true
-    fi
-  fi
-
-  if [ "$submit_success" = false ]; then
-    # Submit returned no taskId - check if concurrent process already created the task
-    local recovered_task_id=""
-    if [ "$action" = "REQUEST_CHANGES" ] && [ -n "$conv_id" ] && [ -n "$REVIEW_ID" ]; then
-      # For REVIEW_FIX actions, the task_id is deterministic: review-fix-{conv_id}-{review_id}
-      # Check if a concurrent process already created it
-      recovered_task_id="$(sqlite3_retry "SELECT commentId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
-    fi
-
-    if [ -n "$recovered_task_id" ]; then
-      # Concurrent process created the task - recover and use it
-      echo "dispatch: review $review_id: concurrent process created task $recovered_task_id, recovering" >&2
-      new_task_id="$recovered_task_id"
-      submit_success=true
-    else
-      # No task found - genuinely failed
-      if [ -n "$DB" ] && [ -f "$DB" ]; then
-        sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
-      fi
-      local fail_result
-      fail_result=$(jq -n \
-        --arg reviewId "$REVIEW_ID" \
-        --arg action "$action" \
-        --arg conversationId "$conv_id" \
-        --arg parentTaskId "${task_id:-}" \
-        --argjson prNumber "$PR_NUMBER" \
-        '{
-          reviewId: $reviewId,
-          action: $action,
-          conversationId: $conversationId,
-          newTaskId: null,
-          parentTaskId: $parentTaskId,
-          prNumber: $prNumber,
-          createdTask: false,
-          error: "submit_failed",
-          timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-        }')
-      echo "$fail_result" | jq .
-      return 1
-    fi
-  fi
-
-  # ========================================================================
-  # Phase 6.5: Test crash injection point (kill after submit, before taskId record)
-  # ========================================================================
-  if [ "${MANUL_TEST_CRASH_AFTER_SUBMIT:-}" = "1" ]; then
-    echo "CRASHED_AFTER_SUBMIT" > "${TEST_DIR:-/tmp}/.crash_marker"
-    kill -9 "$BASHPID"
-  fi
-
-  # ========================================================================
-  # Phase 7: Record taskId atomically - transition pending -> task_created
-  # ========================================================================
-  if [ -n "$DB" ] && [ -f "$DB" ]; then
-    # Atomic transition: only update if still pending (prevents race with concurrent reviews)
-    local update_result
-    update_result="$(sqlite3_retry "BEGIN IMMEDIATE; UPDATE processed_comments SET status='task_created', taskId='$new_task_id', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending'; SELECT changes(); COMMIT;" 5)" || {
-      echo "ERROR: failed to record taskId for review $review_id" >&2
-      return 1
-    }
-    local rows_updated="${update_result%%$'
-'*}"
-    if [ "${rows_updated:-0}" -eq 0 ]; then
-      # Another process already claimed this review - look up their taskId
-      echo "dispatch: review $review_id was claimed by concurrent process, looking up taskId" >&2
-      local lookup_result
-      local lookup_retry=0
-      local lookup_max_retries=5
-      while [ $lookup_retry -lt $lookup_max_retries ]; do
-        lookup_result="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='task_created' LIMIT 1;" 5)" || {
-          echo "ERROR: SQLite query failed looking up concurrent taskId for $review_id" >&2
-          return 1
-        }
-        if [ -n "$lookup_result" ]; then
-          new_task_id="$lookup_result"
-          break
-        fi
-        # TaskId not set yet - wait and retry
-        if [ $lookup_retry -lt $((lookup_max_retries - 1)) ]; then
-          lookup_retry=$((lookup_retry + 1))
-          sleep "0.0$((lookup_retry * 2))"
-          continue
-        fi
-        # Max retries reached - check if REVIEW_FIX task exists
-        break
-      done
-      if [ -z "$new_task_id" ]; then
-        # Check if task was created by concurrent process before marking as failed
-        local existing_task
-        existing_task="$(sqlite3_retry "SELECT taskId FROM processed_comments WHERE commentId='review-fix-${conv_id}-${REVIEW_ID}' AND action='REVIEW_FIX' LIMIT 1;" 3)" || true
-        if [ -n "$existing_task" ]; then
-          # Task exists - another process created it successfully
-          new_task_id="$existing_task"
-          echo "dispatch: review $review_id: concurrent process created task $existing_task, recovering" >&2
-        else
-          # Both processes failed - mark as failed
-          sqlite3_retry "UPDATE processed_comments SET status='failed', processedAt=datetime('now') WHERE commentId='$review_comment_id' AND action='REVIEW' AND status='pending';" 3 || true
-          local fail_result
-          fail_result=$(jq -n \
-            --arg reviewId "$REVIEW_ID" \
-            --arg action "$action" \
-            --arg conversationId "$conv_id" \
-            --arg parentTaskId "${task_id:-}" \
-            --argjson prNumber "$PR_NUMBER" \
-            '{
-              reviewId: $reviewId,
-              action: $action,
-              conversationId: $conversationId,
-              newTaskId: null,
-              parentTaskId: $parentTaskId,
-              prNumber: $prNumber,
-              createdTask: false,
-              error: "concurrent_claim_failed",
-              timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-            }')
-          echo "$fail_result" | jq .
-          return 1
-        fi
-      fi
-    fi
-  fi
-
-  # ========================================================================
-  # Phase 8: Return success with taskId
-  # ========================================================================
-  local result
-  result=$(jq -n \
-    --arg reviewId "$REVIEW_ID" \
-    --arg action "$action" \
-    --arg conversationId "$conv_id" \
-    --arg newTaskId "$new_task_id" \
-    --arg parentTaskId "${task_id:-}" \
-    --argjson prNumber "$PR_NUMBER" \
-    --arg reviewPrompt "${review_prompt:0:200}" \
-    '{
-      reviewId: $reviewId,
-      action: $action,
-      conversationId: $conversationId,
-      newTaskId: $newTaskId,
-      parentTaskId: $parentTaskId,
-      prNumber: $prNumber,
-      reviewPrompt: $reviewPrompt,
-      createdTask: true,
-      timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-    }')
-
-  echo "$result" | jq .
-  return 0
-}
-
-# Get conversation info for a PR
-cmd_get_conversation() {
-  if [ -z "$REPO" ] || [ -z "$PR_NUMBER" ]; then
-    error_exit "get-conversation requires --repo and --pr-number" 3
-  fi
-
-  get_pr_context "$REPO" "$PR_NUMBER"
-}
-
-# List reviews for a PR
-cmd_list_reviews() {
-  if [ -z "$REPO" ] || [ -z "$PR_NUMBER" ]; then
-    error_exit "list-reviews requires --repo and --pr-number" 3
-  fi
-
-  local reviews="[]"
-
-  if command -v gh >/dev/null 2>&1; then
-    reviews="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null | jq '.' || echo '[]')"
-  fi
-
-  local result
-  result=$(jq -n \
-    --argjson reviews "$reviews" \
-    --arg repo "$REPO" \
-    --argjson prNumber "$PR_NUMBER" \
-    '{
-      repo: $repo,
-      prNumber: $prNumber,
-      reviews: $reviews,
-      reviewCount: ($reviews | length)
-    }')
-
-  echo "$result" | jq .
-}
-
-# Main dispatch
-case "${ACTION:-}" in
-  handle) cmd_handle ;;
-  get-conversation) cmd_get_conversation ;;
-  list-reviews) cmd_list_reviews ;;
-  "")
-    echo "Usage: manul-pr-review.sh <command> [options]" >&2
-    echo "" >&2
-    echo "Commands:" >&2
-    echo "  handle           Handle an incoming PR review" >&2
-    echo "  get-conversation Get conversation context for a PR" >&2
-    echo "  list-reviews     List reviews for a PR" >&2
-    exit 3
-    ;;
-  *)
-    error_exit "Unknown command: $ACTION" 3
-    ;;
-esac
-\n\n'"Inline review comments:\n$inline_review_prompt"
   fi
 
   # State machine: handle based on existing review status
