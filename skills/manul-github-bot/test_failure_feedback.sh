@@ -111,7 +111,10 @@ gh() {
 export -f gh
 
 DAEMON="$SCRIPT_DIR/manul-daemon.sh"
-eval "$(sed -n '/^log() {/,/^}/p' "$DAEMON")"
+# The production log() helper is a one-line function followed by daemon
+# initialization; a sed range ending at a standalone brace would also eval
+# that initialization. Keep this test logger local and side-effect-free.
+log() { echo "[$(date -Is)] $*" >>"$LOG"; }
 eval "$(sed -n '/^lc_log() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^post_github_comment() {/,/^}/p' "$DAEMON")"
 eval "$(sed -n '/^post_lifecycle_comment() {/,/^}/p' "$DAEMON" | sed 's/^post_lifecycle_comment()/post_lifecycle_comment_original()/')"

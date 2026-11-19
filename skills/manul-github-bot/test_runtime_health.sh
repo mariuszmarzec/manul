@@ -142,8 +142,9 @@ PERM_ROOT=$(mktemp -d /tmp/manul-perm-XXXXXX)
 PERM_CANON="$PERM_ROOT/canonical"
 PERM_RUN="$PERM_ROOT/runtime"
 PERM_HOME="$PERM_ROOT/home"
-mkdir -p "$PERM_CANON" "$PERM_ROOT/bin" "$PERM_HOME/.config/opencode/tools" "$PERM_ROOT/xdg/opencode/tools" "$PERM_ROOT/opencode/tools"
+mkdir -p "$PERM_CANON" "$PERM_RUN" "$PERM_ROOT/bin" "$PERM_HOME/.config/opencode/tools" "$PERM_ROOT/xdg/opencode/tools" "$PERM_ROOT/opencode/tools"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$PERM_CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.py "$PERM_CANON/" 2>/dev/null || true
 chmod +x "$PERM_CANON"/*.sh
 chmod 644 "$PERM_CANON/agent-task-runner.sh"
 chmod 644 "$PERM_CANON/manul-queue-reset.sh"
@@ -216,13 +217,19 @@ else
   fail "Installer removed unrelated Node modules or retained the retired plugin package"
 fi
 
-for obsolete_helper in todo-local-mcp-url.sh todo-mcp-client.py todo-remote-create-task.py; do
-  if [ ! -L "$PERM_RUN/$obsolete_helper" ] && [ ! -e "$PERM_RUN/$obsolete_helper" ]; then
-    ok "Installer removes obsolete Manul helper symlink: $obsolete_helper"
+for required_helper in todo-local-mcp-url.sh todo-mcp-client.py; do
+  if [ -L "$PERM_RUN/$required_helper" ] &&
+     [ "$(readlink -- "$PERM_RUN/$required_helper" 2>/dev/null || true)" = "$PERM_CANON/$required_helper" ]; then
+    ok "Installer deploys required bundled Todo helper: $required_helper"
   else
-    fail "Installer retained obsolete Manul helper symlink: $obsolete_helper"
+    fail "Installer did not deploy the required bundled Todo helper: $required_helper"
   fi
 done
+if [ ! -L "$PERM_RUN/todo-remote-create-task.py" ] && [ ! -e "$PERM_RUN/todo-remote-create-task.py" ]; then
+  ok "Installer removes the retired Todo remote-create helper symlink"
+else
+  fail "Installer retained the retired Todo remote-create helper symlink"
+fi
 
 if [ -f "$PERM_ROOT/opencode/tools/operator_tool.ts" ] &&
    [ "$(cat "$PERM_ROOT/opencode/tools/operator_tool.ts")" = "operator-owned tool" ]; then
@@ -359,16 +366,19 @@ RUN1="$SELFHEAL_ROOT/runtime1"
 RUN2="$SELFHEAL_ROOT/runtime2"
 mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+cp "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
+SELFHEAL_INSTALL1_LOG="$SELFHEAL_ROOT/install1.log"
 OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
-  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >"$SELFHEAL_INSTALL1_LOG" 2>&1
 RC1=$?
 set -e
 if [ "$RC1" -eq 0 ] && [ -d "$RUN1" ] && [ -L "$RUN1/manul-daemon.sh" ]; then
   ok "Installer recreates a missing runtime directory"
 else
+  cat "$SELFHEAL_INSTALL1_LOG" >&2
   fail "Installer did not recreate missing runtime (rc=$RC1)"
 fi
 
@@ -451,13 +461,24 @@ CANON="$CLI_ROOT/canonical"
 RUN="$CLI_ROOT/runtime"
 mkdir -p "$CANON"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.md "$CANON/" 2>/dev/null || true
+# The symlink installer also deploys Python runtime helpers. Keep this fixture
+# complete; otherwise installation fails on missing todo-mcp-client.py and
+# manul-operator-context.py even though the shell sources are present.
+cp "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
 [ -f "$SCRIPT_DIR/state/manul.db" ] && cp "$SCRIPT_DIR/state/manul.db" "$CANON/" 2>/dev/null || true
 
-# Deploy a real runtime so the CLI can actually run
+# Deploy a real runtime so the CLI can actually run. Retain diagnostics so a
+# future fixture regression reports the missing canonical source directly.
+CLI_INSTALL_LOG="$CLI_ROOT/install-runtime.log"
 set +e
 OPENCODE_CONFIG_DIR="$CLI_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
-  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >"$CLI_INSTALL_LOG" 2>&1
+CLI_INSTALL_RC=$?
 set -e
+if [ "$CLI_INSTALL_RC" -ne 0 ]; then
+  cat "$CLI_INSTALL_LOG" >&2
+  fail "Initial runtime deployment failed (rc=$CLI_INSTALL_RC)"
+fi
 
 # 1) All three CLI entrypoints exist as symlinks in the runtime
 for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
@@ -568,14 +589,16 @@ for cmd in manul manul-status manul-comments-remove; do
 done
 
 # 4) The repair path (installer) recreates all required symlinks from scratch
+CLI_REPAIR_LOG="$CLI_ROOT/repair-runtime.log"
 set +e
 OPENCODE_CONFIG_DIR="$CLI_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
-  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >"$CLI_REPAIR_LOG" 2>&1
 RC_REPAIR=$?
 set -e
 if [ "$RC_REPAIR" -eq 0 ]; then
   ok "Installer recreates runtime after full deletion"
 else
+  cat "$CLI_REPAIR_LOG" >&2
   fail "Installer failed to recreate runtime (rc=$RC_REPAIR)"
 fi
 for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do

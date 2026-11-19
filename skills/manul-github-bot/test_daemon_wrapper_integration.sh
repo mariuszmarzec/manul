@@ -657,6 +657,9 @@ printf "test\n" >"$WORKDIR_K/README.md"
 git -C "$WORKDIR_K" add README.md
 git -C "$WORKDIR_K" commit -qm initial
 INITIAL_HEAD_K="$(git -C "$WORKDIR_K" rev-parse HEAD)"
+ORIGIN_K="$TEST_TMPDIR/origin-k.git"
+git init --bare -q "$ORIGIN_K"
+git -C "$WORKDIR_K" remote add origin "$ORIGIN_K"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_K';" 2>/dev/null
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_K','test/repo',52,'https://github.com/test/repo/issues/52#issuecomment-1011','user','test','answer question','running',1,$$,'REVIEW_FIX');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutK.txt"
@@ -1027,7 +1030,7 @@ sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,c
 STDOUT_FILE="$TEST_TMPDIR/stdoutS.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="IMPLEMENT"
 evaluate_task_completion "test/repo" "58" "COMMENT_S" "COMMENT_S" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_S" "" "$INITIAL_HEAD_S" "master" "master" "" "" "" "" ""
-if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "VERIFICATION_FAILED" ]; then echo "FAIL: implementation without PR must fail ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
+if [ "$COMPLETION_SUCCESS" = "true" ] || [ "$FAILURE_CODE" != "DELIVERY_COMMENT_MISSING" ]; then echo "FAIL: implementation without a PR and without a valid result receipt must fail with DELIVERY_COMMENT_MISSING ($FAILURE_CODE $FAIL_REASON)"; exit 1; fi
 echo "[OK] Test S: PASSED"
 
 # ─── Test U: failed agent attempts must transition running -> queued ──────────

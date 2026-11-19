@@ -245,6 +245,29 @@ elif [ -f "$LEGACY_RUNTIME_TOOL" ]; then
     fi
 fi
 
+# Remove the retired task-local Todo remote-create helper from older Manul
+# runtimes. The current implementation uses the shared todo-mcp-client.py
+# through todo-task-source-utils.sh; this old script has no production callers.
+# Only remove a symlink that points at the known legacy canonical/runtime path.
+LEGACY_TODO_REMOTE_HELPER="$RUNTIME_DIR/todo-remote-create-task.py"
+if [ -L "$LEGACY_TODO_REMOTE_HELPER" ]; then
+    legacy_todo_helper_target="$(readlink -- "$LEGACY_TODO_REMOTE_HELPER" 2>/dev/null || true)"
+    case "$legacy_todo_helper_target" in
+        "$CANONICAL_DIR/todo-remote-create-task.py"|"$RUNTIME_DIR/todo-remote-create-task.py")
+            if $DRY_RUN; then
+                echo "[dry-run] Would remove retired Todo remote-create helper symlink: $LEGACY_TODO_REMOTE_HELPER"
+            else
+                rm -f -- "$LEGACY_TODO_REMOTE_HELPER"
+                CHANGED=$((CHANGED + 1))
+                echo "Removed retired Todo remote-create helper symlink: $LEGACY_TODO_REMOTE_HELPER"
+            fi
+            ;;
+        *) echo "Preserving unrelated Todo runtime symlink: $LEGACY_TODO_REMOTE_HELPER" ;;
+    esac
+elif [ -e "$LEGACY_TODO_REMOTE_HELPER" ]; then
+    echo "Preserving unrelated Todo runtime entry: $LEGACY_TODO_REMOTE_HELPER"
+fi
+
 # Remove only the package that the old Manul installer provisioned for its
 # now-retired OpenCode plugin. Preserve other packages in the canonical
 # node_modules tree and remove parent directories only when they are empty.

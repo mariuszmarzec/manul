@@ -40,6 +40,7 @@ export PATH="$FAKE_BIN:$PATH"
 
 # Load the production lock helpers with an isolated temporary runtime.
 source "$SCRIPT_DIR/manul-daemon.sh"
+[ "${MANUL_TESTING:-false}" = "true" ] || { echo "FAIL: daemon source did not remain in test mode" >&2; exit 1; }
 TASK_LOCK_FILE="$TEST_DIR/task-dispatch.flock"
 MANUL_TASK_LOCK_TIMEOUT_SECONDS=5
 

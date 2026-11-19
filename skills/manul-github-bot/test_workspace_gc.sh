@@ -115,11 +115,33 @@ sqlite3 "$DB" "INSERT INTO workspaces(workspaceId,workspacePath,status,lastUsedA
 mkdir -p "$MANUL_WORKSPACE/ws-orphan-old"
 touch -d '2 hours ago' "$MANUL_WORKSPACE/ws-orphan-old"
 workspace_gc_run true
-! workspace_row_exists ws-unbound-old && ! workspace_dir_exists ws-unbound-old || fail "expired unbound workspace removed"
+if workspace_row_exists ws-unbound-old || workspace_dir_exists ws-unbound-old; then
+  echo "DEBUG: unbound workspace row: $(sqlite3 "$DB" "SELECT workspaceId || '|' || status || '|' || lastUsedAt || '|' || workspacePath FROM workspaces WHERE workspaceId='ws-unbound-old';")" >&2
+  echo "DEBUG: unbound workspace directory exists: $(workspace_dir_exists ws-unbound-old && echo yes || echo no)" >&2
+  echo "DEBUG: recovery entries:" >&2
+  find "$MANUL_STATE_DIR/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' 2>/dev/null >&2 || true
+  echo "DEBUG: workspace GC log:" >&2
+  cat "$WORKSPACE_GC_LOG" 2>/dev/null >&2 || true
+  fail "expired unbound workspace removed"
+fi
+unbound_archive="$(find "$MANUL_STATE_DIR/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -name 'ws-unbound-old-gc-expired-unbound-*' -print -quit)"
+[ -n "$unbound_archive" ] || fail "expired unbound workspace preserved in recovery"
 [ ! -d "$MANUL_WORKSPACE/ws-orphan-old" ] || fail "old unregistered directory moved out of active workspace"
 orphan_archive="$(find "$MANUL_STATE_DIR/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -name 'ws-orphan-old-gc-orphan-*' -print -quit)"
 [ -n "$orphan_archive" ] || fail "old unregistered directory preserved in recovery"
-pass "expired unbound workspace rows are pruned and orphan directories are archived"
+pass "expired unbound workspace rows are pruned and archived; orphan directories are preserved"
+
+# 1b. An active task protects an otherwise expired unbound slot.
+mkdir -p "$MANUL_WORKSPACE/ws-unbound-active"
+sqlite3 "$DB" "
+  INSERT INTO workspaces(workspaceId,workspacePath,status,lastUsedAt)
+  VALUES('ws-unbound-active','$MANUL_WORKSPACE/ws-unbound-active','IDLE',datetime('now','-2 hours'));
+  INSERT INTO processed_comments(commentId,repository,issueNumber,status,workspaceId)
+  VALUES('task-unbound-active','example/repo',2,'queued','ws-unbound-active');
+"
+workspace_gc_run true
+workspace_row_exists ws-unbound-active && workspace_dir_exists ws-unbound-active || fail "queued task protects expired unbound workspace"
+pass "queued task ownership protects an otherwise expired unbound pool slot"
 
 # 2. A fresh unbound pool slot is not pruned.
 mkdir -p "$MANUL_WORKSPACE/ws-unbound-fresh"

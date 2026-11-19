@@ -821,12 +821,13 @@ if assert_file_contains "generated prompt blocks TASK_DONE when description veri
 if assert_file_contains "production daemon contains mandatory PR description policy" "$SCRIPT_DIR/manul-daemon.sh" "PR Description Freshness (MANDATORY DELIVERY CONTRACT)"; then :; else :; fi
 if assert_file_contains "production report-only prompt requires plain standalone lifecycle markers" "$SCRIPT_DIR/manul-daemon.sh" "without Markdown backticks or code fences"; then :; else :; fi
 if assert_file_contains "production prompt enforces canonical path handling" "$SCRIPT_DIR/manul-daemon.sh" "Canonical Path Handling — Mandatory"; then :; else :; fi
-if assert_file_contains "execution context carries a primary checkout path" "$SCRIPT_DIR/manul-daemon.sh" '--arg workdir "$WORKDIR"'; then :; else :; fi
+if assert_file_contains "execution context derives agent checkout from the primary workdir" "$SCRIPT_DIR/manul-daemon.sh" 'local AGENT_WORKDIR="$WORKDIR"'; then :; else :; fi
+if assert_file_contains "execution context carries a primary checkout path" "$SCRIPT_DIR/manul-daemon.sh" '--arg workdir "$AGENT_WORKDIR"'; then :; else :; fi
 if assert_file_contains "execution context carries the task workspace root" "$SCRIPT_DIR/manul-daemon.sh" '--arg workspaceRoot "$workspace_path"'; then :; else :; fi
 if assert_file_contains "production daemon refreshes after every later push" "$SCRIPT_DIR/manul-daemon.sh" "After EVERY later push to a branch with an open PR"; then :; else :; fi
 if assert_file_contains "production prompt requires task-focused branch names" "$SCRIPT_DIR/manul-daemon.sh" "Choose a short, natural branch name based on the actual requested code change"; then :; else :; fi
 if assert_file_contains "production prompt keeps branch names free of orchestration metadata" "$SCRIPT_DIR/manul-daemon.sh" "Do not include Manul, Todo, MCP"; then :; else :; fi
-if assert_file_contains "production prompt uses ordinary numeric suffixes for branch collisions" "$SCRIPT_DIR/manul-daemon.sh" "plain numeric suffix such as `-2`, `-3`"; then :; else :; fi
+if assert_file_contains "production prompt uses ordinary numeric suffixes for branch collisions" "$SCRIPT_DIR/manul-daemon.sh" 'plain numeric suffix such as `-2`, `-3`'; then :; else :; fi
 if assert_file_not_contains "production branch template no longer exposes Manul/task attempt metadata" "$SCRIPT_DIR/manul-daemon.sh" 'TASK_BRANCH="feature/__ISSUE_NUM__-manul-'; then :; else :; fi
 if assert_file_contains "production task prompt applies human-facing output contract in every mode" "$SCRIPT_DIR/manul-daemon.sh" "Human-facing output (all modes and runtimes)"; then :; else :; fi
 

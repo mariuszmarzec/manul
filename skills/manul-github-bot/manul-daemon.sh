@@ -31,7 +31,13 @@ trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]
 # `command -v opencode` returned nothing and every opencode agent died with
 # exit 127 before logging a single line. Add the OpenCode bin dir here so the
 # OpenCode adapter (and any other tool installed there) is reachable.
-_NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -n1)"
+_NVM_NODE_BIN=""
+for _NVM_NODE_CANDIDATE in "$HOME"/.nvm/versions/node/*/bin; do
+  if [ -d "$_NVM_NODE_CANDIDATE" ]; then
+    _NVM_NODE_BIN="$_NVM_NODE_CANDIDATE"
+    break
+  fi
+done
 export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
@@ -3563,6 +3569,8 @@ evaluate_task_completion() {
     FAIL_REASON="${FAILURE_CODE}: ${FAIL_REASON}"
   fi
   
+  local current_branch=""
+  local repo_changed="false"
   local SUCCESS="false"
   local COMMENT_ONLY_DELIVERY="false"
   local IMPLEMENT_COMMENT_ONLY_FAILURE_CODE=""
@@ -3672,10 +3680,9 @@ evaluate_task_completion() {
   # including issue-body tasks (issuebody:*). The task identifier format must
   # never weaken the implementation PR requirement.
   if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
-    local repo_changed="false"
+    repo_changed="false"
     if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
     if [ "$repo_changed" = "true" ]; then
-      local current_branch
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ]; then
         SUCCESS="false"
@@ -3737,7 +3744,7 @@ else
        # missing instead of collapsing everything to a generic verification failure.
        # Only runs when the repository actually changed; informational tasks with no
        # diff have nothing to deliver and must not be rejected here.
-       if [ "$SUCCESS" = "true" ]; then
+       if [ "$SUCCESS" = "true" ] && [ "$repo_changed" = "true" ]; then
          local has_origin_remote="false"
          local remote_branch_sha=""
          if git -C "$WORKDIR" remote get-url origin >/dev/null 2>&1; then
@@ -3760,7 +3767,7 @@ else
            log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
          fi
        fi
-     elif [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+     elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [ "$TASK_ACTION" = "IMPLEMENT" ]; then
       # IMPLEMENT work normally must finish on its own feature branch. A no-op
       # on the base branch is accepted only when an existing PR for this same
       # issue has been independently re-verified, or the agent posted a valid
@@ -3826,7 +3833,7 @@ else
           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
         fi
       fi
-    else
+    elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
       # A TASK_DONE from an IMPLEMENT task is only informational when the agent
       # genuinely made no repository changes. Keep this explicit so issuebody:*
       # tasks cannot accidentally bypass the repository/PR verification above.
