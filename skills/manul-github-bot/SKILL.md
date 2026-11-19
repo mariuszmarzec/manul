@@ -595,6 +595,8 @@ Proactive PR monitoring is configured independently from task sources and does n
 - `proactivity.fixAndAnswerComments.prScope` selects `OnlyManulPr` (default; only PRs with an exact verified Manul deliverable record) or `AllUserAuthoredPr` (PRs authored by a login in the PR-author allow-list).
 - `proactivity.prAuthorAllowed` is the PR-author allow-list. An omitted or empty array inherits `allowedUsers`; unresolved placeholders are discarded and also fall back to `allowedUsers`.
 - `ciFix.prScope` independently applies the same `OnlyManulPr` / `AllUserAuthoredPr` selection to automatic CI fixes. It defaults to `OnlyManulPr`; it does not depend on the comment-automation setting.
+- `ciFix.waitBeforeFirstMinutes` (default `30`) delays the first automatic fix for a PR until this many minutes have passed since the later of the latest failing-check completion and the PR's `updatedAt`. New PR activity restarts this wait; polling alone does not.
+- `ciFix.cooldownMinutes` (default `60`) is the minimum interval between subsequent automatic fix tasks for the same repository/PR. It is measured from the time a task is queued.
 - `conflictResolveAndMerge.enabled` opts into automatic repair of conflicting open PRs and merging the same PR after verification. It defaults to `false` so existing installations never gain automatic merge authority.
 - `conflictResolveAndMerge.prScope` independently selects `OnlyManulPr` (default) or `AllUserAuthoredPr`, using `proactivity.prAuthorAllowed` (or `allowedUsers` when empty) for the latter.
 - Conflict tasks are pinned to the observed PR head and base SHAs. The agent must keep the same PR, verify the new head, green checks and review state, and use normal GitHub merge protections; it must never use an admin/bypass merge. If GitHub blocks the merge, the PR stays open.
@@ -616,6 +618,7 @@ Example:
     "enabled": true,
     "maxAttemptsPerRun": 2,
     "cooldownMinutes": 60,
+    "waitBeforeFirstMinutes": 30,
     "prScope": "OnlyManulPr"
   }
 }
