@@ -1623,7 +1623,9 @@ process_repo_body() {
         review_state="$(jq -r '.state // empty' <<<"$review")"
         review_body="$(jq -r '.body // ""' <<<"$review")"
         review_author="$(jq -r '.user.login // "unknown"' <<<"$review")"
-        review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
+        review_author_type="$(jq -r '.user.type // "User"' <<<"$review")"
+        [ "$review_author_type" != "Bot" ] || continue
+        review_created="$(jq -r '.submitted_at // empty' <<<"$review")
         [ -n "$review_created" ] || review_created="$now"
 
         # Keep only new root comments from this review. Replies are persisted
@@ -1655,8 +1657,11 @@ process_repo_body() {
         should_handle_review=false
         if [ "$review_state" = "CHANGES_REQUESTED" ]; then
           should_handle_review=true
-        elif [ -n "$review_handler_state" ] && [ "$review_state" != "DISMISSED" ] \\
-          && { [ "$review_inline_count" -gt 0 ] || [ -n "$(printf '%s' "$review_body" | tr -d '[:space:]')" ]; }; then
+        elif [ "$review_inline_count" -gt 0 ] && [ -n "$review_handler_state" ] && [ "$review_state" != "DISMISSED" ]; then
+          if [[ "$review_created" == "$BASELINE" || "$review_created" > "$BASELINE" ]]; then
+            should_handle_review=true
+          fi
+        elif [ "$review_state" = "COMMENTED" ] && [ -n "$(printf '%s' "$review_body" | tr -d '[:space:]')" ]; then
           if [[ "$review_created" == "$BASELINE" || "$review_created" > "$BASELINE" ]]; then
             should_handle_review=true
           fi
