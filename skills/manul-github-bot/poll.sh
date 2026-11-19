@@ -1600,10 +1600,17 @@ process_repo_body() {
   # 2b) Submitted PR reviews: one task per review, with all its inline comments.
   # Individual comment ingestion above excludes review-associated comments so a
   # multi-comment review cannot fan out into multiple Manul tasks.
-  if pr_watcher_enabled && [ -f "$MANUL_DIR/manul-pr-review.sh" ]; then
-    local proactive_pr_scope proactive_pr_baseline
-    proactive_pr_scope="$(pr_watcher_scope)"
-    proactive_pr_baseline="$(pr_watcher_ensure_baseline)" || proactive_pr_baseline=""
+  if [ -f "$MANUL_DIR/manul-pr-review.sh" ]; then
+    local proactive_pr_enabled=0 proactive_pr_scope proactive_pr_baseline
+    if pr_watcher_enabled; then
+      proactive_pr_enabled=1
+      proactive_pr_scope="$(pr_watcher_scope)"
+      proactive_pr_baseline="$(pr_watcher_ensure_baseline)" || proactive_pr_baseline=""
+    else
+      # Preserve the existing explicit/review-driven workflow when proactive
+      # comment automation has not been opted into by the operator.
+      proactive_pr_baseline="$BASELINE"
+    fi
     while IFS= read -r pr_obj; do
       [ -n "$pr_obj" ] || continue
       pr_num="$(jq -r '.number' <<<"$pr_obj")"
@@ -1612,13 +1619,15 @@ process_repo_body() {
       local review_pr_url review_pr_author
       review_pr_url="$(jq -r '.url // empty' <<<"$pr_obj")"
       review_pr_author="$(jq -r '.author.login // empty' <<<"$pr_obj")"
-      if ! pr_watcher_pr_in_scope "$repo" "$pr_num" "$review_pr_url" "$review_pr_author" "$proactive_pr_scope"; then
-        log "skipping proactive review handling for $repo#$pr_num — PR is outside proactivity.fixAndAnswerComments.prScope=$proactive_pr_scope (author=$review_pr_author)"
-        continue
-      fi
-      if ! pr_watcher_ensure_pr_conversation "$repo" "$pr_num" "$review_pr_url"; then
-        log "WARN: could not ensure PR conversation before review handling for $repo#$pr_num"
-        continue
+      if [ "$proactive_pr_enabled" -eq 1 ]; then
+        if ! pr_watcher_pr_in_scope "$repo" "$pr_num" "$review_pr_url" "$review_pr_author" "$proactive_pr_scope"; then
+          log "skipping proactive review handling for $repo#$pr_num — PR is outside proactivity.fixAndAnswerComments.prScope=$proactive_pr_scope (author=$review_pr_author)"
+          continue
+        fi
+        if ! pr_watcher_ensure_pr_conversation "$repo" "$pr_num" "$review_pr_url"; then
+          log "WARN: could not ensure PR conversation before review handling for $repo#$pr_num"
+          continue
+        fi
       fi
 
       reviews_json="$(gh api "repos/$repo/pulls/$pr_num/reviews?per_page=100" 2>>"$LOG" || echo '[]')"
@@ -1672,7 +1681,7 @@ process_repo_body() {
           if [ -n "$proactive_pr_baseline" ] && { [[ "$review_created" == "$proactive_pr_baseline" ]] || [[ "$review_created" > "$proactive_pr_baseline" ]]; }; then
             should_handle_review=true
           fi
-        elif { [ "$review_state" = "COMMENTED" ] || [ "$review_state" = "APPROVED" ]; } && [ -n "$(printf '%s' "$review_body" | tr -d '[:space:]')" ]; then
+        elif [ "$proactive_pr_enabled" -eq 1 ]           && { [ "$review_state" = "COMMENTED" ] || [ "$review_state" = "APPROVED" ]; }           && [ -n "$(printf '%s' "$review_body" | tr -d '[:space:]')" ]; then
           if [ -n "$proactive_pr_baseline" ] && { [[ "$review_created" == "$proactive_pr_baseline" ]] || [[ "$review_created" > "$proactive_pr_baseline" ]]; }; then
             should_handle_review=true
           fi
@@ -1688,17 +1697,20 @@ process_repo_body() {
             sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$new_conv_id', '$(sql_escape "$repo")', $pr_num, '$pr_url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG"
             log "auto-created conversation $new_conv_id for $repo#$pr_num"
           fi
-          if "$MANUL_DIR/manul-pr-review.sh" handle \
-            --repo "$repo" \
-            --pr-number "$pr_num" \
-            --review-id "$review_id" \
-            --review-state "$review_handler_state" \
-            --body "$review_body" \
-            --author "$review_author" \
-            --created "$review_created" \
-            --review-comments-json "$review_inline_comments_json" \
-            --proactive-feedback \\
-            --json >>"$LOG" 2>&1; then
+          local review_handler_args=(
+            --repo "$repo"
+            --pr-number "$pr_num"
+            --review-id "$review_id"
+            --review-state "$review_handler_state"
+            --body "$review_body"
+            --author "$review_author"
+            --created "$review_created"
+            --review-comments-json "$review_inline_comments_json"
+          )
+          if [ "$proactive_pr_enabled" -eq 1 ]; then
+            review_handler_args+=(--proactive-feedback)
+          fi
+          if "$MANUL_DIR/manul-pr-review.sh" handle "${review_handler_args[@]}" --json >>"$LOG" 2>&1; then
             log "review $review_id on $repo#$pr_num processed successfully"
           else
             log "WARN: failed to process review $review_id on $repo#$pr_num"
