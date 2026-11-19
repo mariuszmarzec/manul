@@ -49,6 +49,7 @@ detect_source_kind() {
     review:*)    echo "pr_review_comment" ;;
     issuebody:*) echo "issue_state" ;;
     ci_fix:*)    echo "pr_state" ;;
+    conflict_resolve_merge:*) echo "pr_state" ;;
     issue:*)     echo "issue_comment" ;;
     *)           echo "issue_comment" ;;
   esac
@@ -247,7 +248,7 @@ revalidate_pr_state() {
   local comment_id="$1" repo="$2"
   local pr_num
   case "$comment_id" in
-    ci_fix:*) pr_num="$(printf '%s' "$comment_id" | awk -F: '{print $3}')" ;;
+    ci_fix:*|conflict_resolve_merge:*) pr_num="$(printf '%s' "$comment_id" | awk -F: '{print $3}')" ;;
     *) return 2 ;;
   esac
   revalidate_pr_target "$comment_id" "$repo" "$pr_num" "pr_state"
