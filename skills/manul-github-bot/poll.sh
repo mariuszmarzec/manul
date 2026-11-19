@@ -210,11 +210,13 @@ resolve_allowed_users() {
 CI_FIX_ENABLED="$(jq -r '.ciFix.enabled // false' "$CONFIG" 2>/dev/null)"
 CI_FIX_MAX_ATTEMPTS="$(jq -r '.ciFix.maxAttemptsPerRun // 2' "$CONFIG" 2>/dev/null)"
 CI_FIX_COOLDOWN_MINUTES="$(jq -r '.ciFix.cooldownMinutes // 60' "$CONFIG" 2>/dev/null)"
+CI_FIX_WAIT_BEFORE_FIRST_MINUTES="$(jq -r '.ciFix.waitBeforeFirstMinutes // 30' "$CONFIG" 2>/dev/null)"
 CI_FIX_PR_SCOPE="$(pr_watcher_ci_scope)"
 
 if [ "$CI_FIX_ENABLED" = "null" ]; then CI_FIX_ENABLED="false"; fi
-if [ "$CI_FIX_MAX_ATTEMPTS" = "null" ]; then CI_FIX_MAX_ATTEMPTS="2"; fi
-if [ "$CI_FIX_COOLDOWN_MINUTES" = "null" ]; then CI_FIX_COOLDOWN_MINUTES="60"; fi
+if [ "$CI_FIX_MAX_ATTEMPTS" = "null" ] || ! [[ "$CI_FIX_MAX_ATTEMPTS" =~ ^[0-9]+$ ]]; then CI_FIX_MAX_ATTEMPTS="2"; fi
+if [ "$CI_FIX_COOLDOWN_MINUTES" = "null" ] || ! [[ "$CI_FIX_COOLDOWN_MINUTES" =~ ^[0-9]+$ ]]; then CI_FIX_COOLDOWN_MINUTES="60"; fi
+if [ "$CI_FIX_WAIT_BEFORE_FIRST_MINUTES" = "null" ] || ! [[ "$CI_FIX_WAIT_BEFORE_FIRST_MINUTES" =~ ^[0-9]+$ ]]; then CI_FIX_WAIT_BEFORE_FIRST_MINUTES="30"; fi
 # Conflict resolution and merge is a separate opt-in policy with its own PR scope.
 if conflict_resolve_and_merge_enabled; then
   CONFLICT_RESOLVE_AND_MERGE_ENABLED="true"
@@ -916,7 +918,7 @@ build_issue_context() {
 # === end context enrichment helpers ===
 
 # === ci fix helpers ===
-# ci_fix_seen table: tracks PRs/runs we've already attempted to fix to avoid loops
+# ci_fix_seen table: deduplicates CI runs already used to create fix tasks.
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS ci_fix_seen (
     prNumber INTEGER NOT NULL,
     runId TEXT NOT NULL,
@@ -924,12 +926,28 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS ci_fix_seen (
     PRIMARY KEY (prNumber, runId)
 );" 2>>"$LOG"
 
-# ci_fix_failed table: records (repo, PR, head_sha) where a build-fix attempt
-# already failed. While the PR head stays on this commit, the poller must NOT
-# queue another build-fix task — the bot has already proven it could not fix
-# this build, and adding more attempts would burn time and tokens without
-# changing the result. When the PR head moves (new commit), the row no longer
-# matches and a fresh fix is eligible again.
+# ci_fix_attempts tracks the last queued automatic fix per repository and PR.
+# Keeping repository in the key avoids collisions between same-numbered PRs.
+sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS ci_fix_attempts (
+    repository TEXT NOT NULL,
+    prNumber INTEGER NOT NULL,
+    attemptedAt TEXT NOT NULL,
+    PRIMARY KEY (repository, prNumber)
+);" 2>>"$LOG"
+
+# Migrate existing synthetic CI-fix tasks so an upgraded poller does not treat
+# every previously handled PR as a first attempt.
+sqlite3 "$DB" "INSERT OR IGNORE INTO ci_fix_attempts (repository, prNumber, attemptedAt)
+SELECT repository, issueNumber, MAX(createdAt)
+FROM processed_comments
+WHERE commentId LIKE 'ci_fix:%'
+  AND repository IS NOT NULL
+  AND issueNumber IS NOT NULL
+  AND createdAt IS NOT NULL
+GROUP BY repository, issueNumber;" 2>>"$LOG"
+
+# ci_fix_failed records commits for which an agent already failed to fix CI.
+# A new head SHA makes the PR eligible again.
 sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS ci_fix_failed (
     repository TEXT NOT NULL,
     prNumber INTEGER NOT NULL,
@@ -940,47 +958,83 @@ sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS ci_fix_failed (
     PRIMARY KEY (repository, prNumber, head_sha)
 );" 2>>"$LOG"
 
-# check_ci_fix_eligible <repo> <prNumber> <runId> -> returns 0 if eligible, 1 if not
+# Convert a GitHub ISO-8601 timestamp to Unix seconds on GNU or BSD date.
+ci_fix_timestamp_epoch() {
+    local timestamp="$1" epoch
+    [ -n "$timestamp" ] || return 1
+    epoch="$(date -d "$timestamp" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s 2>/dev/null || true)"
+    [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$epoch"
+}
+
+# check_ci_fix_eligible <repo> <prNumber> <runId> <latestFailureAt> <prUpdatedAt>
+# First attempt: wait from the later of the latest failed check and PR activity.
+# Later attempts: enforce cooldownMinutes from the last queued fix task.
 check_ci_fix_eligible() {
-    local repo="$1" pr="$2" run="$3"
-    local key="$repo#$pr#$run"
-    local pr_num
+    local repo="$1" pr="$2" run="$3" latest_failure_at="$4" pr_updated_at="$5"
+    local pr_num safe_run safe_repo seen last_attempt reference_ts wait_minutes
     pr_num="$(sql_num "$pr")"
     [ -n "$pr_num" ] || return 1
-    local safe_run
     safe_run="$(sql_escape "$run")"
-    local safe_repo
     safe_repo="$(sql_escape "$repo")"
-    local seen
+
     seen="$(sqlite3 "$DB" "SELECT 1 FROM ci_fix_seen WHERE prNumber=$pr_num AND runId='$safe_run';" 2>>"$LOG")"
     if [ -n "$seen" ]; then
       return 1
     fi
-    # Check cooldown
-    local last_attempt
-    last_attempt="$(sqlite3 "$DB" "SELECT MAX(attemptedAt) FROM ci_fix_seen WHERE prNumber=$pr_num;" 2>>"$LOG")"
-    if [ -n "$last_attempt" ] && [ "$last_attempt" != "null" ]; then
-      local last_ts now_ts
-      last_ts=$(date -d "$last_attempt" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_attempt" +%s 2>/dev/null || echo 0)
-      now_ts=$(date +%s)
-      local cooldown_secs=$((CI_FIX_COOLDOWN_MINUTES * 60))
-      if [ $((now_ts - last_ts)) -lt $cooldown_secs ]; then
+
+    last_attempt="$(sqlite3 "$DB" "SELECT attemptedAt FROM ci_fix_attempts WHERE repository='$safe_repo' AND prNumber=$pr_num LIMIT 1;" 2>>"$LOG")"
+    if [ -n "$last_attempt" ]; then
+      reference_ts="$(ci_fix_timestamp_epoch "$last_attempt")" || {
+        log "WARN: invalid CI-fix attempt timestamp for $repo#$pr; skipping automatic fix"
         return 1
-      fi
+      }
+      wait_minutes="$CI_FIX_COOLDOWN_MINUTES"
+    else
+      local failure_ts activity_ts
+      failure_ts="$(ci_fix_timestamp_epoch "$latest_failure_at")" || {
+        log "WARN: missing or invalid failing-check completion time for $repo#$pr; skipping first automatic CI fix"
+        return 1
+      }
+      activity_ts="$(ci_fix_timestamp_epoch "$pr_updated_at")" || {
+        log "WARN: missing or invalid PR activity timestamp for $repo#$pr; skipping first automatic CI fix"
+        return 1
+      }
+      reference_ts="$failure_ts"
+      [ "$activity_ts" -le "$reference_ts" ] || reference_ts="$activity_ts"
+      wait_minutes="$CI_FIX_WAIT_BEFORE_FIRST_MINUTES"
+    fi
+
+    local now_ts elapsed_secs wait_secs
+    now_ts="$(date +%s)"
+    elapsed_secs=$((now_ts - reference_ts))
+    wait_secs=$((wait_minutes * 60))
+    if [ "$elapsed_secs" -lt "$wait_secs" ]; then
+      local remaining_minutes=$(((wait_secs - elapsed_secs + 59) / 60))
+      log "skipping CI fix for $repo#$pr — ${wait_minutes}m wait window has ${remaining_minutes}m remaining"
+      return 1
     fi
     return 0
 }
 
 # mark_ci_fix_attempted <repo> <prNumber> <runId>
+# Call only after a synthetic CI-fix task is inserted or an existing task is
+# confirmed. The timestamp represents queue time and survives poll restarts.
 mark_ci_fix_attempted() {
     local repo="$1" pr="$2" run="$3"
-    local pr_num
+    local pr_num safe_run safe_repo
     pr_num="$(sql_num "$pr")"
     [ -n "$pr_num" ] || return 0
-    local safe_run
     safe_run="$(sql_escape "$run")"
+    safe_repo="$(sql_escape "$repo")"
     local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    sqlite3 "$DB" "INSERT OR REPLACE INTO ci_fix_seen (prNumber, runId, attemptedAt) VALUES ($pr_num, '$safe_run', '$now');" 2>>"$LOG"
+    sqlite3 "$DB" "
+      INSERT OR REPLACE INTO ci_fix_seen (prNumber, runId, attemptedAt)
+      VALUES ($pr_num, '$safe_run', '$now');
+      INSERT INTO ci_fix_attempts (repository, prNumber, attemptedAt)
+      VALUES ('$safe_repo', $pr_num, '$now')
+      ON CONFLICT(repository, prNumber) DO UPDATE SET attemptedAt=excluded.attemptedAt;
+    " 2>>"$LOG"
 }
 
 # mark_ci_fix_failed_for_commit <repo> <prNumber> <head_sha> <branch> <reason>
@@ -1114,9 +1168,17 @@ scan_failing_ci() {
       # build-fix attempt already failed for THIS exact commit, do not queue
       # another one (the bot has proven it could not fix this build). The gate
       # lifts automatically the moment the PR head moves to a new commit.
-      local pr_head_sha
-      pr_head_sha="$(gh pr view "$pr_num" --repo "$repo" --json headRefOid --jq '.headRefOid // ""' 2>>"$LOG" || true)"
-      if [ -n "$pr_head_sha" ] && is_ci_fix_failed_for_commit "$repo" "$pr_num" "$pr_head_sha"; then
+      local pr_metadata pr_state pr_head_sha pr_updated_at
+      pr_metadata="$(gh pr view "$pr_num" --repo "$repo" --json state,headRefOid,updatedAt --jq '{state: .state // "", headRefOid: .headRefOid // "", updatedAt: .updatedAt // ""}' 2>>"$LOG" || true)"
+      pr_state="$(printf '%s' "$pr_metadata" | jq -r '.state // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+      pr_head_sha="$(printf '%s' "$pr_metadata" | jq -r '.headRefOid // ""' 2>/dev/null)"
+      pr_updated_at="$(printf '%s' "$pr_metadata" | jq -r '.updatedAt // ""' 2>/dev/null)"
+      if [ "$pr_state" != "open" ] || [ -z "$pr_head_sha" ] || [ -z "$pr_updated_at" ]; then
+        log "skipping CI fix for $repo#$pr_num — PR state, head SHA, or activity timestamp is unavailable"
+        i=$((i+1))
+        continue
+      fi
+      if is_ci_fix_failed_for_commit "$repo" "$pr_num" "$pr_head_sha"; then
         local prev_reason prev_at
         prev_reason="$(sqlite3 "$DB" "SELECT reason FROM ci_fix_failed WHERE repository='$repo' AND prNumber=$pr_num AND head_sha='$pr_head_sha' LIMIT 1;" 2>>"$LOG")"
         prev_at="$(sqlite3 "$DB" "SELECT failed_at FROM ci_fix_failed WHERE repository='$repo' AND prNumber=$pr_num AND head_sha='$pr_head_sha' LIMIT 1;" 2>>"$LOG")"
@@ -1131,6 +1193,13 @@ scan_failing_ci() {
       local failing_count
       failing_count="$(printf '%s' "$checks_json" | jq 'length')"
       [ "$failing_count" -gt 0 ] || { i=$((i+1)); continue; }
+      local latest_failure_at
+      latest_failure_at="$(printf '%s' "$checks_json" | jq -r '[.[] | .completedAt // empty] | sort | last // empty' 2>/dev/null || true)"
+      if [ -z "$latest_failure_at" ]; then
+        log "skipping CI fix for $repo#$pr_num — failing checks have no completion timestamp"
+        i=$((i+1))
+        continue
+      fi
       # CI scope is independent of comment automation. Ensure a PR conversation
       # exists even when the user PR has no Manul source task and the proactive
       # comment watcher is disabled.
@@ -1148,6 +1217,7 @@ scan_failing_ci() {
         check_name="$(printf '%s' "$check" | jq -r '.name')"
         check_state="$(printf '%s' "$check" | jq -r '.state')"
         check_url="$(printf '%s' "$check" | jq -r '.link // ""')"
+        check_completed_at="$(printf '%s' "$check" | jq -r '.completedAt // ""')"
         # Extract run ID from link if possible
         local run_id=""
         if printf '%s' "$check_url" | grep -q '/runs/'; then
@@ -1155,20 +1225,45 @@ scan_failing_ci() {
         fi
         [ -n "$run_id" ] || run_id="check-$check_name-$(date +%s)"
         # Check if we already attempted this run
-        if check_ci_fix_eligible "$repo" "$pr_num" "$run_id"; then
+        if check_ci_fix_eligible "$repo" "$pr_num" "$run_id" "$latest_failure_at" "$pr_updated_at"; then
+          # Revalidate the PR snapshot and failing checks immediately before queueing.
+          # Any new commit, PR activity, or recovered/restarted check defers to the next poll.
+          local fresh_pr_metadata fresh_pr_state fresh_head_sha fresh_updated_at
+          fresh_pr_metadata="$(gh pr view "$pr_num" --repo "$repo" --json state,headRefOid,updatedAt --jq '{state: .state // "", headRefOid: .headRefOid // "", updatedAt: .updatedAt // ""}' 2>>"$LOG" || true)"
+          fresh_pr_state="$(printf '%s' "$fresh_pr_metadata" | jq -r '.state // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+          fresh_head_sha="$(printf '%s' "$fresh_pr_metadata" | jq -r '.headRefOid // ""' 2>/dev/null)"
+          fresh_updated_at="$(printf '%s' "$fresh_pr_metadata" | jq -r '.updatedAt // ""' 2>/dev/null)"
+          if [ "$fresh_pr_state" != "open" ] || [ "$fresh_head_sha" != "$pr_head_sha" ] || [ "$fresh_updated_at" != "$pr_updated_at" ]; then
+            log "skipping CI fix for $repo#$pr_num — PR changed during CI-fix eligibility check"
+            j=$((j+1))
+            continue
+          fi
+          local fresh_checks_json fresh_latest_failure_at current_check
+          fresh_checks_json="$(gh pr checks "$pr_num" --repo "$repo" --json name,state,completedAt,link 2>>"$LOG" | jq -c '[.[] | select(.state=="FAILURE" or .state=="ERROR")]' 2>>"$LOG" || true)"
+          fresh_latest_failure_at="$(printf '%s' "$fresh_checks_json" | jq -r '[.[] | .completedAt // empty] | sort | last // empty' 2>/dev/null || true)"
+          current_check="$(printf '%s' "$fresh_checks_json" | jq -c --arg name "$check_name" --arg link "$check_url" --arg completed "$check_completed_at" '[.[] | select(.name == $name and (.completedAt // "") == $completed and (($link == "") or (.link == $link)))] | .[0] // empty' 2>/dev/null || true)"
+          if [ "$fresh_latest_failure_at" != "$latest_failure_at" ] || [ -z "$current_check" ] || [ "$current_check" = "null" ]; then
+            log "skipping CI fix for $repo#$pr_num — failing CI changed during eligibility check"
+            j=$((j+1))
+            continue
+          fi
 # Create synthetic task for CI fix
            local prompt="CI build '$check_name' is failing on PR #$pr_num (branch: $pr_branch). Fix the failing build. PR: $(printf '%s' "$pr" | jq -r '.html_url')"
            local comment_id="ci_fix:$repo:$pr_num:$run_id"
            local created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-           local esc_prompt
+           local esc_prompt safe_comment_id
            esc_prompt="$(printf '%s' "$prompt" | sed "s/'/''/g")"
-           local base_id="$comment_id"
-           sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at',NULL,NULL,'$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")','$base_id');" 2>>"$LOG"
-           if [ "$(sqlite3 "$DB" "SELECT changes();" 2>>"$LOG")" -gt 0 ]; then
+           safe_comment_id="$(sql_escape "$comment_id")"
+           local base_id="$safe_comment_id"
+           local enqueue_result
+           enqueue_result="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId) VALUES('$safe_comment_id','$repo',$pr_num,'$(printf '%s' "$pr" | jq -r '.html_url')','manul-ci-fix','debugger','$esc_prompt','queued','$created_at',NULL,NULL,'$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")','$base_id'); SELECT CASE WHEN changes() > 0 THEN 'inserted' WHEN EXISTS(SELECT 1 FROM processed_comments WHERE commentId='$safe_comment_id') THEN 'exists' ELSE 'none' END;" 2>>"$LOG")"
+           if [ "$enqueue_result" = "inserted" ]; then
             NEW=$((NEW + 1))
             log "queued CI fix task for $repo#$pr_num run $run_id (check: $check_name)"
-          fi
-          mark_ci_fix_attempted "$repo" "$pr_num" "$run_id"
+           fi
+           if [ "$enqueue_result" = "inserted" ] || [ "$enqueue_result" = "exists" ]; then
+            mark_ci_fix_attempted "$repo" "$pr_num" "$run_id"
+           fi
         fi
         j=$((j+1))
       done
