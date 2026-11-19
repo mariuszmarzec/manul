@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Manul is a GitHub task orchestrator. GitHub comments create tasks; Manul persists task state, prepares isolated repository workspaces, invokes an agent runtime, verifies the result, and delivers the result through GitHub.
+Manul is a GitHub task orchestrator. GitHub comments create tasks; Manul persists task state, prepares isolated repository workspaces, invokes an agent runtime, verifies the result, and delivers the result through GitHub. Compatible `/manul` comments from the same Issue/PR discovered in one poll cycle share one queue entry; the original source messages remain separate in conversation history, and the agent chooses how to organize the requests into an execution plan.
 
 This document describes the current runtime architecture. The runtime-isolation refactor has landed, so the "approved target architecture" is no longer a plan — it is the implementation.
 

@@ -526,9 +526,13 @@ $review_prompt"
       | join("\n\n")
     ' <<<"$review_comments_json")"
 
-    # Keep the whole review in one task. Reply to each distinct inline thread,
-    # and reserve the task/attempt marker for the canonical result comment.
-    review_prompt+="${review_prompt:+$'\n\n'}All inline comments below were submitted together as one GitHub review. Treat them as one task: analyze every comment, implement applicable changes together, and verify each comment is addressed. After the work, post a concise reply in every distinct inline thread identified by its Thread root ID, explaining how that feedback was handled (including if it was already fixed or no change was appropriate). Use the GitHub pull-request review-comment reply API with the thread root comment ID; only reply once when multiple comments share a root. These per-thread replies are supplementary and MUST NOT contain the Manul task/attempt marker. Also post exactly one canonical result comment on this task's PR conversation containing the normal marker. Do not report completion until all distinct threads have replies and the canonical result comment is verified."$'\n\n'"Inline review comments:\n$inline_review_prompt"
+    # Keep the whole review in one task and let the agent plan its workstreams.
+    # Reply to each distinct inline thread and reserve the marker for the
+    # canonical result comment.
+    review_prompt+=$'\n\n'
+    review_prompt+="All inline comments below were submitted together as one GitHub review. Inventory every comment before editing and choose the most efficient safe plan. Combine related or dependent feedback into one cohesive change; split independent or conflicting feedback into distinct ordered workstreams/subtasks; parallelize only when the runtime supports it and the changes cannot conflict. Address every comment and preserve its acceptance criteria. After the work, post a concise reply in every distinct inline thread identified by its Thread root ID, explaining how that feedback was handled (including if it was already fixed or no change was appropriate). Use the GitHub pull-request review-comment reply API with the thread root comment ID; only reply once when multiple comments share a root. These per-thread replies are supplementary and MUST NOT contain the Manul task/attempt marker. Also post exactly one canonical result comment on this task's PR conversation containing the normal marker. Do not report completion until all distinct threads have replies and the canonical result comment is verified."
+    review_prompt+=$'\n\n'
+    review_prompt+="Inline review comments:\n$inline_review_prompt"
   fi
 
   # State machine: handle based on existing review status

@@ -122,9 +122,9 @@ extract_new_count() {
 }
 
 # ============================================================================
-# Test 1: A comment with a "/manul retry" follow-up must be queued even when the
-# runtime config still contains the unresolved "<GITHUB_LOGIN>" placeholder.
-# On the buggy code this produces 0 queued tasks (placeholder never matches).
+# Test 1: Two compatible comments in one Issue/poll cycle become one queued
+# task. The second comment remains in conversation history and in the prompt.
+# The unresolved "<GITHUB_LOGIN>" placeholder must not filter the batch.
 # ============================================================================
 test_placeholder_does_not_block_retry() {
   echo "=== Test 1: unresolved <GITHUB_LOGIN> placeholder must not block polling ==="
@@ -139,23 +139,30 @@ test_placeholder_does_not_block_retry() {
   result="$(MANUL_DIR="$MANUL_DIR" TEST_DIR="$TEST_DIR" PATH="$MOCK_GH:$PATH" \
             bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator 2>&1)"
 
-  local retry_queued
-  retry_queued="$(sqlite3 "$MANUL_DB" \
-    "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5794445678' AND status='queued';")"
-  assert_eq "retry comment queued" "1" "$retry_queued"
-
-  local owner_queued
+  local owner_queued retry_queued retry_persisted batch_prompt_contains_both
   owner_queued="$(sqlite3 "$MANUL_DB" \
     "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5791362918' AND status='queued';")"
-  assert_eq "first comment queued" "1" "$owner_queued"
+  assert_eq "earliest comment anchors the grouped task" "1" "$owner_queued"
+
+  retry_queued="$(sqlite3 "$MANUL_DB" \
+    "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5794445678' AND status='queued';")"
+  assert_eq "compatible retry comment is not queued as a second task" "0" "$retry_queued"
+
+  retry_persisted="$(sqlite3 "$MANUL_DB" \
+    "SELECT COUNT(*) FROM conversation_messages WHERE commentId='5794445678';")"
+  assert_eq "retry comment remains in conversation history" "1" "$retry_persisted"
+
+  batch_prompt_contains_both="$(sqlite3 "$MANUL_DB" \
+    "SELECT instr(prompt,'do this') > 0 AND instr(prompt,'retry this task') > 0 FROM processed_comments WHERE commentId='issue:5791362918';")"
+  assert_eq "grouped prompt contains both comments" "1" "$batch_prompt_contains_both"
 
   cleanup
   unset TEST_DIR
 }
 
 # ============================================================================
-# Test 2: A resolved (real) allow-list still works and a placeholder entry is not
-# enough to drop comments when real users are also present.
+# Test 2: The same batching semantics hold when the allow-list contains both
+# an unresolved placeholder and a real user.
 # ============================================================================
 test_mixed_placeholder_and_real_user() {
   echo "=== Test 2: mixed placeholder+real user keeps the real user ==="
@@ -168,15 +175,22 @@ test_mixed_placeholder_and_real_user() {
   result="$(MANUL_DIR="$MANUL_DIR" TEST_DIR="$TEST_DIR" PATH="$MOCK_GH:$PATH" \
             bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator 2>&1)"
 
-  local retry_queued
-  retry_queued="$(sqlite3 "$MANUL_DB" \
-    "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5794445678' AND status='queued';")"
-  assert_eq "retry comment queued (mixed)" "1" "$retry_queued"
-
-  local owner_queued
+  local owner_queued retry_queued retry_persisted batch_prompt_contains_both
   owner_queued="$(sqlite3 "$MANUL_DB" \
     "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5791362918' AND status='queued';")"
-  assert_eq "first comment queued (mixed)" "1" "$owner_queued"
+  assert_eq "earliest comment anchors the grouped task (mixed)" "1" "$owner_queued"
+
+  retry_queued="$(sqlite3 "$MANUL_DB" \
+    "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:5794445678' AND status='queued';")"
+  assert_eq "compatible retry comment is not queued separately (mixed)" "0" "$retry_queued"
+
+  retry_persisted="$(sqlite3 "$MANUL_DB" \
+    "SELECT COUNT(*) FROM conversation_messages WHERE commentId='5794445678';")"
+  assert_eq "retry comment remains in conversation history (mixed)" "1" "$retry_persisted"
+
+  batch_prompt_contains_both="$(sqlite3 "$MANUL_DB" \
+    "SELECT instr(prompt,'do this') > 0 AND instr(prompt,'retry this task') > 0 FROM processed_comments WHERE commentId='issue:5791362918';")"
+  assert_eq "grouped prompt contains both comments (mixed)" "1" "$batch_prompt_contains_both"
 
   cleanup
   unset TEST_DIR
