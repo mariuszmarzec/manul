@@ -115,7 +115,15 @@ sqlite3 "$DB" "INSERT INTO workspaces(workspaceId,workspacePath,status,lastUsedA
 mkdir -p "$MANUL_WORKSPACE/ws-orphan-old"
 touch -d '2 hours ago' "$MANUL_WORKSPACE/ws-orphan-old"
 workspace_gc_run true
-! workspace_row_exists ws-unbound-old && ! workspace_dir_exists ws-unbound-old || fail "expired unbound workspace removed"
+if workspace_row_exists ws-unbound-old || workspace_dir_exists ws-unbound-old; then
+  echo "DEBUG: unbound workspace row: $(sqlite3 "$DB" "SELECT workspaceId || '|' || status || '|' || lastUsedAt || '|' || workspacePath FROM workspaces WHERE workspaceId='ws-unbound-old';")" >&2
+  echo "DEBUG: unbound workspace directory exists: $(workspace_dir_exists ws-unbound-old && echo yes || echo no)" >&2
+  echo "DEBUG: recovery entries:" >&2
+  find "$MANUL_STATE_DIR/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' 2>/dev/null >&2 || true
+  echo "DEBUG: workspace GC log:" >&2
+  cat "$WORKSPACE_GC_LOG" 2>/dev/null >&2 || true
+  fail "expired unbound workspace removed"
+fi
 unbound_archive="$(find "$MANUL_STATE_DIR/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -name 'ws-unbound-old-gc-expired-unbound-*' -print -quit)"
 [ -n "$unbound_archive" ] || fail "expired unbound workspace preserved in recovery"
 [ ! -d "$MANUL_WORKSPACE/ws-orphan-old" ] || fail "old unregistered directory moved out of active workspace"
