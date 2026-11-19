@@ -216,9 +216,12 @@ if [ "$CI_FIX_ENABLED" = "null" ]; then CI_FIX_ENABLED="false"; fi
 if [ "$CI_FIX_MAX_ATTEMPTS" = "null" ]; then CI_FIX_MAX_ATTEMPTS="2"; fi
 if [ "$CI_FIX_COOLDOWN_MINUTES" = "null" ]; then CI_FIX_COOLDOWN_MINUTES="60"; fi
 # Conflict resolution and merge is a separate opt-in policy with its own PR scope.
-CONFLICT_RESOLVE_AND_MERGE_ENABLED="$(jq -r '.conflictResolveAndMerge.enabled // false' "$CONFIG" 2>/dev/null)"
+if conflict_resolve_and_merge_enabled; then
+  CONFLICT_RESOLVE_AND_MERGE_ENABLED="true"
+else
+  CONFLICT_RESOLVE_AND_MERGE_ENABLED="false"
+fi
 CONFLICT_RESOLVE_AND_MERGE_PR_SCOPE="$(conflict_resolve_and_merge_scope)"
-if [ "$CONFLICT_RESOLVE_AND_MERGE_ENABLED" = "null" ]; then CONFLICT_RESOLVE_AND_MERGE_ENABLED="false"; fi
 
 
 # Generate conversation ID for task grouping
