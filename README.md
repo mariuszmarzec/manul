@@ -121,6 +121,15 @@ The scope is configured independently for each policy. For example,
 `ciFix.prScope` does not inherit `proactivity.fixAndAnswerComments.prScope`,
 and neither setting changes `conflictResolveAndMerge.prScope`.
 
+For CI fixes, `waitBeforeFirstMinutes` (default `30`) gives you time to keep
+working on a PR before Manul intervenes. The timer starts from the later of the
+latest failed-check completion and the PR's last `updatedAt` activity; new PR
+activity restarts it, while routine polling does not. After a CI-fix task has
+been queued, `cooldownMinutes` (default `60`) sets the minimum interval before
+another automatic fix task for that repository/PR can be queued. Before enqueueing,
+Manul rechecks the PR head, activity timestamp, and failing check so it does not
+act on a PR that changed during the eligibility check.
+
 Conflict tasks are tied to the PR head and target/base commit SHAs observed by
 the poller. Before making changes, the agent must re-check that the same PR is
 still open and that its head has not unexpectedly changed. It must resolve the
