@@ -284,7 +284,7 @@ workspace_gc_context_expired() {
 }
 
 workspace_gc_remove_workspace() {
-  local workspace_id="$1" safe_id changed path root_real
+  local workspace_id="$1" recovery_task_id="${2:-gc-expired-context}" safe_id changed path root_real
   [[ "$workspace_id" =~ ^ws-[A-Za-z0-9._-]+$ ]] || return 1
   safe_id="$(workspace_gc_sql_escape "$workspace_id")"
 
@@ -328,7 +328,7 @@ workspace_gc_remove_workspace() {
     fi
     # Expiring a context removes it from the active pool, but preserve one
     # operator-recoverable snapshot before deleting the original directory.
-    if ! workspace_preserve_recovery_snapshot "$workspace_id" "gc-expired-context" >/dev/null 2>&1; then
+    if ! workspace_preserve_recovery_snapshot "$workspace_id" "$recovery_task_id" >/dev/null 2>&1; then
       workspace_gc_log "WARN could not archive expired workspace $workspace_id; retaining it"
       sqlite3 "$WORKSPACE_GC_DB" "UPDATE workspaces SET status='IDLE' WHERE workspaceId='$safe_id' AND status='GC';" >/dev/null 2>&1 || true
       return 1
@@ -342,6 +342,40 @@ workspace_gc_remove_workspace() {
     COMMIT;
   " >/dev/null 2>&1 || return 1
   workspace_gc_log "removed expired workspace $workspace_id"
+}
+
+# Unbound IDLE workspaces are pool slots, not durable issue/PR contexts.
+# Retain recently used slots, but archive and prune expired ones using
+# lastUsedAt (not directory mtime). The shared remove helper claims the GC
+# lease atomically and refuses to remove workspaces with active task ownership.
+workspace_gc_unbound_workspaces() {
+  local rows workspace_id context_guard=""
+  if workspace_gc_table_exists workspace_contexts; then
+    context_guard="AND NOT EXISTS (
+      SELECT 1 FROM workspace_contexts wc
+      WHERE wc.workspaceId=w.workspaceId
+    )"
+  fi
+
+  rows="$(sqlite3 -separator '|' "$WORKSPACE_GC_DB" "
+    SELECT w.workspaceId
+    FROM workspaces w
+    WHERE w.status='IDLE'
+      AND w.lastUsedAt IS NOT NULL
+      AND datetime(w.lastUsedAt) <= datetime('now','-${MANUL_WORKSPACE_GC_IDLE_HOURS} hours')
+      $context_guard
+    ORDER BY w.lastUsedAt, w.workspaceId;
+  " 2>/dev/null)" || {
+    workspace_gc_log "WARN unable to enumerate unbound IDLE workspaces"
+    return 1
+  }
+
+  while IFS='|' read -r workspace_id; do
+    [ -n "$workspace_id" ] || continue
+    [ "$(workspace_gc_active_task_count "$workspace_id")" = "0" ] || continue
+    workspace_gc_remove_workspace "$workspace_id" "gc-expired-unbound" || \
+      workspace_gc_log "INFO unbound workspace $workspace_id became busy or failed safe removal; retained"
+  done <<< "$rows"
 }
 
 workspace_gc_context_workspaces() {
@@ -603,6 +637,7 @@ workspace_gc_run() {
   # Reconcile stale BUSY leases first. The workspace manager moves recoverable
   # working trees to recovery storage before marking/removing stale DB rows.
   workspace_cleanup_stale 3600 || workspace_gc_log "WARN workspace stale-lease reconciliation failed"
+  workspace_gc_unbound_workspaces || workspace_gc_log "WARN unbound workspace pruning failed"
   workspace_gc_context_workspaces
   workspace_gc_orphan_directories || workspace_gc_log "WARN orphan workspace scan failed"
   workspace_gc_recovery_snapshots || workspace_gc_log "WARN recovery snapshot scan failed"
