@@ -110,6 +110,7 @@
     "enabled": true,
     "maxAttemptsPerRun": 2,
     "cooldownMinutes": 60,
+    "waitBeforeFirstMinutes": 30,
     "prScope": "OnlyManulPr"
   },
   "automation": {
