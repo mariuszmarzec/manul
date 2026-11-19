@@ -195,7 +195,7 @@ scan_conflicted_prs "test/repo"
   exit 1
 }
 task_prompt="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments LIMIT 1;")"
-grep -q "target branch: master" <<<"$task_prompt" || {
+grep -q "Target branch: master" <<<"$task_prompt" || {
   echo "FAIL: task prompt omitted the target branch" >&2
   exit 1
 }
