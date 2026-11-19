@@ -45,6 +45,7 @@ Existing behavioural contracts must still be preserved unless a change is intent
 Do not accidentally break:
 
 - SQLite as the authoritative Manul task state.
+- `monitors.db` as the authoritative generic-monitor registry; manage it only through `manul-monitor`, never through direct SQL.
 - Atomic task claiming and worker ownership.
 - Heartbeat/lease recovery semantics.
 - Attempt counting semantics.
@@ -110,3 +111,17 @@ Current-state documentation must describe the code that is actually on the curre
 Planned architecture must be explicitly marked as planned/unimplemented.
 
 Do not keep a statement in documentation merely because it was true in an older version of Manul.
+
+
+## Generic monitor changes
+
+Generic monitors are a separate runtime capability from the proactive PR
+comment watcher. Use `manul-monitor` for monitor lifecycle operations. Do not
+modify `~/.manul/state/monitors.db` directly and do not add agent-owned schema
+changes to that database.
+
+Monitor definitions belong under `~/.manul/monitors/<id>/monitor.json`.
+Monitor-specific persistent files or databases belong under that monitor's
+`workspace/`; they must not be added to the global registry. Update
+`MONITORS.md`, `SKILL.md`, `README.md`, and `CONTRACTS.md` whenever the
+monitor CLI, source, output or lifecycle contract changes.

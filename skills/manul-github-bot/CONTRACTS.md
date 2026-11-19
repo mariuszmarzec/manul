@@ -917,3 +917,51 @@ The workflow registry is additive to the task/lease/runtime-session state. It
 is generic across workflow types and does not introduce a graph engine.
 GitHub PR merge state, approved spec commits and repository artifacts remain
 the authority for approval and recovery decisions.
+
+
+## 21. Generic monitor contract
+
+Generic monitors are separate from the proactive PR comment watcher and the
+existing CI/conflict PR automation policies. Those features retain their
+existing configuration and event semantics.
+
+- The authoritative monitor registry is `~/.manul/state/monitors.db`. It is
+  owned by Manul. Agents and operators must create, update, pause, resume,
+  inspect, run and delete monitors through `manul-monitor`; direct SQL edits
+  and agent-owned schema migrations are forbidden.
+- Monitor definitions are JSON files under
+  `~/.manul/monitors/<id>/monitor.json`. IDs are stable, path-safe lowercase
+  identifiers. Definition updates preserve run, event and delivery history.
+- Every monitor has an independent workspace, log directory, run-artifact
+  directory and non-blocking process lock under `~/.manul/monitors/<id>/`.
+  The workspace is monitor-owned data. It may contain arbitrary monitor-local
+  files or a database chosen for that monitor; it must not be treated as part
+  of the global registry.
+- Soft deletion disables a monitor and retains its definition, workspace and
+  history. The runtime must not garbage-collect monitor workspaces as ordinary
+  task workspaces.
+- The first supported source is `github_pull_requests`. The special
+  repository selector `configured` resolves to the top-level Manul
+  `.repositories` list. Explicit repositories must be a subset of that list;
+  monitor configuration cannot widen the repository allowlist.
+- The PR source considers open PRs created after monitor registration.
+  `excludeSelf` compares the PR author with the authenticated `gh` account;
+  `excludeDrafts` excludes draft PRs. Older PRs are not backfilled when a
+  monitor is created.
+- The poller schedules due monitors after regular repository polling and
+  starts each one in a detached process. Monitor work must not block the task
+  poller. A per-monitor lock prevents two runs of the same monitor from
+  executing concurrently; different monitors remain independent.
+- Event identity is unique per monitor and GitHub PR-open event. Duplicate
+  polls must not create another event or output. Each output has its own
+  delivery record; a failed output stays pending and is retried independently
+  of outputs already delivered.
+- Todo outputs require their matching enabled Todo task source. A Todo event
+  is written with a stable marker and read back before the delivery is marked
+  complete. A lost MCP response must not create a duplicate on retry.
+- The initial output set is `log`, `todo_local` and `todo_remote`. Todo
+  reminder tasks do not carry the `/manul` trigger; they do not automatically
+  start a Manul task.
+- Supported monitor definitions are validated by the CLI. Unknown source or
+  output types, invalid intervals, malformed IDs, disabled Todo providers
+  and repository references outside the global allowlist fail closed.

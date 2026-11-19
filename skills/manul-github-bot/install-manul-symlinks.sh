@@ -82,6 +82,8 @@ SCRIPTS=(
     "manul-result-feedback.sh"
     "manul-result.sh"
     "manul-status.sh"
+    "manul-monitor.sh"
+    "manul-monitor.py"
     "manul-query.sh"
     "manul-slack-intake.sh"
     "manul-operator-context.py"

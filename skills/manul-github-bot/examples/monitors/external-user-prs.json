@@ -1,0 +1,19 @@
+{
+  "id": "external-user-prs",
+  "name": "External user pull requests",
+  "schedule": {
+    "intervalSeconds": 300
+  },
+  "source": {
+    "type": "github_pull_requests",
+    "repositories": "configured"
+  },
+  "filters": {
+    "excludeSelf": true,
+    "excludeDrafts": true
+  },
+  "outputs": [
+    "log",
+    "todo_local"
+  ]
+}

@@ -2120,6 +2120,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     release_repo_lock "$repo"
   done
 
+  # Generic monitors are independent from the proactive PR comment watcher.
+  # The scheduler starts one detached process per due monitor and never waits
+  # for monitor work, so a slow source/output cannot block normal polling.
+  if [ -x "$SCRIPT_DIR/manul-monitor.sh" ]; then
+    "$SCRIPT_DIR/manul-monitor.sh" tick >>"$LOG" 2>&1 || log "WARN: monitor scheduler returned non-zero"
+  fi
+
   # Normal completion path.
   emit_result
   exit 0

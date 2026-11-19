@@ -14,6 +14,8 @@ launcher integrations remain in their respective host repositories.
 - Canonical source: `~/.manul-repo/skills/manul-github-bot/`
 - Runtime data: `~/.manul/`
 - Task database: `~/.manul/state/manul.db`
+- Monitor registry: `~/.manul/state/monitors.db`
+- Monitor definitions/workspaces: `~/.manul/monitors/<id>/`
 - Operator/provider environment: `~/.manul/.env` (mode 600)
 - Workspaces and shared repository caches: `~/.manul/workspace/`
 - Recovery snapshots: `~/.manul/state/recovery/workspaces/`
@@ -85,6 +87,35 @@ runtime configuration exists. Edit the runtime copy, not a repository-local
 operator configuration. Put credentials only in `~/.manul/.env` or the
 documented environment variables; never commit credentials or a real
 operator-specific `config.json`.
+
+## Generic monitors
+
+Manul supports independent, scheduled monitors. They are separate from the
+existing proactive PR comment, CI-fix and conflict-resolution automations.
+The initial source detects newly opened, non-draft GitHub PRs in configured
+repositories; outputs can append to monitor logs or create a review reminder in
+Todo Local/Remote.
+
+Manage monitors through the CLI (also available to OpenCode with the Manul
+skill):
+
+```bash
+manul-monitor create --config external-user-prs.json
+manul-monitor list
+manul-monitor show external-user-prs
+manul-monitor run external-user-prs
+manul-monitor pause external-user-prs
+manul-monitor resume external-user-prs
+manul-monitor update external-user-prs --config external-user-prs.json
+manul-monitor delete external-user-prs
+```
+
+Definitions, supported filters/outputs, process isolation, storage ownership
+and an example are documented in
+[MONITORS.md](skills/manul-github-bot/MONITORS.md). The global registry is
+`~/.manul/state/monitors.db`; each monitor has an independent workspace at
+`~/.manul/monitors/<id>/workspace/`. Use the CLI for registry changes and
+keep monitor-specific state in its own workspace.
 
 ### GitHub PR automation
 
