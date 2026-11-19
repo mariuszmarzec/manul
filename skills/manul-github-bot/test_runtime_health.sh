@@ -589,14 +589,16 @@ for cmd in manul manul-status manul-comments-remove; do
 done
 
 # 4) The repair path (installer) recreates all required symlinks from scratch
+CLI_REPAIR_LOG="$CLI_ROOT/repair-runtime.log"
 set +e
 OPENCODE_CONFIG_DIR="$CLI_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN" MANUL_CANONICAL_DIR="$CANON" \
-  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >"$CLI_REPAIR_LOG" 2>&1
 RC_REPAIR=$?
 set -e
 if [ "$RC_REPAIR" -eq 0 ]; then
   ok "Installer recreates runtime after full deletion"
 else
+  cat "$CLI_REPAIR_LOG" >&2
   fail "Installer failed to recreate runtime (rc=$RC_REPAIR)"
 fi
 for entry in manul-daemon.sh manul-status.sh manul-comments-remove.sh; do
