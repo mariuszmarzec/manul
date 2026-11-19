@@ -404,8 +404,21 @@ def contains_marker(value, marker):
 def deliver(provider, event, mid, run_id, p):
     if provider == "log":
         d = monitor_dirs(p, mid)
-        record = {"monitorId": mid, "runId": run_id, "eventKey": event_key(event), "event": event, "recordedAt": now()}
-        with (d["logs"] / "events.jsonl").open("a", encoding="utf-8") as stream:
+        key = event_key(event)
+        event_log = d["logs"] / "events.jsonl"
+        # The file is the output's idempotency witness. A crash after append
+        # but before the SQLite delivery update must not append the same event
+        # again when the pending delivery is retried.
+        if event_log.is_file():
+            with event_log.open("r", encoding="utf-8") as stream:
+                for line in stream:
+                    try:
+                        if json.loads(line).get("eventKey") == key:
+                            return
+                    except (json.JSONDecodeError, AttributeError):
+                        continue
+        record = {"monitorId": mid, "runId": run_id, "eventKey": key, "event": event, "recordedAt": now()}
+        with event_log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
         return
     url, token = todo_config(p, provider)

@@ -121,6 +121,42 @@ class MonitorTests(unittest.TestCase):
         events_log = self.paths["monitors"] / "external-prs" / "logs" / "events.jsonl"
         self.assertEqual(len(events_log.read_text(encoding="utf-8").splitlines()), 1)
 
+    def test_failed_output_retries_without_repeating_delivered_output(self):
+        self.definition["outputs"] = ["log", "todo_local"]
+        self.definition_file.write_text(json.dumps(self.definition), encoding="utf-8")
+        self.create_monitor()
+        pr_items = [{
+            "number": 9, "title": "Retry test", "url": "https://github.com/acme/app/pull/9",
+            "author": {"login": "contributor"}, "isDraft": False,
+            "createdAt": "2099-01-01T00:00:00Z",
+        }]
+        calls = []
+
+        def first_delivery(kind, event, monitor_id, run_id, paths):
+            calls.append(kind)
+            if kind == "todo_local":
+                raise monitor.MonitorError("Todo endpoint temporarily unavailable")
+
+        with patch.object(monitor, "gh_login", return_value="primary"), \\
+             patch.object(monitor, "gh_prs", side_effect=lambda repo: pr_items if repo == "acme/app" else []), \\
+             patch.object(monitor, "deliver", side_effect=first_delivery):
+            first = monitor.run_monitor("external-prs", self.paths)
+        self.assertEqual(first["status"], "partial")
+        self.assertEqual(calls, ["log", "todo_local"])
+
+        def recovered_delivery(kind, event, monitor_id, run_id, paths):
+            calls.append(kind)
+
+        with patch.object(monitor, "gh_login", return_value="primary"), \\
+             patch.object(monitor, "gh_prs", side_effect=lambda repo: pr_items if repo == "acme/app" else []), \\
+             patch.object(monitor, "deliver", side_effect=recovered_delivery):
+            second = monitor.run_monitor("external-prs", self.paths)
+        self.assertEqual(second["status"], "completed")
+        self.assertEqual(calls, ["log", "todo_local", "todo_local"])
+        with monitor.connect(self.paths) as db:
+            states = {row["output_key"]: row["status"] for row in db.execute("SELECT output_key,status FROM monitor_deliveries")}
+        self.assertEqual(states, {"log": "delivered", "todo_local": "delivered"})
+
     def test_event_marker_searches_nested_todo_tasks(self):
         marker = "<!-- MANUL_MONITOR_EVENT:v1:abc -->"
         tasks = [{"description": "root", "subTasks": [{"description": "child " + marker}]}]
