@@ -114,6 +114,39 @@ Review handling:
 - the executor replies to each distinct inline thread and posts one canonical task result to the PR conversation;
 - `DISMISS` -> no fix task.
 
+### Proactive PR watcher
+
+The existing GitHub poller also watches eligible open PRs independently of their
+source task and independently of Todo MCP. The watcher creates/refreshes a
+PR-level conversation mapping so new PRs can be monitored even when no source
+task exists, and completed source tasks do not stop monitoring.
+
+The watcher stores a one-time `meta.pr_watcher_baseline` when first enabled;
+events older than that baseline are not backfilled. It deduplicates each
+discussion/inline comment or reply through the existing processed-event state.
+Submitted reviews continue to be grouped by review ID so a multi-comment review
+does not fan out into one task per inline comment. New replies to an existing
+inline thread are treated as separate feedback events and retain the original
+thread root for the response.
+
+Configuration:
+- `proactivity.fixAndAnswerComments.enabled` enables proactive feedback
+  analysis; missing values default to false for existing configurations.
+- `proactivity.fixAndAnswerComments.prScope` and `ciFix.prScope` independently
+  accept `OnlyManulPr` or `AllUserAuthoredPr`.
+- `OnlyManulPr` requires an exact verified Manul deliverable PR record.
+- `AllUserAuthoredPr` selects PRs authored by `proactivity.prAuthorAllowed`;
+  an omitted/empty list inherits `allowedUsers`.
+- CI-fix scope does not depend on whether proactive comment handling is enabled.
+
+Before changing code, proactive feedback must be classified as a bug, actionable
+suggestion, nitpick, incorrect assumption, or human-decision-required. Only
+currently applicable bugs and actionable suggestions are implemented. A
+nitpick or incorrect assumption receives an explanation without code changes;
+a material decision is surfaced to the user rather than guessed. Manul replies
+in the original inline thread or PR conversation and ignores its own signed
+feedback to prevent loops.
+
 ## Database schema
 
 The following describes the effective logical schema used by the current Manul scripts. Individual schema initializers may create a subset and add columns incrementally.
