@@ -125,12 +125,14 @@ pr_watcher_comment_was_handled() {
   # stores comments there even when a previous delivery attempt failed.
   found="$(sqlite3 "$DB" "
     SELECT 1 FROM processed_comments
+    WHERE commentId IN ('issue:$raw_id', 'review:$raw_id')
+    UNION ALL
+    SELECT 1 FROM processed_comments
     WHERE commentId IN (
-      'issue:$raw_id',
-      'review:$raw_id',
       'review:proactive-comment-$raw_id',
       'review:proactive-inline-$raw_id'
     )
+      AND status IN ('task_created', 'completed')
     LIMIT 1;
   " 2>/dev/null || true)"
   [ "$found" = "1" ]
