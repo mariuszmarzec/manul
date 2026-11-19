@@ -56,6 +56,21 @@ VALUES('ci_fix:test/repo:8:legacy-run', 'test/repo', 8, '$legacy_at');"
 # Load the production CI-fix helpers from poll.sh, without starting the poller.
 source <(sed -n '/^# === ci fix helpers ===$/,/^# === end ci fix helpers ===$/p' "$SCRIPT_DIR/poll.sh")
 
+# Legacy task rows are migrated and keep their previous 60-minute cooldown.
+legacy_reference="$(to_iso "$((CI_FIX_TEST_NOW - 180 * 60))")"
+if check_ci_fix_eligible "test/repo" "8" "legacy-retry-too-soon" "$legacy_reference" "$legacy_reference"; then
+  echo "FAIL: an existing PR was incorrectly treated as a first attempt after upgrade" >&2
+  exit 1
+fi
+CI_FIX_TEST_NOW=$((CI_FIX_TEST_NOW + 61 * 60))
+export CI_FIX_TEST_NOW
+check_ci_fix_eligible "test/repo" "8" "legacy-retry-ready" "$legacy_reference" "$legacy_reference" || {
+  echo "FAIL: migrated PR cooldown did not expire" >&2
+  exit 1
+}
+CI_FIX_TEST_NOW=$((CI_FIX_TEST_NOW - 61 * 60))
+export CI_FIX_TEST_NOW
+
 fail_29="$(to_iso "$((CI_FIX_TEST_NOW - 29 * 60))")"
 activity_45="$(to_iso "$((CI_FIX_TEST_NOW - 45 * 60))")"
 if check_ci_fix_eligible "test/repo" "42" "first-run" "$fail_29" "$activity_45"; then
@@ -102,18 +117,6 @@ check_ci_fix_eligible "test/repo" "42" "second-run-ready" "$fail_old" "$activity
 # A same-numbered PR in another repository must not inherit this PR's cooldown.
 check_ci_fix_eligible "another/repo" "42" "independent-repo" "$fail_old" "$activity_old" || {
   echo "FAIL: per-PR cooldown leaked across repositories" >&2
-  exit 1
-}
-
-# Legacy tasks are migrated and continue to observe the 60-minute cooldown.
-if check_ci_fix_eligible "test/repo" "8" "legacy-retry-too-soon" "$fail_old" "$activity_old"; then
-  echo "FAIL: an existing PR was incorrectly treated as a first attempt after upgrade" >&2
-  exit 1
-fi
-CI_FIX_TEST_NOW=$((CI_FIX_TEST_NOW + 2 * 60))
-export CI_FIX_TEST_NOW
-check_ci_fix_eligible "test/repo" "8" "legacy-retry-ready" "$fail_old" "$activity_old" || {
-  echo "FAIL: migrated PR cooldown did not expire" >&2
   exit 1
 }
 
