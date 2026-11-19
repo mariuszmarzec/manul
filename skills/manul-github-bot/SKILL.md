@@ -690,11 +690,14 @@ provider or require Caracal.
 OpenCode loads the operator's JSON or JSONC configuration itself. Manul leaves
 `OPENCODE_CONFIG` and all operator config files untouched, then supplies a
 temporary task-scoped `OPENCODE_CONFIG_CONTENT` overlay. The overlay adds only
-Manul-owned MCP names (`manul-fiteo` and, when available,
-`manul-todo-local`); it checks known config layers for name collisions and
-never replaces an existing operator MCP entry. Optional MCP outages or missing
-Todo helpers do not block agent startup. The overlay adds the exact leased
-workspace permission boundary and is discarded after the task.
+the Manul-owned Fiteo MCP and adds `manul-todo-local` only when no
+configured MCP server already uses the resolved Todo Local URL. It scans every
+known config layer by normalized URL, reuses one unambiguous, enabled remote
+entry under its existing name, and never replaces an operator MCP entry. An
+occupied URL that is disabled or ambiguous is not duplicated; the optional
+Todo capability is skipped instead. Optional MCP outages or missing Todo
+helpers do not block agent startup. The overlay adds the exact leased workspace
+permission boundary and is discarded after the task.
 
 The Streamable HTTP Todo MCP client and local endpoint resolver are bundled
 with standalone Manul and installed into `~/.manul`. Local Todo polling works

@@ -792,12 +792,7 @@ elif execution_kind == "slack_intake":
         operator_agent_name: {
             "mode": "primary",
             "description": "Sphinx Slack intake. Only Todo Local list/get/create tools are permitted; never send Slack messages or modify existing Todo tasks.",
-            "tools": {
-                "*": False,
-                "manul_todo_local_list_tasks": True,
-                "manul_todo_local_get_task": True,
-                "manul_todo_local_create_task": True,
-            },
+            "tools": {"*": False},
         }
     }
     tools = {"fiteo_todo_create_task": False}
@@ -829,57 +824,120 @@ if fiteo_url and fiteo_pat:
         tools["manul_fiteo_*"] = True
     else:
         print("could not safely inspect all OpenCode config layers; skipping optional Manul Fiteo MCP", file=sys.stderr)
+def normalize_mcp_endpoint_url(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value == "{env:TODO_LOCAL_MCP_URL}":
+        return value
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        parsed = urlsplit(value)
+        if not parsed.scheme or not parsed.netloc or not parsed.hostname:
+            return value.rstrip("/")
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname.lower()
+        host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
+        port = parsed.port
+        if port is not None and not (
+            (scheme == "http" and port == 80)
+            or (scheme == "https" and port == 443)
+        ):
+            host = f"{host}:{port}"
+        user_info = parsed.netloc.rsplit("@", 1)[0] + "@" if "@" in parsed.netloc else ""
+        path = parsed.path.rstrip("/") or "/"
+        return urlunsplit((scheme, user_info + host, path, parsed.query, ""))
+    except ValueError:
+        return value.rstrip("/")
+
+configured_todo_url = normalize_mcp_endpoint_url(todo_url)
+def is_configured_todo_endpoint(candidate_url):
+    if candidate_url == "{env:TODO_LOCAL_MCP_URL}":
+        return True
+    candidate = normalize_mcp_endpoint_url(candidate_url)
+    return candidate is not None and candidate == configured_todo_url
+
+todo_endpoint_present = False
+matching_todo_server_names = []
+for server_name, candidates in existing_mcp_servers.items():
+    endpoint_candidates = [
+        candidate for candidate in candidates
+        if isinstance(candidate, dict) and is_configured_todo_endpoint(candidate.get("url"))
+    ]
+    if not endpoint_candidates:
+        continue
+    todo_endpoint_present = True
+    reusable = bool(candidates) and all(
+        isinstance(candidate, dict)
+        and candidate.get("type") == "remote"
+        and is_configured_todo_endpoint(candidate.get("url"))
+        and candidate.get("disabled") is not True
+        for candidate in candidates
+    )
+    if reusable:
+        matching_todo_server_names.append(server_name)
+
+todo_server_name = None
+todo_server_created = False
 if todo_url:
-    if "manul-todo-local" in names:
-        candidates = existing_mcp_servers.get("manul-todo-local", [])
-        accepted_urls = {todo_url, "{env:TODO_LOCAL_MCP_URL}"}
-        reusable = bool(candidates) and all(
-            isinstance(candidate, dict)
-            and candidate.get("type") == "remote"
-            and candidate.get("url") in accepted_urls
-            and candidate.get("disabled") is not True
-            for candidate in candidates
-        )
-        if reusable:
-            print("reusing the existing Manul-owned Todo Local MCP endpoint", file=sys.stderr)
-            if execution_kind == "slack_intake":
-                for tool_name in (
-                    "manul_todo_local_todo_list_tasks",
-                    "manul_todo_local_todo_get_task",
-                    "manul_todo_local_todo_create_task",
-                    "manul_todo_local_list_tasks",
-                    "manul_todo_local_get_task",
-                    "manul_todo_local_create_task",
-                ):
-                    permissions.append({"action": tool_name, "resource": "*", "effect": "allow"})
+    if todo_endpoint_present:
+        if len(matching_todo_server_names) == 1:
+            todo_server_name = matching_todo_server_names[0]
+            print(
+                f"reusing existing Todo Local MCP endpoint from server '{todo_server_name}'",
+                file=sys.stderr,
+            )
+        elif len(matching_todo_server_names) > 1:
+            print(
+                "multiple enabled MCP entries use the configured Todo Local URL; "
+                "not adding another server or guessing which namespace to use",
+                file=sys.stderr,
+            )
         else:
-            print("reserved MCP name 'manul-todo-local' exists but its endpoint cannot be verified as the configured Todo Local MCP; disabling intake tools", file=sys.stderr)
-            if execution_kind == "slack_intake":
-                operator_agent_config["manul-slack-intake"]["tools"] = {"*": False}
+            print(
+                "the configured Todo Local URL already exists in an MCP entry that is "
+                "disabled, non-remote, or inconsistent across config layers; not adding a duplicate",
+                file=sys.stderr,
+            )
+    elif "manul-todo-local" in names:
+        print(
+            "reserved MCP name 'manul-todo-local' is occupied by a different endpoint; "
+            "skipping optional Manul Todo MCP",
+            file=sys.stderr,
+        )
     elif scan_ok:
-        servers["manul-todo-local"] = {
+        todo_server_name = "manul-todo-local"
+        todo_server_created = True
+        servers[todo_server_name] = {
             "type": "remote",
             "url": todo_url,
             "oauth": False,
             "disabled": False,
         }
-        if execution_kind == "slack_intake":
-            for tool_name in (
-                "manul_todo_local_todo_list_tasks",
-                "manul_todo_local_todo_get_task",
-                "manul_todo_local_todo_create_task",
-                "manul_todo_local_list_tasks",
-                "manul_todo_local_get_task",
-                "manul_todo_local_create_task",
-            ):
-                permissions.append({"action": tool_name, "resource": "*", "effect": "allow"})
-        else:
-            permissions.append({"action": "manul_todo_local_*", "resource": "*", "effect": "allow"})
-            tools["manul_todo_local_*"] = True
     else:
         print("could not safely inspect all OpenCode config layers; skipping optional Manul local Todo MCP", file=sys.stderr)
 
-if execution_kind == "slack_intake" and not todo_url:
+if todo_server_name and execution_kind == "slack_intake":
+    # OpenCode prefixes MCP tool names with the configured server name.
+    # Reusing an operator-owned entry therefore requires allowing that entry's
+    # namespace, not the Manul-owned namespace used for newly injected servers.
+    tool_prefix = re.sub(r"[^A-Za-z0-9_]", "_", todo_server_name) + "_"
+    for suffix in (
+        "todo_list_tasks",
+        "todo_get_task",
+        "todo_create_task",
+        "list_tasks",
+        "get_task",
+        "create_task",
+    ):
+        tool_name = tool_prefix + suffix
+        operator_agent_config["manul-slack-intake"]["tools"][tool_name] = True
+        permissions.append({"action": tool_name, "resource": "*", "effect": "allow"})
+elif todo_server_created and execution_kind != "slack_intake":
+    permissions.append({"action": "manul_todo_local_*", "resource": "*", "effect": "allow"})
+    tools["manul_todo_local_*"] = True
+
+if execution_kind == "slack_intake" and not todo_server_name:
     # No confirmed local endpoint means no tools at all, never a different Todo identity.
     operator_agent_config["manul-slack-intake"]["tools"] = {"*": False}
 
