@@ -105,7 +105,10 @@ class MonitorTests(unittest.TestCase):
             {"number": 3, "title": "External PR", "url": "https://github.com/acme/app/pull/3",
              "author": {"login": "contributor"}, "isDraft": False, "createdAt": "2099-01-01T00:00:00Z"},
         ]
-        with patch.object(monitor, "gh_login", return_value="primary"), patch.object(monitor, "gh_prs", return_value=pr_items):
+        def prs_for_repo(repository):
+            return pr_items if repository == "acme/app" else []
+
+        with patch.object(monitor, "gh_login", return_value="primary"), patch.object(monitor, "gh_prs", side_effect=prs_for_repo):
             first = monitor.run_monitor("external-prs", self.paths)
             second = monitor.run_monitor("external-prs", self.paths)
 
