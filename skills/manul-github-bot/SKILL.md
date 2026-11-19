@@ -1,6 +1,6 @@
 ---
 name: manul-github-bot
-description: Operate, install, and debug the Manul GitHub command bot. Manul reacts to /manul commands in issues and PRs, manages isolated tasks and workspaces, invokes the current agent runtime, verifies results, and posts feedback signed "manul 🐈". The canonical executable source is this skill directory.
+description: Operate, install, and debug Manul, including GitHub command tasks, isolated workspaces, generic scheduled monitors, and the current agent runtime. The canonical executable source is this skill directory.
 ---
 
 # Manul GitHub Bot 🐈
@@ -498,6 +498,7 @@ manul-result.sh
 manul-wait.sh
 manul-conversation.sh
 manul-orchestrator.sh
+manul-monitor
 ```
 
 ### Synchronous operator query
@@ -553,6 +554,95 @@ manul --help
 
 See `LOCAL_INTERFACE.md` and `ORCHESTRATOR.md`.
 
+## Generic monitor management
+
+Generic monitors are separate from proactive PR comment handling, CI-fix
+automation and conflict resolution. Those existing PR automations keep their
+own scopes and lifecycle. Use `manul-monitor` when the operator asks Manul to
+watch for a new class of event, such as newly opened PRs.
+
+**Always manage monitors through the `manul-monitor` CLI. Never read or edit
+`~/.manul/state/monitors.db` directly.** The CLI validates definitions,
+updates the registry transactionally, and preserves event/delivery history.
+
+Create a monitor by writing a JSON definition in the current writable
+workspace, then passing it to the CLI:
+
+```json
+{
+  "id": "external-user-prs",
+  "name": "External user pull requests",
+  "schedule": { "intervalSeconds": 300 },
+  "source": {
+    "type": "github_pull_requests",
+    "repositories": "configured"
+  },
+  "filters": {
+    "excludeSelf": true,
+    "excludeDrafts": true
+  },
+  "outputs": ["log", "todo_local"]
+}
+```
+
+```bash
+manul-monitor create --config external-user-prs.json --json
+manul-monitor list
+manul-monitor show external-user-prs
+manul-monitor run external-user-prs
+manul-monitor pause external-user-prs
+manul-monitor resume external-user-prs
+manul-monitor update external-user-prs --config external-user-prs.json
+manul-monitor delete external-user-prs
+```
+
+Definition rules:
+
+- `id` is a stable lowercase identifier (letters, digits and hyphens).
+- `schedule.intervalSeconds` is 60–86400 seconds; default is 300.
+- The first implemented source is `github_pull_requests`.
+- `source.repositories: "configured"` uses the top-level Manul
+  `.repositories` allowlist. An explicit array must be a subset of that
+  allowlist; a monitor cannot grant itself access to another repository.
+- `filters.excludeSelf` compares the PR author with the authenticated
+  `gh` account. `filters.excludeDrafts` defaults to true.
+- The source detects open PRs created after the monitor was registered; it
+  does not backfill older PRs.
+- Supported outputs are `log`, `todo_local`, and `todo_remote`.
+  Todo outputs require the corresponding enabled `taskSources[]` entry.
+  Created Todo items are ordinary review reminders; they do not contain a
+  `/manul` trigger and therefore do not automatically start a Manul task.
+- Todo deliveries use a stable idempotency marker and are read back before
+  Manul marks a delivery complete. Failed deliveries remain pending and retry.
+
+The poller schedules due monitors after regular repository polling and starts
+each run as a detached process. One monitor's slow API/output call does not
+block normal polling or another monitor. Each monitor has its own lock,
+workspace, logs and run artifacts:
+
+```text
+~/.manul/
+  state/monitors.db
+  monitors/<monitor-id>/
+    monitor.json
+    workspace/
+    logs/events.jsonl
+    logs/runner.log
+    runs/run-<id>.json
+```
+
+The global database belongs to Manul and stores lifecycle, scheduling, runs,
+event identities and output-delivery state. The per-monitor `workspace/` is
+independent; use it for monitor-specific files or a database whose schema
+belongs to that monitor. The engine does not impose a common schema on that
+workspace. A soft delete disables a monitor but retains its workspace/history.
+
+When diagnosing a monitor, use `manul-monitor show <id>` first. Inspect the
+reported workspace and `logs/runner.log` for run details. Do not bypass the
+CLI by editing registry rows or manually marking events delivered.
+
+See `MONITORS.md` for the complete operator contract and examples.
+
 ## Main operational scripts
 
 | Script | Responsibility |
@@ -565,6 +655,7 @@ See `LOCAL_INTERFACE.md` and `ORCHESTRATOR.md`.
 | `manul-conversation.sh` | Conversation/task local state interface |
 | `manul-pr-review.sh` | Convert PR review events into Manul tasks |
 | `manul-pr-watcher.sh` | Discover and deduplicate proactive PR comments/replies without a task-source dependency |
+| `manul-monitor.sh` / `manul-monitor.py` | Manage monitor definitions, schedule detached runs, deduplicate events and publish outputs |
 | `manul-result-feedback.sh` | Publish structured task lifecycle/result events |
 | `manul-result.sh` | Read completed/failed task results |
 | `manul-status.sh` | Inspect task state/logs |

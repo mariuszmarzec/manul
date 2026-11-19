@@ -56,6 +56,8 @@ The runtime effectively treats these as Manul runtime data under `MANUL_DIR`:
 
 - `config.json`
 - `manul.db`
+- `state/monitors.db`
+- `monitors/<id>/monitor.json` and monitor-owned workspace/log/run data
 - logs
 - lock files
 - task/prompt/output artifacts
@@ -178,6 +180,45 @@ manul-daemon
 The daemon performs a stale-task recovery pass when its loop starts. The watchdog is the periodic liveness mechanism: it can restart an enabled daemon, remove a stale daemon lock, reclaim stale workspaces, and recover tasks using heartbeat/lease ownership checks.
 
 The watchdog must not blindly reset task state.
+
+## Generic monitor plane
+
+Generic monitors are independent from the proactive PR feedback watcher and
+from the CI/conflict PR automation policies. The poller invokes
+`manul-monitor.sh tick` after repository workers finish. The scheduler reads
+`~/.manul/state/monitors.db`, reserves due monitors and starts a detached
+process for each one. A per-monitor OS lock prevents overlapping runs of the
+same monitor.
+
+```text
+poll.sh
+  |
+  v
+manul-monitor tick
+  |
+  +--> monitors.db (definitions, schedule, runs, event identity, deliveries)
+  |
+  +--> detached process per due monitor
+          |
+          +--> GitHub pull-request source
+          |
+          +--> monitor_events / monitor_deliveries
+          |
+          +--> log / Todo Local / Todo Remote outputs
+```
+
+The global monitor database is Manul-owned control state; agents must use the
+`manul-monitor` CLI rather than editing its schema or rows. Each definition
+and monitor workspace lives under `~/.manul/monitors/<id>/`. The workspace is
+monitor-owned data and may contain files or databases chosen for that monitor.
+The runtime does not impose a shared data schema on it. Soft deletion disables
+a monitor while retaining its workspace and history.
+
+The initial source implementation detects open GitHub PRs created after the
+monitor registration time, optionally excludes the authenticated GitHub user
+and drafts, and restricts repositories to the global `.repositories`
+allowlist. Outputs are independently recorded and retried; Todo writes use a
+stable event marker and a read-back check before being considered delivered.
 
 ## GitHub control plane
 

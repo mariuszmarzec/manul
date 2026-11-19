@@ -58,7 +58,8 @@ manul-ensure-runtime() {
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-daemon.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-status.sh" ] \
        || [ ! -f "$MANUL_RUNTIME_DIR/manul-query.sh" ] \
-       || [ ! -f "$MANUL_RUNTIME_DIR/manul-comments-remove.sh" ]; then
+       || [ ! -f "$MANUL_RUNTIME_DIR/manul-comments-remove.sh" ] \
+       || [ ! -f "$MANUL_RUNTIME_DIR/manul-monitor.sh" ]; then
         # Keep repair output off this function's stdout. CLI callers commonly
         # pipe status through head/grep; a closed stdout pipe must not SIGPIPE
         # the installer halfway through deployment.
@@ -80,7 +81,7 @@ manul-ensure-runtime() {
 }
 
 # Remove legacy aliases before defining the canonical functions.
-unalias manul manul-status manul-comments-remove 2>/dev/null || true
+unalias manul manul-status manul-comments-remove manul-monitor 2>/dev/null || true
 
 # manul is the intentional lifecycle entrypoint.
 # With no arguments it starts Manul; explicit subcommands are passed through.
@@ -135,4 +136,10 @@ manul-status() {
 manul-comments-remove() {
     manul-ensure-runtime || return $?
     "$MANUL_CANONICAL_DIR/manul-comments-remove.sh" "$@"
+}
+
+
+manul-monitor() {
+    manul-ensure-runtime || return $?
+    "$MANUL_CANONICAL_DIR/manul-monitor.sh" "$@"
 }
