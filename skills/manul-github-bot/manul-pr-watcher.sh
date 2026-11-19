@@ -413,7 +413,7 @@ scan_conflicted_prs() {
       continue
     fi
 
-    local task_id prompt esc_prompt esc_repo esc_url now
+    local task_id prompt esc_prompt esc_repo esc_url conv_id esc_conv_id now
     task_id="conflict_resolve_merge:$repo:$pr_num:$head_sha:$base_sha"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     prompt="$(cat <<PROMPT
@@ -444,6 +444,8 @@ PROMPT
     esc_prompt="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_repo="$(sql_escape "$repo")"
     esc_url="$(sql_escape "$pr_url")"
+    conv_id="$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")"
+    esc_conv_id="$(sql_escape "$conv_id")"
     if sqlite3 "$DB" "
       INSERT OR IGNORE INTO processed_comments(
         commentId, repository, issueNumber, commentUrl, author, agent, prompt,
@@ -453,7 +455,7 @@ PROMPT
         '$(sql_escape "$task_id")', '$esc_repo', $pr_num, '$esc_url',
         'manul-conflict-resolver', '', '$esc_prompt',
         'IMPLEMENT', $pr_num, '$esc_url', 'queued', '$now', NULL, NULL,
-        '$(sql_escape "$(generate_conversation_id "$repo" "$pr_num" "pr-top-level")')',
+        '$esc_conv_id',
         '$(sql_escape "$task_id")'
       );
       SELECT changes();
