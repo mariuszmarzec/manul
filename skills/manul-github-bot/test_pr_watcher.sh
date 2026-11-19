@@ -106,7 +106,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$review_id" ] && [ -n "$pr_number" ]
 printf '%s\n' "$review_id" >>"$MOCK_HANDLER_LOG"
-sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId) VALUES('review:$review_id');"
+sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId, status) VALUES('review:$review_id', 'task_created');"
 HANDLER
 chmod +x "$MANUL_DIR/manul-pr-review.sh"
 
