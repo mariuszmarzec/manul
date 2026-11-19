@@ -217,13 +217,19 @@ else
   fail "Installer removed unrelated Node modules or retained the retired plugin package"
 fi
 
-for obsolete_helper in todo-local-mcp-url.sh todo-mcp-client.py todo-remote-create-task.py; do
-  if [ ! -L "$PERM_RUN/$obsolete_helper" ] && [ ! -e "$PERM_RUN/$obsolete_helper" ]; then
-    ok "Installer removes obsolete Manul helper symlink: $obsolete_helper"
+for required_helper in todo-local-mcp-url.sh todo-mcp-client.py; do
+  if [ -L "$PERM_RUN/$required_helper" ] &&
+     [ "$(readlink -- "$PERM_RUN/$required_helper" 2>/dev/null || true)" = "$PERM_CANON/$required_helper" ]; then
+    ok "Installer deploys required bundled Todo helper: $required_helper"
   else
-    fail "Installer retained obsolete Manul helper symlink: $obsolete_helper"
+    fail "Installer did not deploy the required bundled Todo helper: $required_helper"
   fi
 done
+if [ ! -L "$PERM_RUN/todo-remote-create-task.py" ] && [ ! -e "$PERM_RUN/todo-remote-create-task.py" ]; then
+  ok "Installer removes the retired Todo remote-create helper symlink"
+else
+  fail "Installer retained the retired Todo remote-create helper symlink"
+fi
 
 if [ -f "$PERM_ROOT/opencode/tools/operator_tool.ts" ] &&
    [ "$(cat "$PERM_ROOT/opencode/tools/operator_tool.ts")" = "operator-owned tool" ]; then
@@ -364,13 +370,15 @@ cp "$SCRIPT_DIR"/*.py "$CANON/" 2>/dev/null || true
 
 # 1) Missing runtime -> installer creates it and exits 0
 set +e
+SELFHEAL_INSTALL1_LOG="$SELFHEAL_ROOT/install1.log"
 OPENCODE_CONFIG_DIR="$SELFHEAL_ROOT/opencode" MANUL_RUNTIME_DIR="$RUN1" MANUL_CANONICAL_DIR="$CANON" \
-  "$SCRIPT_DIR/install-manul-symlinks.sh" >/dev/null 2>&1
+  "$SCRIPT_DIR/install-manul-symlinks.sh" >"$SELFHEAL_INSTALL1_LOG" 2>&1
 RC1=$?
 set -e
 if [ "$RC1" -eq 0 ] && [ -d "$RUN1" ] && [ -L "$RUN1/manul-daemon.sh" ]; then
   ok "Installer recreates a missing runtime directory"
 else
+  cat "$SELFHEAL_INSTALL1_LOG" >&2
   fail "Installer did not recreate missing runtime (rc=$RC1)"
 fi
 
