@@ -13,6 +13,7 @@ LOG="$TEST_DIR/poll.log"
 MOCK_BIN="$TEST_DIR/bin"
 MOCK_HANDLER_LOG="$TEST_DIR/handler.log"
 export MANUL_DIR DB CONFIG LOG MOCK_HANDLER_LOG
+SIG="— manul 🐈"
 mkdir -p "$MANUL_DIR" "$MOCK_BIN"
 
 log() { :; }
