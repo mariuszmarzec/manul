@@ -269,7 +269,7 @@ scan_proactive_pr_comments() {
 $comment_body"
       pr_watcher_submit_feedback "$repo" "$pr_number" "proactive-comment-$comment_id" "$task_body" "$comment_author" "$comment_created" || true
     done < <(
-      jq -c --arg pr "$pr_number" --arg baseline "$BASELINE" --arg sig "$SIG" '
+      jq -c --arg pr "$pr_number" --arg baseline "$watcher_baseline" --arg sig "$SIG" '
         .[]
         | select((.html_url // "") | test("/pull/" + $pr + "($|[#?])"))
         | select((.created_at // "") >= $baseline)
@@ -309,7 +309,7 @@ $comment_body"
 $comment_body"
       pr_watcher_submit_feedback "$repo" "$pr_number" "proactive-inline-$comment_id" "$task_body" "$comment_author" "$comment_created" "$inline_json" || true
     done < <(
-      jq -c --arg pr "$pr_number" --arg baseline "$BASELINE" --arg sig "$SIG" '
+      jq -c --arg pr "$pr_number" --arg baseline "$watcher_baseline" --arg sig "$SIG" '
         .[]
         | select((.html_url // "") | test("/pull/" + $pr + "($|[#?])"))
         | select((.created_at // "") >= $baseline)
