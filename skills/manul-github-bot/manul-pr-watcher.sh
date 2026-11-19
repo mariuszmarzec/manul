@@ -5,7 +5,7 @@
 # for durable PR conversation mapping and idempotent event/task correlation.
 
 pr_watcher_enabled() {
-  [ "$(jq -r '.proactivity.fixAndAnswerComments.enabled // true' "$CONFIG" 2>/dev/null || echo true)" = "true" ]
+  [ "$(jq -r '.proactivity.fixAndAnswerComments.enabled // false' "$CONFIG" 2>/dev/null || echo true)" = "true" ]
 }
 
 pr_watcher_scope() {
