@@ -76,7 +76,7 @@ pr_watcher_pr_in_scope() {
       [ -n "$pr_author" ] || return 1
       local allowed
       allowed="$(pr_watcher_author_allowlist_json)"
-      jq -e --arg author "$pr_author" --argjson allowed "$allowed" 'index($author) != null' >/dev/null 2>&1
+      jq -en --arg author "$pr_author" --argjson allowed "$allowed" '$allowed | index($author) != null' >/dev/null 2>&1
       ;;
     *)
       log "WARN: refusing unknown PR scope '$scope' for $repo#$pr_number"
