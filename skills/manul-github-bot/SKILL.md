@@ -562,6 +562,7 @@ See `LOCAL_INTERFACE.md` and `ORCHESTRATOR.md`.
 | `manul-github-events.sh` | Parse/control GitHub command events |
 | `manul-conversation.sh` | Conversation/task local state interface |
 | `manul-pr-review.sh` | Convert PR review events into Manul tasks |
+| `manul-pr-watcher.sh` | Discover and deduplicate proactive PR comments/replies without a task-source dependency |
 | `manul-result-feedback.sh` | Publish structured task lifecycle/result events |
 | `manul-result.sh` | Read completed/failed task results |
 | `manul-status.sh` | Inspect task state/logs |
@@ -586,6 +587,34 @@ Current automation controls include:
 - `commentStyle.human.concise` (default `true`) controls concise human-mode result comments;
 - `commentStyle.human.maxLines` (default `6`) caps visible human-mode result-comment lines and is clamped to 1–20;
 - `automation.agentRuntime` (default `openclaw`) selects the sole execution runtime for all tasks, including tasks with explicit canonical roles; supported values: `openclaw`, `opencode`, `codex`, `claude-code`;
+
+Proactive PR monitoring is configured independently from task sources and does not require either Todo MCP:
+- `proactivity.fixAndAnswerComments.enabled` opts into automatic analysis of new PR conversation comments, inline comments/replies, and review feedback. It defaults to `false` for existing configurations; the example template opts in with `true`.
+- `proactivity.fixAndAnswerComments.prScope` selects `OnlyManulPr` (default; only PRs with an exact verified Manul deliverable record) or `AllUserAuthoredPr` (PRs authored by a login in the PR-author allow-list).
+- `proactivity.prAuthorAllowed` is the PR-author allow-list. An omitted or empty array inherits `allowedUsers`; unresolved placeholders are discarded and also fall back to `allowedUsers`.
+- `ciFix.prScope` independently applies the same `OnlyManulPr` / `AllUserAuthoredPr` selection to automatic CI fixes. It defaults to `OnlyManulPr`; it does not depend on the comment-automation setting.
+- On the first enabled scan, the watcher stores `meta.pr_watcher_baseline` so it does not enqueue historical comments/reviews. It continues to monitor eligible open PRs after their source task is completed; the PR conversation is persisted independently in SQLite.
+- Feedback is classified before edits as a bug, actionable suggestion, nitpick, incorrect assumption, or human-decision-required. Only current, concrete bugs/actionable suggestions are implemented. Nitpicks and incorrect assumptions receive an explanation without code changes; human decisions are surfaced instead of guessed.
+- GitHub is the source of truth for PRs, comments, reviews, commits, and CI. The watcher runs from the existing poller and does not read or require Todo MCP state.
+
+Example:
+```json
+{
+  "proactivity": {
+    "prAuthorAllowed": [],
+    "fixAndAnswerComments": {
+      "enabled": true,
+      "prScope": "OnlyManulPr"
+    }
+  },
+  "ciFix": {
+    "enabled": true,
+    "maxAttemptsPerRun": 2,
+    "cooldownMinutes": 60,
+    "prScope": "OnlyManulPr"
+  }
+}
+```
 
 All modes and execution runtimes must produce natural, human-like, task-focused content. Branch names and delivered text must describe the requested work, not the internal task source or execution tools. Do not expose Todo/MCP/task-provider details, Manul orchestration, runtime/agent/provider names, or task/comment/attempt identifiers unless they are genuinely part of the requested product or technical change. This style contract is independent of `mode`.
 
