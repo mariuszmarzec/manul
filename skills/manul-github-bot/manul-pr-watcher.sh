@@ -263,16 +263,28 @@ $comment_body"
       [ -n "$comment_id" ] && [ -n "$comment_body" ] || continue
       pr_watcher_comment_was_handled "$comment_id" && continue
       root_id="$(get_review_thread_root_id "$inline_comments_json" "$comment_id")"
-      inline_json="$(jq -cn --argjson comment "$comment" --arg root "$root_id" '[($comment + {manul_thread_root_id:$root})]')"
+      if [ "$root_id" != "$comment_id" ]; then
+        # Review replies are new feedback on an existing thread. Pass the
+        # thread root to the review handler (it intentionally filters replies
+        # as standalone comments) and append the new reply for assessment.
+        local root_comment
+        root_comment="$(jq -c --arg root "$root_id" '.[] | select((.id | tostring) == $root)' <<<"$inline_comments_json" 2>/dev/null | head -n1)"
+        [ -n "$root_comment" ] || continue
+        inline_json="$(jq -cn --argjson comment "$root_comment" --arg root "$root_id" --arg reply "$comment_body" --arg reply_id "$comment_id" '$comment + {body: (($comment.body // "") + "\n\nNew reply (" + $reply_id + "): " + $reply), manul_thread_root_id:$root} | [.]')"
+      else
+        inline_json="$(jq -cn --argjson comment "$comment" --arg root "$root_id" '[($comment + {manul_thread_root_id:$root})]')"
+      fi
       local task_body
-      task_body="Proactive PR inline feedback from @$comment_author. Original comment: $comment_url"
+      task_body="Proactive PR inline feedback from @$comment_author. Original comment: $comment_url
+
+$comment_body"
       pr_watcher_submit_feedback "$repo" "$pr_number" "proactive-inline-$comment_id" "$task_body" "$comment_author" "$comment_created" "$inline_json" || true
     done < <(
       jq -c --arg pr "$pr_number" --arg baseline "$BASELINE" --arg sig "$SIG" '
         .[]
         | select((.html_url // "") | test("/pull/" + $pr + "($|[#?])"))
         | select((.created_at // "") >= $baseline)
-        | select((.pull_request_review_id // null) == null)
+        | select((.pull_request_review_id // null) == null or (.in_reply_to_id // null) != null)
         | select((.user.type // "User") != "Bot")
         | select((.body // "") | contains($sig) | not)
       ' <<<"$inline_comments_json" 2>/dev/null
