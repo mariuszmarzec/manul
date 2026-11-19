@@ -193,13 +193,16 @@ fi
 CONFIG_ALLOWED_USERS="$ALLOWED_JSON"
 resolve_allowed_users() {
   local repo="$1"
+  # Re-resolve from the original config for every repository. Do not let the
+  # owner fallback selected for the previous repo leak into this repository.
+  ALLOWED_JSON="$CONFIG_ALLOWED_USERS"
   if printf '%s' "$ALLOWED_JSON" | jq -e 'any(.[]; test("[<>]"))' >/dev/null 2>&1; then
     ALLOWED_JSON="$(printf '%s' "$ALLOWED_JSON" | jq -c '[.[] | select(test("[<>]") | not)]')"
     if [ "$(printf '%s' "$ALLOWED_JSON" | jq 'length')" -eq 0 ]; then
       ALLOWED_JSON="$(jq -nc --arg repo "$repo" '[$repo | split("/")[0]]')"
     fi
     log "WARN: config.json allowedUsers contained an unresolved placeholder (config: $CONFIG_ALLOWED_USERS); "
-    log "WARN: falling back to repo owner allow-list: $ALLOWED_JSON"
+    log "WARN: falling back to repo owner allow-list for $repo: $ALLOWED_JSON"
   fi
 }
 
@@ -1063,7 +1066,7 @@ scan_failing_ci() {
     local repo="$1"
     [ "$CI_FIX_ENABLED" = "true" ] || return 0
     local prs_json
-    # Scan open PRs, then require verified Manul deliverable provenance before CI auto-fix
+    # Scan open PRs and apply the independently configured CI-fix scope before auto-fix
     prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url,author 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url, author: (.author.login // "")}]' 2>>"$LOG" || true)"
     [ -n "$prs_json" ] || return 0
     local pr_count
