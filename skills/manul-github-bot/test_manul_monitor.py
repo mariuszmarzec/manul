@@ -137,9 +137,11 @@ class MonitorTests(unittest.TestCase):
             if kind == "todo_local":
                 raise monitor.MonitorError("Todo endpoint temporarily unavailable")
 
-        with patch.object(monitor, "gh_login", return_value="primary"), \\
-             patch.object(monitor, "gh_prs", side_effect=lambda repo: pr_items if repo == "acme/app" else []), \\
-             patch.object(monitor, "deliver", side_effect=first_delivery):
+        with (
+            patch.object(monitor, "gh_login", return_value="primary"),
+            patch.object(monitor, "gh_prs", side_effect=lambda repo: pr_items if repo == "acme/app" else []),
+            patch.object(monitor, "deliver", side_effect=first_delivery),
+        ):
             first = monitor.run_monitor("external-prs", self.paths)
         self.assertEqual(first["status"], "partial")
         self.assertEqual(calls, ["log", "todo_local"])
@@ -147,9 +149,11 @@ class MonitorTests(unittest.TestCase):
         def recovered_delivery(kind, event, monitor_id, run_id, paths):
             calls.append(kind)
 
-        with patch.object(monitor, "gh_login", return_value="primary"), \\
-             patch.object(monitor, "gh_prs", side_effect=lambda repo: pr_items if repo == "acme/app" else []), \\
-             patch.object(monitor, "deliver", side_effect=recovered_delivery):
+        with (
+            patch.object(monitor, "gh_login", return_value="primary"),
+            patch.object(monitor, "gh_prs", side_effect=lambda repo: pr_items if repo == "acme/app" else []),
+            patch.object(monitor, "deliver", side_effect=recovered_delivery),
+        ):
             second = monitor.run_monitor("external-prs", self.paths)
         self.assertEqual(second["status"], "completed")
         self.assertEqual(calls, ["log", "todo_local", "todo_local"])
