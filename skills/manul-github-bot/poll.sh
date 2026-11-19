@@ -1311,9 +1311,84 @@ process_repo_body() {
     open_prs_json="$(printf '%s\n' "${!OPEN_PRS[@]}" | jq -R 'tonumber' | jq -s '.')"
   fi
 
+# Group compatible /manul issue/PR comments discovered by one poll cycle.
+# A single queue task is anchored to the earliest unprocessed comment. Each
+# original comment is retained separately in conversation_messages.
+group_poll_request_comments() {
+  jq -sc '
+    sort_by([.issueNumber, (.action // "IMPLEMENT"), (.agent // ""), (.autoAccept // false), (.created // ""), (.id // "")])
+    | group_by([.issueNumber, (.action // "IMPLEMENT"), (.agent // ""), (.autoAccept // false)])
+    | .[]
+    | if length > 1 and .[0].action != "CONTINUE" then .
+      else .[] | [.] end
+  '
+}
+
+# A previous poll may have ingested some members of a compatible group before
+# a retry. Exclude those messages individually, not the entire group.
+filter_new_poll_request_members() {
+  local candidate_members="$1" new_members='[]'
+  local member member_id member_raw_id known_member
+  while IFS= read -r member; do
+    [ -n "$member" ] || continue
+    member_id="$(jq -r '.id' <<<"$member")"
+    member_raw_id="$(jq -r '.rawId // .id' <<<"$member")"
+    known_member="$(sqlite3 "$DB" "
+      SELECT 1 FROM processed_comments
+        WHERE commentId IN ('$(sql_escape "$member_id")', '$(sql_escape "$member_raw_id")')
+      UNION ALL
+      SELECT 1 FROM conversation_messages
+        WHERE commentId IN ('$(sql_escape "$member_raw_id")', '$(sql_escape "$member_id")')
+      LIMIT 1;
+    " 2>>"$LOG")" || return 1
+    [ "$known_member" = "1" ] && continue
+    new_members="$(jq -cn --argjson current "$new_members" --argjson member "$member" '$current + [$member]')" || return 1
+  done < <(jq -c '.[]' <<<"$candidate_members")
+  printf '%s\n' "$new_members"
+}
+
+# Preserve singleton behaviour exactly. For multi-comment batches, give the
+# agent every request and let it choose one coherent change or separate,
+# ordered workstreams/subtasks based on dependencies and conflict risk.
+render_poll_request_batch() {
+  jq -c '
+    . as $members
+    | $members[0] + {
+        batchMembers: $members,
+        batchSize: ($members | length),
+        prompt: (
+          if ($members | length) == 1 then
+            (if (($members[0].fullBody // "") | length) > 0 then $members[0].fullBody else ($members[0].prompt // "") end)
+          else
+            "Several /manul requests were discovered in the same GitHub Issue/PR conversation during one polling cycle. Treat every request below as in scope. First inspect them together and decide on the most efficient safe plan: combine related or dependent requests into one coherent implementation; keep independent, conflicting, or separately verifiable requests as distinct ordered workstreams/subtasks; parallelize only when the runtime supports it and the changes cannot conflict. Do not omit any request, and do not ask the user merely how to group routine work. Preserve each request'\''s acceptance criteria and report how each was addressed.\n\n"
+            + ($members
+               | to_entries
+               | map(
+                   "### Request " + ((.key + 1) | tostring)
+                   + "\nSource comment: #" + ((.value.rawId // .value.id) | tostring)
+                   + "\nAuthor: " + (.value.author // "unknown")
+                   + "\nURL: " + (.value.url // "")
+                   + "\n\nRequest:\n"
+                   + (if ((.value.fullBody // "") | length) > 0 then .value.fullBody else (.value.prompt // "") end
+                      | if length == 0 then "(No explicit text; use the Issue/PR conversation context.)" else . end)
+                 )
+               | join("\n\n"))
+          end
+        )
+      }
+  '
+}
+
 # 1) Issue comments (PR conversation comments are issue comments too)
-  while IFS= read -r obj; do
-    [ -n "$obj" ] || continue
+  while IFS= read -r candidate_members; do
+    [ -n "$candidate_members" ] || continue
+    batch_members="$(filter_new_poll_request_members "$candidate_members")" || {
+      log "WARN: could not verify comment identities for a poll-cycle batch on $repo; leaving it for the next poll"
+      continue
+    }
+    [ "$(jq 'length' <<<"$batch_members")" -gt 0 ] || continue
+    obj="$(printf '%s\n' "$batch_members" | render_poll_request_batch)" || continue
+    batch_size="$(jq -r '.batchSize // 1' <<<"$obj")"
     id="$(jq -r '.id' <<<"$obj")"
     issue="$(jq -r '.issueNumber' <<<"$obj")"
     [ -n "${CLOSED_ISSUES[$issue]:-}" ] && continue
@@ -1331,9 +1406,9 @@ process_repo_body() {
     # empty prompt — the issue/PR body supplies the task via conversation
     # context. Only a bare CONTINUE (no answer) is not a real task.
     if [ -z "$prompt" ] && [ "$action" = "CONTINUE" ]; then continue; fi
-    fullBody="$(jq -r '.fullBody // ""' <<<"$obj")"
-    [ -n "$fullBody" ] || fullBody="$prompt"
-    prompt="$fullBody"
+    # render_poll_request_batch has already preserved a singleton prompt or
+    # built the full multi-comment prompt. Do not overwrite a batch request
+    # with only the anchor comment's fullBody.
     prompt="$(printf '%s' "$prompt" | sed -E 's/(^|[[:space:]])--auto([[:space:]]|$)/\1\2/g')"
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
@@ -1357,13 +1432,22 @@ process_repo_body() {
     ins="$(sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,action,prNumber,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,autoAccept) VALUES('$id','$repo',$issue,'$url','$author','$esc_a','$esc','$action',$issue,'queued','$created',NULL,NULL,'$(sql_escape "$conv_id")','$base_id',$auto_accept); SELECT changes();" 2>>"$LOG")"
     if [ "${ins:-0}" -gt 0 ]; then
       NEW=$((NEW + 1))
-      raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
-      raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
-      persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$author" "$raw_body" "$url" "$created" "comment"
+      # Persist every original source comment separately. The task row is
+      # anchored to the earliest unprocessed comment, but no source message is
+      # dropped from the conversation context or future deduplication.
+      while IFS= read -r source_comment; do
+        [ -n "$source_comment" ] || continue
+        raw_id="$(jq -r '.rawId // .id' <<<"$source_comment")"
+        raw_body="$(jq -r '.rawBody // .body // ""' <<<"$source_comment")"
+        source_author="$(jq -r '.author // ""' <<<"$source_comment")"
+        source_url="$(jq -r '.url // ""' <<<"$source_comment")"
+        source_created="$(jq -r '.created // ""' <<<"$source_comment")"
+        persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$source_author" "$raw_body" "$source_url" "$source_created" "comment"
+      done < <(jq -c '.batchMembers[]?' <<<"$obj")
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
       # Task context is materialized after the poll has ingested all
       # available GitHub messages for this repository.
-      log "queued $id on $repo#$issue (agent=${agent:-default})"
+      log "queued $id on $repo#$issue (agent=${agent:-default}, batched_comments=$batch_size)"
     fi
   done < <(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" | jq -c --arg repo "$repo" --arg trig "$TRIGGER" --arg sig "$SIG" --arg base "$BASELINE" --argjson allowed "$ALLOWED_JSON" --argjson agents "$AGENTS_JSON" --argjson open_prs "$open_prs_json" '
     ($trig | gsub("[\\^$.|?*+()\\[\\]{}]"; "\\\\$&")) as $trig_re
@@ -1411,7 +1495,7 @@ process_repo_body() {
       autoAccept: $auto_accept,
       prompt: $actx.prompt,
       fullBody: (if (($actx.agent // $agent) != "") then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^.*?((\\r?\\n)[ \\t]*" + $trig_re + "([ \\t]*|$))"; "") | sub("^[ \\t]+"; "")) end)
-    }' 2>>"$LOG" || true)
+    }' 2>>"$LOG" | group_poll_request_comments 2>>"$LOG" || true)
 
   if [ "$TASK_SOURCES_EXPLICIT" -eq 0 ]; then
   # 1b) Issue bodies (new OPEN issues carrying the trigger in the description)
