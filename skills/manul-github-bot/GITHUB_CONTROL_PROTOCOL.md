@@ -138,6 +138,9 @@ Configuration:
 - `AllUserAuthoredPr` selects PRs authored by `proactivity.prAuthorAllowed`;
   an omitted/empty list inherits `allowedUsers`.
 - CI-fix scope does not depend on whether proactive comment handling is enabled.
+- `conflictResolveAndMerge.enabled` independently enables conflict-resolution tasks followed by a guarded merge of the same PR; it defaults to false.
+- `conflictResolveAndMerge.prScope` independently accepts `OnlyManulPr` or `AllUserAuthoredPr`. User-authored scope uses `proactivity.prAuthorAllowed` and falls back to `allowedUsers`.
+- Conflict tasks are keyed by the observed PR head/base SHA pair. They must not bypass required checks, reviews, or branch protection and must leave the PR open when GitHub refuses a normal merge.
 
 Before changing code, proactive feedback must be classified as a bug, actionable
 suggestion, nitpick, incorrect assumption, or human-decision-required. Only

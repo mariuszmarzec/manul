@@ -102,6 +102,10 @@
       "prScope": "OnlyManulPr"
     }
   },
+  "conflictResolveAndMerge": {
+    "enabled": false,
+    "prScope": "OnlyManulPr"
+  },
   "ciFix": {
     "enabled": true,
     "maxAttemptsPerRun": 2,
