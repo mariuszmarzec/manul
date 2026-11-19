@@ -95,10 +95,18 @@
     "retryOnTimeout": true,
     "fallbackCutoffTokens": 240000
   },
+  "proactivity": {
+    "prAuthorAllowed": [],
+    "fixAndAnswerComments": {
+      "enabled": true,
+      "prScope": "OnlyManulPr"
+    }
+  },
   "ciFix": {
     "enabled": true,
     "maxAttemptsPerRun": 2,
-    "cooldownMinutes": 60
+    "cooldownMinutes": 60,
+    "prScope": "OnlyManulPr"
   },
   "automation": {
     "enabled": true,
