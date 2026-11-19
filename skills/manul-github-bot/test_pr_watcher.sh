@@ -75,6 +75,8 @@ fi
 echo "unexpected gh command: $*" >&2
 exit 2
 GH
+export MOCK_PRS="$TEST_DIR/prs.json" MOCK_ISSUE_COMMENTS="$TEST_DIR/issue-comments.json" MOCK_INLINE_COMMENTS="$TEST_DIR/inline-comments.json"
+
 chmod +x "$MOCK_BIN/gh"
 export PATH="$MOCK_BIN:$PATH"
 
