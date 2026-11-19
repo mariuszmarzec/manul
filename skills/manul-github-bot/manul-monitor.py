@@ -368,8 +368,8 @@ def todo_config(p, provider):
         return value
     url = ENV_RE.sub(substitute, url)
     parsed = urlsplit(url)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.fragment:
-        raise MonitorError("Todo Remote MCP URL must be HTTPS without embedded credentials")
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.fragment:
+        raise MonitorError("Todo Remote MCP URL must be HTTP(S) without embedded credentials or a fragment")
     token_env = source.get("tokenEnv")
     if not isinstance(token_env, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token_env) or not os.environ.get(token_env):
         raise MonitorError("Todo Remote MCP tokenEnv is missing, invalid or empty")
