@@ -22,6 +22,8 @@ cat >"$MOCK_BIN/date" <<'DATE'
 set -euo pipefail
 if [ "$#" -eq 1 ] && [ "$1" = "+%s" ]; then
   printf '%s\n' "$CI_FIX_TEST_NOW"
+elif [ "$#" -eq 2 ] && [ "$1" = "-u" ] && [ "$2" = "+%Y-%m-%dT%H:%M:%SZ" ]; then
+  exec /bin/date -u -d "@$CI_FIX_TEST_NOW" +%Y-%m-%dT%H:%M:%SZ
 else
   exec /bin/date "$@"
 fi
@@ -47,7 +49,7 @@ export CI_FIX_TEST_NOW
 to_iso() { /bin/date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 
 # Existing task history must be migrated to the new per-repository attempt table.
-legacy_at="$(to_iso "$((CI_FIX_TEST_NOW - 59 * 60))")"
+legacy_at="$(to_iso "$CI_FIX_TEST_NOW")"
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId, repository, issueNumber, createdAt)
 VALUES('ci_fix:test/repo:8:legacy-run', 'test/repo', 8, '$legacy_at');"
 
