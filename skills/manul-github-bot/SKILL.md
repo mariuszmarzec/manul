@@ -9,7 +9,7 @@ Manul is a GitHub command bot and local task orchestrator.
 
 It watches configured repositories, reacts to `/manul` in issue bodies, issue/PR conversation comments, and PR review comments, then:
 - batches compatible new `/manul` comments from the same Issue/PR conversation when they are discovered in one polling cycle, while keeping each original comment in conversation history;
-- asks the agent to plan whether batched requests should be combined or handled as separate ordered workstreams;
+- asks the agent to plan whether batched requests should be combined or handled as separate ordered workstreams; submitted multi-comment PR reviews use the same planning rule within their existing one-task-per-review flow;
 
 - creates or resumes a task;
 - prepares an isolated workspace;
