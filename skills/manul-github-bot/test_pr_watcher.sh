@@ -57,6 +57,8 @@ CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY);
 CREATE TABLE conversation_messages(commentId TEXT);
 "
 
+source "$SCRIPT_DIR/manul-pr-watcher.sh"
+
 cat >"$MOCK_BIN/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -222,7 +224,6 @@ cat >"$MOCK_INLINE_COMMENTS" <<'JSON'
 ]
 JSON
 
-source "$SCRIPT_DIR/manul-pr-watcher.sh"
 scan_proactive_pr_comments "test/repo"
 expected="$(printf '%s\n' proactive-comment-401 proactive-inline-501 proactive-inline-502)"
 actual="$(cat "$MOCK_HANDLER_LOG")"
