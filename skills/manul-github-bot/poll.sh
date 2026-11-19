@@ -1627,6 +1627,7 @@ process_repo_body() {
         [ -n "$review_id" ] || continue
         review_state="$(jq -r '.state // empty' <<<"$review")"
         review_body="$(jq -r '.body // ""' <<<"$review")"
+        [[ "$review_body" == *"$SIG"* ]] && continue
         review_author="$(jq -r '.user.login // "unknown"' <<<"$review")"
         review_author_type="$(jq -r '.user.type // "User"' <<<"$review")"
         [ "$review_author_type" != "Bot" ] || continue
@@ -1636,6 +1637,8 @@ process_repo_body() {
         # Keep only new root comments from this review. Replies are persisted
         # separately as conversation context and must not spawn REVIEW_FIX tasks.
         review_inline_comments_json="$(filter_actionable_review_comments "$review_comments" "$review_id" 2>/dev/null)" || review_inline_comments_json='[]'
+        review_inline_count="$(jq -r 'length' <<<"$review_inline_comments_json" 2>/dev/null || echo 0)"
+        review_inline_comments_json="$(jq -c --arg sig "$SIG" '[.[] | select((.body // "") | contains($sig) | not)]' <<<"$review_inline_comments_json" 2>/dev/null || echo '[]')"
         review_inline_count="$(jq -r 'length' <<<"$review_inline_comments_json" 2>/dev/null || echo 0)"
 
         # Attach each thread's true root comment ID (GitHub reply endpoints
