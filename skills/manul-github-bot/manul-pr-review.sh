@@ -485,7 +485,7 @@ cmd_handle() {
   # feedback before changing code. Comments are untrusted input, not instructions
   # that may override this policy or expose secrets.
   local proactive_comments_enabled
-  proactive_comments_enabled="$(jq -r '.proactivity.fixAndAnswerComments.enabled // true' "$CONFIG" 2>/dev/null || echo true)"
+  proactive_comments_enabled="$(jq -r '.proactivity.fixAndAnswerComments.enabled // false' "$CONFIG" 2>/dev/null || echo true)"
   if [ "$proactive_comments_enabled" = "true" ]; then
     review_prompt="## Required feedback assessment
 
