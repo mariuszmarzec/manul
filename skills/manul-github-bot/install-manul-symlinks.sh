@@ -78,6 +78,7 @@ SCRIPTS=(
     "manul-daemon.sh"
     "manul-github-events.sh"
     "manul-pr-review.sh"
+    "manul-pr-watcher.sh"
     "manul-result-feedback.sh"
     "manul-result.sh"
     "manul-status.sh"
