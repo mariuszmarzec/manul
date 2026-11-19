@@ -23,6 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/manul-paths.sh"
 source "$SCRIPT_DIR/task-source.sh"
 source "$SCRIPT_DIR/manul-env.sh"
+source "$SCRIPT_DIR/manul-pr-watcher.sh"
 manul_env_load "$MANUL_DIR" || fail "failed to load Manul environment"
 CONFIG="$MANUL_CONFIG"
 DB="${DB:-$MANUL_DB}"
@@ -192,13 +193,16 @@ fi
 CONFIG_ALLOWED_USERS="$ALLOWED_JSON"
 resolve_allowed_users() {
   local repo="$1"
+  # Re-resolve from the original config for every repository. Do not let the
+  # owner fallback selected for the previous repo leak into this repository.
+  ALLOWED_JSON="$CONFIG_ALLOWED_USERS"
   if printf '%s' "$ALLOWED_JSON" | jq -e 'any(.[]; test("[<>]"))' >/dev/null 2>&1; then
     ALLOWED_JSON="$(printf '%s' "$ALLOWED_JSON" | jq -c '[.[] | select(test("[<>]") | not)]')"
     if [ "$(printf '%s' "$ALLOWED_JSON" | jq 'length')" -eq 0 ]; then
       ALLOWED_JSON="$(jq -nc --arg repo "$repo" '[$repo | split("/")[0]]')"
     fi
     log "WARN: config.json allowedUsers contained an unresolved placeholder (config: $CONFIG_ALLOWED_USERS); "
-    log "WARN: falling back to repo owner allow-list: $ALLOWED_JSON"
+    log "WARN: falling back to repo owner allow-list for $repo: $ALLOWED_JSON"
   fi
 }
 
@@ -206,6 +210,7 @@ resolve_allowed_users() {
 CI_FIX_ENABLED="$(jq -r '.ciFix.enabled // false' "$CONFIG" 2>/dev/null)"
 CI_FIX_MAX_ATTEMPTS="$(jq -r '.ciFix.maxAttemptsPerRun // 2' "$CONFIG" 2>/dev/null)"
 CI_FIX_COOLDOWN_MINUTES="$(jq -r '.ciFix.cooldownMinutes // 60' "$CONFIG" 2>/dev/null)"
+CI_FIX_PR_SCOPE="$(pr_watcher_ci_scope)"
 
 if [ "$CI_FIX_ENABLED" = "null" ]; then CI_FIX_ENABLED="false"; fi
 if [ "$CI_FIX_MAX_ATTEMPTS" = "null" ]; then CI_FIX_MAX_ATTEMPTS="2"; fi
@@ -1061,8 +1066,8 @@ scan_failing_ci() {
     local repo="$1"
     [ "$CI_FIX_ENABLED" = "true" ] || return 0
     local prs_json
-    # Scan open PRs, then require verified Manul deliverable provenance before CI auto-fix
-    prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url}]' 2>>"$LOG" || true)"
+    # Scan open PRs and apply the independently configured CI-fix scope before auto-fix
+    prs_json="$(gh pr list --repo "$repo" --limit 100 --json number,headRefName,baseRefName,title,url,author 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .headRefName, base: .baseRefName, title: .title, html_url: .url, author: (.author.login // "")}]' 2>>"$LOG" || true)"
     [ -n "$prs_json" ] || return 0
     local pr_count
     pr_count="$(printf '%s' "$prs_json" | jq -r 'length // 0' 2>/dev/null || echo 0)"
@@ -1076,17 +1081,18 @@ scan_failing_ci() {
     while [ $i -lt "$pr_count" ]; do
       local pr
       pr="$(printf '%s' "$prs_json" | jq -c ".[$i]")"
-      local pr_num pr_branch pr_title
+      local pr_num pr_branch pr_title pr_author
       pr_num="$(printf '%s' "$pr" | jq -r '.number')"
       pr_branch="$(printf '%s' "$pr" | jq -r '.head')"
       pr_title="$(printf '%s' "$pr" | jq -r '.title')"
       local pr_url
       pr_url="$(printf '%s' "$pr" | jq -r '.html_url // ""')"
-      # Only auto-fix a PR when a completed Manul task persisted this exact
-      # canonical PR URL as its verified deliverable. Never infer ownership
-      # from an arbitrary open PR, branch naming, source issue number, or comments.
-      if ! is_manul_owned_pr "$repo" "$pr_num" "$pr_url"; then
-        log "skipping CI fix for $repo#$pr_num — no verified Manul-owned PR record"
+      pr_author="$(printf '%s' "$pr" | jq -r '.author // ""')"
+      # CI scope is independent from comment automation. OnlyManulPr preserves
+      # verified Manul-deliverable provenance; AllUserAuthoredPr uses the
+      # configured prAuthorAllowed list (or allowedUsers when it is empty).
+      if ! pr_watcher_pr_in_scope "$repo" "$pr_num" "$pr_url" "$pr_author" "$CI_FIX_PR_SCOPE"; then
+        log "skipping CI fix for $repo#$pr_num — PR is outside ciFix.prScope=$CI_FIX_PR_SCOPE (author=$pr_author)"
         i=$((i+1))
         continue
       fi
@@ -1117,6 +1123,14 @@ scan_failing_ci() {
       local failing_count
       failing_count="$(printf '%s' "$checks_json" | jq 'length')"
       [ "$failing_count" -gt 0 ] || { i=$((i+1)); continue; }
+      # CI scope is independent of comment automation. Ensure a PR conversation
+      # exists even when the user PR has no Manul source task and the proactive
+      # comment watcher is disabled.
+      if ! pr_watcher_ensure_pr_conversation "$repo" "$pr_num" "$pr_url"; then
+        log "WARN: could not ensure PR conversation for CI fix $repo#$pr_num"
+        i=$((i+1))
+        continue
+      fi
       log "found $failing_count failing check(s) on $repo#$pr_num ($pr_branch)"
       local j=0
       while [ $j -lt "$failing_count" ] && [ $j -lt "$CI_FIX_MAX_ATTEMPTS" ]; do
@@ -1595,11 +1609,34 @@ process_repo_body() {
   # Individual comment ingestion above excludes review-associated comments so a
   # multi-comment review cannot fan out into multiple Manul tasks.
   if [ -f "$MANUL_DIR/manul-pr-review.sh" ]; then
+    local proactive_pr_enabled=0 proactive_pr_scope proactive_pr_baseline
+    if pr_watcher_enabled; then
+      proactive_pr_enabled=1
+      proactive_pr_scope="$(pr_watcher_scope)"
+      proactive_pr_baseline="$(pr_watcher_ensure_baseline)" || proactive_pr_baseline=""
+    else
+      # Preserve the existing explicit/review-driven workflow when proactive
+      # comment automation has not been opted into by the operator.
+      proactive_pr_baseline="$BASELINE"
+    fi
     while IFS= read -r pr_obj; do
       [ -n "$pr_obj" ] || continue
       pr_num="$(jq -r '.number' <<<"$pr_obj")"
       [ -n "$pr_num" ] || continue
       [ -n "${OPEN_PRS[$pr_num]:-}" ] || continue
+      local review_pr_url review_pr_author
+      review_pr_url="$(jq -r '.url // empty' <<<"$pr_obj")"
+      review_pr_author="$(jq -r '.author.login // empty' <<<"$pr_obj")"
+      if [ "$proactive_pr_enabled" -eq 1 ]; then
+        if ! pr_watcher_pr_in_scope "$repo" "$pr_num" "$review_pr_url" "$review_pr_author" "$proactive_pr_scope"; then
+          log "skipping proactive review handling for $repo#$pr_num — PR is outside proactivity.fixAndAnswerComments.prScope=$proactive_pr_scope (author=$review_pr_author)"
+          continue
+        fi
+        if ! pr_watcher_ensure_pr_conversation "$repo" "$pr_num" "$review_pr_url"; then
+          log "WARN: could not ensure PR conversation before review handling for $repo#$pr_num"
+          continue
+        fi
+      fi
 
       reviews_json="$(gh api "repos/$repo/pulls/$pr_num/reviews?per_page=100" 2>>"$LOG" || echo '[]')"
       now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1610,13 +1647,18 @@ process_repo_body() {
         [ -n "$review_id" ] || continue
         review_state="$(jq -r '.state // empty' <<<"$review")"
         review_body="$(jq -r '.body // ""' <<<"$review")"
+        [[ "$review_body" == *"$SIG"* ]] && continue
         review_author="$(jq -r '.user.login // "unknown"' <<<"$review")"
+        review_author_type="$(jq -r '.user.type // "User"' <<<"$review")"
+        [ "$review_author_type" != "Bot" ] || continue
         review_created="$(jq -r '.submitted_at // empty' <<<"$review")"
         [ -n "$review_created" ] || review_created="$now"
 
         # Keep only new root comments from this review. Replies are persisted
         # separately as conversation context and must not spawn REVIEW_FIX tasks.
         review_inline_comments_json="$(filter_actionable_review_comments "$review_comments" "$review_id" 2>/dev/null)" || review_inline_comments_json='[]'
+        review_inline_count="$(jq -r 'length' <<<"$review_inline_comments_json" 2>/dev/null || echo 0)"
+        review_inline_comments_json="$(jq -c --arg sig "$SIG" '[.[] | select((.body // "") | contains($sig) | not)]' <<<"$review_inline_comments_json" 2>/dev/null || echo '[]')"
         review_inline_count="$(jq -r 'length' <<<"$review_inline_comments_json" 2>/dev/null || echo 0)"
 
         # Attach each thread's true root comment ID (GitHub reply endpoints
@@ -1638,15 +1680,17 @@ process_repo_body() {
           *) review_handler_state="" ;;
         esac
 
-        # Keep existing REQUEST_CHANGES behavior (including recovery of older
-        # active reviews). For approval/comment reviews, only start work for
-        # newly submitted reviews, avoiding a backfill of historical review
-        # comments on every open PR after this feature is deployed.
+        # Keep existing REQUEST_CHANGES recovery. Also analyze newly submitted
+        # non-empty review summaries even when they have no inline comments.
         should_handle_review=false
         if [ "$review_state" = "CHANGES_REQUESTED" ]; then
           should_handle_review=true
         elif [ "$review_inline_count" -gt 0 ] && [ -n "$review_handler_state" ] && [ "$review_state" != "DISMISSED" ]; then
-          if [[ "$review_created" == "$BASELINE" || "$review_created" > "$BASELINE" ]]; then
+          if [ -n "$proactive_pr_baseline" ] && { [[ "$review_created" == "$proactive_pr_baseline" ]] || [[ "$review_created" > "$proactive_pr_baseline" ]]; }; then
+            should_handle_review=true
+          fi
+        elif [ "$proactive_pr_enabled" -eq 1 ]           && { [ "$review_state" = "COMMENTED" ] || [ "$review_state" = "APPROVED" ]; }           && [ -n "$(printf '%s' "$review_body" | tr -d '[:space:]')" ]; then
+          if [ -n "$proactive_pr_baseline" ] && { [[ "$review_created" == "$proactive_pr_baseline" ]] || [[ "$review_created" > "$proactive_pr_baseline" ]]; }; then
             should_handle_review=true
           fi
         fi
@@ -1661,16 +1705,20 @@ process_repo_body() {
             sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$new_conv_id', '$(sql_escape "$repo")', $pr_num, '$pr_url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG"
             log "auto-created conversation $new_conv_id for $repo#$pr_num"
           fi
-          if "$MANUL_DIR/manul-pr-review.sh" handle \
-            --repo "$repo" \
-            --pr-number "$pr_num" \
-            --review-id "$review_id" \
-            --review-state "$review_handler_state" \
-            --body "$review_body" \
-            --author "$review_author" \
-            --created "$review_created" \
-            --review-comments-json "$review_inline_comments_json" \
-            --json >>"$LOG" 2>&1; then
+          local review_handler_args=(
+            --repo "$repo"
+            --pr-number "$pr_num"
+            --review-id "$review_id"
+            --review-state "$review_handler_state"
+            --body "$review_body"
+            --author "$review_author"
+            --created "$review_created"
+            --review-comments-json "$review_inline_comments_json"
+          )
+          if [ "$proactive_pr_enabled" -eq 1 ]; then
+            review_handler_args+=(--proactive-feedback)
+          fi
+          if "$MANUL_DIR/manul-pr-review.sh" handle "${review_handler_args[@]}" --json >>"$LOG" 2>&1; then
             log "review $review_id on $repo#$pr_num processed successfully"
           else
             log "WARN: failed to process review $review_id on $repo#$pr_num"
@@ -1681,8 +1729,13 @@ process_repo_body() {
           log "received $review_state review on $repo#$pr_num with no eligible inline review comments (no task created)"
         fi
       done < <(echo "$reviews_json" | jq -c '.[]' 2>/dev/null)
-    done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)
+    done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url,author 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)
   fi
+
+  # Pick up new PR conversation comments and standalone inline comments that
+  # do not belong to a submitted review. The watcher persists no Todo state and
+  # can create the PR conversation even when no source task exists.
+  scan_proactive_pr_comments "$repo"
 
   # Persist all available conversation messages first, then materialize the
   # complete conversation into every queued task. This also refreshes queued
