@@ -1719,6 +1719,57 @@ MOCK
     && ok "Operator todo-local MCP entry remains untouched" || fail "Operator todo-local MCP entry changed"
 }
 
+# 10d. Reuse an operator-owned Todo MCP when its URL already matches, even
+# when the operator chose a different server name.
+test_opencode_todo_local_mcp_reuses_matching_url() {
+  local tmp home workspace global_config before_hash out
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  home="$tmp/home"; workspace="$home/.manul/workspace/ws-todo-reuse"
+  mkdir -p "$tmp/bin" "$home/.config/opencode" "$home/.manul" "$workspace" "$tmp/shared"
+  global_config="$home/.config/opencode/opencode.json"
+  cat >"$global_config" <<'JSON'
+{"model":"test/provider","mcp":{"servers":{"todo-local":{"type":"remote","url":"http://127.0.0.1:8765/mcp/"}}}}
+JSON
+  before_hash="$(sha256sum "$global_config" | awk '{print $1}')"
+  : >"$tmp/shared/todo-mcp-client.py"
+  cat >"$tmp/shared/todo-local-mcp-url.sh" <<'HELPER'
+todo_local_mcp_resolve_url() { printf '%s' 'http://127.0.0.1:8765/mcp'; }
+HELPER
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
+  printf '%s\n' '[{"id":"coder"}]'
+  exit 0
+fi
+jq -e '
+  (.mcp.servers // {}) | has("manul-todo-local") | not
+' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
+jq -e '
+  (.tools // {}) | has("manul_todo_local_*") | not
+' <<<"$OPENCODE_CONFIG_CONTENT" >/dev/null
+jq -e '
+  .mcp.servers["todo-local"].url == "http://127.0.0.1:8765/mcp/"
+' "$OPENCODE_CONFIG" >/dev/null
+: >"$MOCK_OVERLAY_CHECK"
+cat >/dev/null
+printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-todo-reuse","part":{"type":"text","text":"TASK_DONE todo reuse"}}'
+MOCK
+  chmod +x "$tmp/bin/opencode"
+  echo "Use local Todo" >"$tmp/prompt"
+  out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCODE_CONFIG="$global_config" \
+    TODO_MCP_CLIENT="$tmp/shared/todo-mcp-client.py" TODO_LOCAL_MCP_URL_HELPER="$tmp/shared/todo-local-mcp-url.sh" \
+    MOCK_OVERLAY_CHECK="$tmp/overlay-checked" MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" AGENT_RUNTIME=opencode \
+    bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id todo-local-reuse --prompt "$tmp/prompt" \
+      --workspace "$workspace" --agent coder --attempt 1 --timeout 30 --session-id "" \
+      --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
+  assert_json_status "$out" "COMPLETED" "OpenCode reuses an operator Todo MCP that already has the configured URL"
+  [ -f "$tmp/overlay-checked" ] && ok "Matching Todo MCP URL is not injected under a second server name" || fail "Manul duplicated an existing Todo MCP endpoint"
+  [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] \
+    && ok "Reused operator Todo MCP configuration remains untouched" || fail "Operator Todo MCP entry changed"
+}
+
 # 11. AgentExecutor dispatch
 # ---------------------------------------------------------------------------
 test_agent_executor_dispatch() {
@@ -1917,6 +1968,7 @@ test_opencode_optional_mcp_overlay
 test_opencode_preserves_project_mcp_collision
 test_opencode_preserves_project_tool_rule
 test_opencode_todo_local_mcp
+test_opencode_todo_local_mcp_reuses_matching_url
 test_agent_executor_dispatch
 test_runtime_selection
 test_unknown_runtime
