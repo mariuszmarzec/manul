@@ -86,6 +86,57 @@ operator configuration. Put credentials only in `~/.manul/.env` or the
 documented environment variables; never commit credentials or a real
 operator-specific `config.json`.
 
+### GitHub PR automation
+
+Manul has three independent PR automation policies. Each has its own
+`enabled` flag and `prScope`; enabling one does not enable the others:
+
+- `proactivity.fixAndAnswerComments` handles new PR discussion comments,
+  inline review comments/replies, and submitted review feedback.
+- `ciFix` detects failing CI checks and queues bounded build-fix tasks.
+- `conflictResolveAndMerge` detects merge-conflicted, open, non-draft PRs,
+  queues a task for the existing PR branch, and asks the agent to resolve the
+  conflict and merge that same PR after verification.
+
+The conflict resolver is opt-in and defaults to disabled:
+
+```json
+{
+  "conflictResolveAndMerge": {
+    "enabled": true,
+    "prScope": "OnlyManulPr"
+  }
+}
+```
+
+Supported `prScope` values are:
+
+- `OnlyManulPr` (default): only PRs with an exact, verified Manul deliverable
+  record are eligible.
+- `AllUserAuthoredPr`: PRs authored by a GitHub login in
+  `proactivity.prAuthorAllowed`. When that list is missing or empty, Manul
+  falls back to `allowedUsers`.
+
+The scope is configured independently for each policy. For example,
+`ciFix.prScope` does not inherit `proactivity.fixAndAnswerComments.prScope`,
+and neither setting changes `conflictResolveAndMerge.prScope`.
+
+Conflict tasks are tied to the PR head and target/base commit SHAs observed by
+the poller. Before making changes, the agent must re-check that the same PR is
+still open and that its head has not unexpectedly changed. It must resolve the
+conflict on that PR's existing source branch, push the resolution, and verify
+the resulting head, required CI checks, and review decision before attempting
+a normal GitHub merge. Manul never authorizes an admin/bypass merge or bypasses
+branch protection. If checks, approvals, or repository rules block the merge,
+the PR is left open and the blocker is reported.
+
+Enabling `conflictResolveAndMerge` grants the configured agent permission to
+push to eligible PR branches and request their merge, so review the selected
+scope and repository protections before turning it on. The complete set of
+runtime options is documented in
+[config.json.example](skills/manul-github-bot/config.json.example) and the
+[Manul skill reference](skills/manul-github-bot/SKILL.md).
+
 ## Development and tests
 
 The runtime scripts and tests live together under
