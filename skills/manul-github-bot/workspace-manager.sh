@@ -1144,23 +1144,17 @@ workspace_cleanup_stale() {
     done <<< "$legacy_rows"
   fi
 
-  # Broken workspaces are disposable. Idle context-bound workspaces are
-  # intentionally persistent so uncommitted PR/thread work survives between
-  # comments and daemon restarts.
+  # Broken workspaces are disposable. Idle workspaces are not lease-stale:
+  # unbound IDLE pool slots must be pruned by workspace-gc.sh, which atomically
+  # claims the GC state and archives the directory before deleting its row.
+  # A timestamp-only DELETE here can orphan the physical workspace and can
+  # discard a slot while a queued task is being attached to it.
   sqlite3 "$DB" "
     DELETE FROM workspace_contexts
     WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
 
     DELETE FROM workspaces
-    WHERE status='BROKEN'
-       OR (
-         lastUsedAt < datetime('now', '-${stale_threshold} seconds')
-         AND status='IDLE'
-         AND NOT EXISTS (
-           SELECT 1 FROM workspace_contexts wc
-           WHERE wc.workspaceId=workspaces.workspaceId
-         )
-       );
+    WHERE status='BROKEN';
   " 2>/dev/null || true
 }
 
