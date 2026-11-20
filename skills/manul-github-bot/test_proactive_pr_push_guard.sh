@@ -99,15 +99,17 @@ workspace_remove_proactive_pr_push_guard "$WORK" "$GUARD_DIR"
 export MOCK_PR_HEAD="$LATEST_HEAD"
 workspace_install_proactive_pr_push_guard \
   "$WORK" "$GUARD_DIR" "owner/repo" 42 "feature/proactive-guard" "$LATEST_HEAD" "$BASE_SHA"
-printf '%s\n' "new base commit" >"$TEST_DIR/base.txt"
-git -C "$WORK" checkout -q master
-cp "$TEST_DIR/base.txt" "$WORK/base.txt"
-git -C "$WORK" add base.txt
-git -C "$WORK" commit -qm "advance target branch"
-git -C "$WORK" push -q origin master
-NEW_BASE_SHA="$(git -C "$WORK" rev-parse HEAD)"
-git -C "$WORK" checkout -q feature/proactive-guard
-git -C "$WORK" reset --hard -q "$LATEST_HEAD"
+# Update the target/master branch from a separate user checkout so the
+# PR-only pre-push guard remains installed and scoped to Manul's PR branch.
+BASE_WORK="$TEST_DIR/base-work"
+git clone -q --branch master "$REMOTE" "$BASE_WORK"
+git -C "$BASE_WORK" config user.name "User"
+git -C "$BASE_WORK" config user.email "user@example.test"
+printf '%s\n' "new base commit" >"$BASE_WORK/base.txt"
+git -C "$BASE_WORK" add base.txt
+git -C "$BASE_WORK" commit -qm "advance target branch"
+git -C "$BASE_WORK" push -q origin master
+NEW_BASE_SHA="$(git -C "$BASE_WORK" rev-parse HEAD)"
 export MOCK_PR_HEAD="$LATEST_HEAD" MOCK_PR_BASE="$NEW_BASE_SHA"
 # This task pins the current PR head and the old target SHA; only the target moves.
 printf '%s\n' "work after target update" >>"$WORK/file.txt"
