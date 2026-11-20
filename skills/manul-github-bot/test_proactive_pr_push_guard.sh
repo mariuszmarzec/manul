@@ -126,4 +126,27 @@ workspace_remove_proactive_pr_push_guard "$WORK" "$GUARD_DIR"
   echo "FAIL: proactive hook path was not removed" >&2
   exit 1
 }
+
+# Stale task workspaces are moved out of the pool before their lease is released.
+# Reusing the workspace ID later must therefore start from an empty checkout.
+workspace_init
+STALE_WS="ws-fresh-pr-retry"
+STALE_WS_PATH="$MANUL_WORKSPACE/$STALE_WS"
+mkdir -p "$STALE_WS_PATH/repo"
+printf '%s\n' "stale local commit" >"$STALE_WS_PATH/repo/stale.txt"
+sqlite3 "$DB" "
+  INSERT INTO workspaces(workspaceId,workspacePath,status,currentTaskId,lastUsedAt)
+  VALUES('$STALE_WS','$STALE_WS_PATH','BUSY','stale-pr-task',datetime('now'));
+"
+workspace_preserve_recovery_snapshot "$STALE_WS" "stale-pr-task"
+[ ! -e "$STALE_WS_PATH" ] || {
+  echo "FAIL: stale workspace directory remained available for reuse" >&2
+  exit 1
+}
+[ -n "$(find "$MANUL_DIR/state/recovery/workspaces" -mindepth 1 -maxdepth 1 -type d -name "$STALE_WS-stale-pr-task-*" -print -quit)" ] || {
+  echo "FAIL: stale workspace snapshot was not preserved outside the pool" >&2
+  exit 1
+}
+echo "PASS: stale workspace is archived and cannot be reused for the fresh retry"
+
 echo "All proactive PR push guard tests passed."
