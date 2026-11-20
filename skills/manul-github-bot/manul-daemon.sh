@@ -1762,6 +1762,30 @@ ensure_recovery_tracking_columns() {
     }
     log "migration: agentStartedAt column added; legacy running claims preserved as execution attempts"
   fi
+
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\\n' "$columns" | grep -q '|freshWorkspaceOnRetry|'; then
+    local alter_fresh
+    alter_fresh="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN freshWorkspaceOnRetry INTEGER NOT NULL DEFAULT 0; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|freshWorkspaceOnRetry|'; then
+        log "ERROR: failed to add freshWorkspaceOnRetry column: $alter_fresh"
+        return 1
+      fi
+    }
+    log "migration: freshWorkspaceOnRetry column added"
+  fi
+
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\\n' "$columns" | grep -q '|proactivePR|'; then
+    local alter_proactive
+    alter_proactive="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN proactivePR INTEGER NOT NULL DEFAULT 0; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|proactivePR|'; then
+        log "ERROR: failed to add proactivePR column: $alter_proactive"
+        return 1
+      fi
+    }
+    log "migration: proactivePR column added"
+  fi
   return 0
 }
 
