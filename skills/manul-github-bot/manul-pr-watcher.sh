@@ -20,6 +20,115 @@ pr_watcher_scope() {
   esac
 }
 
+# Shared PR-policy cooldown state for proactive comment/review and conflict work.
+# CI fixes keep their dedicated per-PR table but use the same timing semantics.
+pr_watcher_policy_minutes() {
+  local policy="$1" field="$2" fallback="$3" value
+  case "$policy:$field" in
+    fixAndAnswerComments:waitBeforeFirstMinutes|conflictResolveAndMerge:waitBeforeFirstMinutes) ;;
+    fixAndAnswerComments:cooldownMinutes|conflictResolveAndMerge:cooldownMinutes) ;;
+    *) printf '%s' "$fallback"; return 0 ;;
+  esac
+  value="$(jq -r --arg policy "$policy" --arg field "$field" --argjson fallback "$fallback" '.[$policy][$field] // .proactivity[$policy][$field] // $fallback' "$CONFIG" 2>/dev/null || echo "$fallback")"
+  [[ "$value" =~ ^[0-9]+$ ]] || value="$fallback"
+  printf '%s' "$value"
+}
+
+pr_watcher_policy_timestamp_epoch() {
+  local timestamp="$1" epoch
+  [ -n "$timestamp" ] || return 1
+  epoch="$(date -d "$timestamp" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s 2>/dev/null || true)"
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$epoch"
+}
+
+pr_watcher_policy_init() {
+  sqlite3 "$DB" "
+    CREATE TABLE IF NOT EXISTS proactive_pr_policy_attempts (
+      policy TEXT NOT NULL,
+      repository TEXT NOT NULL,
+      prNumber INTEGER NOT NULL,
+      lastQueuedAt TEXT NOT NULL,
+      taskId TEXT,
+      PRIMARY KEY (policy, repository, prNumber)
+    );
+    INSERT OR IGNORE INTO proactive_pr_policy_attempts(policy, repository, prNumber, lastQueuedAt, taskId)
+    SELECT 'fixAndAnswerComments', repository, prNumber, MAX(createdAt), MAX(commentId)
+    FROM processed_comments
+    WHERE action='REVIEW_FIX'
+      AND prNumber IS NOT NULL
+      AND createdAt IS NOT NULL
+      AND prompt LIKE '%Required feedback assessment%'
+    GROUP BY repository, prNumber;
+    INSERT OR IGNORE INTO proactive_pr_policy_attempts(policy, repository, prNumber, lastQueuedAt, taskId)
+    SELECT 'conflictResolveAndMerge', repository, issueNumber, MAX(createdAt), MAX(commentId)
+    FROM processed_comments
+    WHERE commentId LIKE 'conflict_resolve_merge:%'
+      AND issueNumber IS NOT NULL
+      AND createdAt IS NOT NULL
+    GROUP BY repository, issueNumber;
+  " 2>>"$LOG"
+}
+
+# pr_watcher_policy_eligible <policy> <repo> <pr> <eventAt> <prUpdatedAt>
+# First attempt waits from the later of the source event and latest PR activity.
+# Subsequent attempts wait cooldownMinutes from the last task actually queued.
+pr_watcher_policy_eligible() {
+  local policy="$1" repo="$2" pr="$3" event_at="$4" pr_updated_at="$5"
+  local safe_repo last_queued reference_ts wait_minutes now_ts elapsed wait_secs
+  [[ "$policy" =~ ^(fixAndAnswerComments|conflictResolveAndMerge)$ ]] || return 1
+  [[ "$pr" =~ ^[0-9]+$ ]] || return 1
+  pr_watcher_policy_init || return 1
+  safe_repo="$(sql_escape "$repo")"
+  last_queued="$(sqlite3 "$DB" "SELECT lastQueuedAt FROM proactive_pr_policy_attempts WHERE policy='$policy' AND repository='$safe_repo' AND prNumber=$pr LIMIT 1;" 2>>"$LOG")"
+  if [ -n "$last_queued" ]; then
+    reference_ts="$(pr_watcher_policy_timestamp_epoch "$last_queued")" || {
+      log "WARN: invalid $policy cooldown timestamp for $repo#$pr; skipping proactive action"
+      return 1
+    }
+    wait_minutes="$(pr_watcher_policy_minutes "$policy" cooldownMinutes 60)"
+  else
+    local event_ts activity_ts
+    event_ts="$(pr_watcher_policy_timestamp_epoch "$event_at")" || {
+      log "WARN: missing or invalid $policy event timestamp for $repo#$pr; skipping proactive action"
+      return 1
+    }
+    activity_ts="$(pr_watcher_policy_timestamp_epoch "$pr_updated_at")" || {
+      log "WARN: missing or invalid PR activity timestamp for $repo#$pr; skipping proactive action"
+      return 1
+    }
+    reference_ts="$event_ts"
+    [ "$activity_ts" -le "$reference_ts" ] || reference_ts="$activity_ts"
+    wait_minutes="$(pr_watcher_policy_minutes "$policy" waitBeforeFirstMinutes 30)"
+  fi
+  now_ts="$(date +%s)"
+  elapsed=$((now_ts - reference_ts))
+  wait_secs=$((wait_minutes * 60))
+  if [ "$elapsed" -lt "$wait_secs" ]; then
+    log "skipping $policy for $repo#$pr — $wait_minutes m window has $(((wait_secs - elapsed + 59) / 60))m remaining"
+    return 1
+  fi
+  return 0
+}
+
+pr_watcher_policy_mark_attempted() {
+  local policy="$1" repo="$2" pr="$3" task_id="$4"
+  local safe_repo safe_task now
+  [[ "$policy" =~ ^(fixAndAnswerComments|conflictResolveAndMerge)$ ]] || return 1
+  [[ "$pr" =~ ^[0-9]+$ ]] || return 1
+  safe_repo="$(sql_escape "$repo")"
+  safe_task="$(sql_escape "$task_id")"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  pr_watcher_policy_init || return 1
+  sqlite3 "$DB" "
+    INSERT INTO proactive_pr_policy_attempts(policy, repository, prNumber, lastQueuedAt, taskId)
+    VALUES('$policy', '$safe_repo', $pr, '$now', NULLIF('$safe_task',''))
+    ON CONFLICT(policy, repository, prNumber) DO UPDATE SET
+      lastQueuedAt=excluded.lastQueuedAt,
+      taskId=excluded.taskId;
+  " 2>>"$LOG"
+}
+
 pr_watcher_ci_scope() {
   local scope
   scope="$(jq -r '.ciFix.prScope // "OnlyManulPr"' "$CONFIG" 2>/dev/null || echo OnlyManulPr)"
@@ -222,7 +331,7 @@ scan_proactive_pr_comments() {
   local scope prs_json issue_comments_json inline_comments_json watcher_baseline
   scope="$(pr_watcher_scope)"
   watcher_baseline="$(pr_watcher_ensure_baseline)" || return 0
-  prs_json="$(gh pr list --repo "$repo" --state open --limit 100 --json number,author,url,title 2>>"$LOG" | jq -c '[.[] | {number: .number, author: (.author.login // ""), url: .url, title: (.title // "")}]' 2>>"$LOG" || echo '[]')"
+  prs_json="$(gh pr list --repo "$repo" --state open --limit 100 --json number,author,url,title,updatedAt 2>>"$LOG" | jq -c '[.[] | {number: .number, author: (.author.login // ""), url: .url, title: (.title // ""), updatedAt: (.updatedAt // "")}]' 2>>"$LOG" || echo '[]')"
   [ -n "$prs_json" ] || prs_json='[]'
   issue_comments_json="$(gh api --paginate "repos/$repo/issues/comments?per_page=100" 2>>"$LOG" || echo '[]')"
   inline_comments_json="${review_comments:-}"
@@ -230,7 +339,7 @@ scan_proactive_pr_comments() {
     inline_comments_json="$(gh api --paginate "repos/$repo/pulls/comments?per_page=100" 2>>"$LOG" || echo '[]')"
   fi
 
-  local pr_count i pr pr_number pr_url pr_author
+  local pr_count i pr pr_number pr_url pr_author pr_updated_at
   pr_count="$(jq -r 'length' <<<"$prs_json" 2>/dev/null || echo 0)"
   [[ "$pr_count" =~ ^[0-9]+$ ]] || return 0
 
@@ -240,6 +349,7 @@ scan_proactive_pr_comments() {
     pr_number="$(jq -r '.number' <<<"$pr")"
     pr_url="$(jq -r '.url // empty' <<<"$pr")"
     pr_author="$(jq -r '.author // empty' <<<"$pr")"
+    pr_updated_at="$(jq -r '.updatedAt // empty' <<<"$pr")"
 
     if ! pr_watcher_pr_in_scope "$repo" "$pr_number" "$pr_url" "$pr_author" "$scope"; then
       i=$((i + 1))
@@ -263,11 +373,16 @@ scan_proactive_pr_comments() {
       comment_url="$(jq -r '.html_url // empty' <<<"$comment")"
       [ -n "$comment_id" ] && [ -n "$comment_body" ] || continue
       pr_watcher_comment_was_handled "$comment_id" && continue
-      local task_body
+      local task_body event_id
+      event_id="proactive-comment-$comment_id"
       task_body="Proactive PR conversation feedback from @$comment_author. Original comment: $comment_url
 
 $comment_body"
-      pr_watcher_submit_feedback "$repo" "$pr_number" "proactive-comment-$comment_id" "$task_body" "$comment_author" "$comment_created" || true
+      if pr_watcher_policy_eligible fixAndAnswerComments "$repo" "$pr_number" "$comment_created" "$pr_updated_at"; then
+        if pr_watcher_submit_feedback "$repo" "$pr_number" "$event_id" "$task_body" "$comment_author" "$comment_created"; then
+          pr_watcher_policy_mark_attempted fixAndAnswerComments "$repo" "$pr_number" "$event_id" || log "WARN: failed to persist proactive cooldown for $repo#$pr_number"
+        fi
+      fi
     done < <(
       jq -c --arg pr "$pr_number" --arg baseline "$watcher_baseline" --arg sig "$SIG" '
         .[]
@@ -303,11 +418,16 @@ $comment_body"
       else
         inline_json="$(jq -cn --argjson comment "$comment" --arg root "$root_id" '[($comment + {manul_thread_root_id:$root})]')"
       fi
-      local task_body
+      local task_body event_id
+      event_id="proactive-inline-$comment_id"
       task_body="Proactive PR inline feedback from @$comment_author. Original comment: $comment_url
 
 $comment_body"
-      pr_watcher_submit_feedback "$repo" "$pr_number" "proactive-inline-$comment_id" "$task_body" "$comment_author" "$comment_created" "$inline_json" || true
+      if pr_watcher_policy_eligible fixAndAnswerComments "$repo" "$pr_number" "$comment_created" "$pr_updated_at"; then
+        if pr_watcher_submit_feedback "$repo" "$pr_number" "$event_id" "$task_body" "$comment_author" "$comment_created" "$inline_json"; then
+          pr_watcher_policy_mark_attempted fixAndAnswerComments "$repo" "$pr_number" "$event_id" || log "WARN: failed to persist proactive cooldown for $repo#$pr_number"
+        fi
+      fi
     done < <(
       jq -c --arg pr "$pr_number" --arg baseline "$watcher_baseline" --arg sig "$SIG" '
         .[]
@@ -351,7 +471,7 @@ scan_conflicted_prs() {
 
   local scope prs_json pr_count
   scope="${CONFLICT_RESOLVE_AND_MERGE_PR_SCOPE:-OnlyManulPr}"
-  prs_json="$(gh pr list --repo "$repo" --state open --limit 100 --json number,headRefName,baseRefName,title,url,author,isDraft 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .headRefName, base: .baseRefName, title: (.title // ""), url: .url, author: (.author.login // ""), isDraft: (.isDraft // false)}]' 2>>"$LOG" || echo '[]')"
+  prs_json="$(gh pr list --repo "$repo" --state open --limit 100 --json number,headRefName,baseRefName,title,url,author,isDraft,updatedAt 2>>"$LOG" | jq -c '[.[] | {number: .number, head: .headRefName, base: .baseRefName, title: (.title // ""), url: .url, author: (.author.login // ""), isDraft: (.isDraft // false), updatedAt: (.updatedAt // "")}]' 2>>"$LOG" || echo '[]')"
   [ -n "$prs_json" ] || prs_json='[]'
   pr_count="$(jq -r 'length' <<<"$prs_json" 2>/dev/null || echo 0)"
   [[ "$pr_count" =~ ^[0-9]+$ ]] || {
@@ -388,13 +508,14 @@ scan_conflicted_prs() {
       continue
     fi
 
-    local details merge_state mergeable head_sha base_sha details_draft conflict
-    details="$(gh pr view "$pr_num" --repo "$repo" --json mergeStateStatus,mergeable,headRefOid,baseRefOid,isDraft 2>>"$LOG" || echo '{}')"
+    local details merge_state mergeable head_sha base_sha details_draft conflict pr_updated_at
+    details="$(gh pr view "$pr_num" --repo "$repo" --json mergeStateStatus,mergeable,headRefOid,baseRefOid,isDraft,updatedAt 2>>"$LOG" || echo '{}')"
     merge_state="$(jq -r '.mergeStateStatus // "UNKNOWN"' <<<"$details" 2>/dev/null || echo UNKNOWN)"
     mergeable="$(jq -r '.mergeable // "UNKNOWN"' <<<"$details" 2>/dev/null || echo UNKNOWN)"
     head_sha="$(jq -r '.headRefOid // empty' <<<"$details" 2>/dev/null || true)"
     base_sha="$(jq -r '.baseRefOid // empty' <<<"$details" 2>/dev/null || true)"
     details_draft="$(jq -r '.isDraft // false' <<<"$details" 2>/dev/null || echo false)"
+    pr_updated_at="$(jq -r '.updatedAt // empty' <<<"$details" 2>/dev/null || true)"
     conflict=0
     [ "$merge_state" = "DIRTY" ] && conflict=1
     case "$mergeable" in CONFLICTING|false) conflict=1 ;; esac
@@ -404,6 +525,10 @@ scan_conflicted_prs() {
     fi
     if [ -z "$head_sha" ] || [ -z "$base_sha" ]; then
       log "WARN: missing head/base SHA for conflicting PR $repo#$pr_num; refusing to queue an unpinned task"
+      i=$((i + 1))
+      continue
+    fi
+    if ! pr_watcher_policy_eligible conflictResolveAndMerge "$repo" "$pr_num" "$pr_updated_at" "$pr_updated_at"; then
       i=$((i + 1))
       continue
     fi
@@ -461,6 +586,7 @@ PROMPT
       SELECT changes();
     " 2>>"$LOG" | tail -1 | grep -q '^1$'; then
       NEW=$((NEW + 1))
+      pr_watcher_policy_mark_attempted conflictResolveAndMerge "$repo" "$pr_num" "$task_id" || log "WARN: failed to persist conflict cooldown for $repo#$pr_num"
       log "queued conflict resolve-and-merge task for $repo#$pr_num (head=$head_sha base=$base_sha)"
     fi
     i=$((i + 1))
