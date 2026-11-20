@@ -418,6 +418,854 @@ workspace_prepare_pr_branch() {
   [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" = "$branch" ]
 }
 
+# Install an isolated pre-push guard for proactive PR work.
+# It permits only fast-forward pushes to the observed PR source branch and
+# rejects a push if either the PR head or its target/base SHA moved meanwhile.
+workspace_install_proactive_pr_push_guard() {
+  local workdir="$1" guard_dir="$2" repository="$3" pr_number="$4"
+  local branch="$5" expected_head="$6" expected_base="$7"
+  [ -d "$workdir/.git" ] || return 1
+  [[ "$pr_number" =~ ^[0-9]+$ ]] || return 1
+  [[ "$expected_head" =~ ^[0-9a-fA-F]{40,64}$ ]] || return 1
+  [[ "$expected_base" =~ ^[0-9a-fA-F]{40,64}$ ]] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
+  [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+  [[ "$guard_dir" == /* ]] || return 1
+
+  local existing_hooks hooks_dir
+  existing_hooks="$(git -C "$workdir" config --local --get core.hooksPath 2>/dev/null || true)"
+  hooks_dir="$guard_dir/hooks"
+  if [ -n "$existing_hooks" ] && [ "$existing_hooks" != "$hooks_dir" ]; then
+    echo "workspace guard: refusing to replace an existing custom core.hooksPath" >&2
+    return 1
+  fi
+
+  mkdir -p "$hooks_dir" || return 1
+  chmod 700 "$guard_dir" "$hooks_dir" 2>/dev/null || true
+  printf '%s\n' "$expected_head" >"$guard_dir/expected-head.tmp" || return 1
+  mv -f "$guard_dir/expected-head.tmp" "$guard_dir/expected-head" || return 1
+  printf '%s\n' "$expected_base" >"$guard_dir/expected-base.tmp" || return 1
+  mv -f "$guard_dir/expected-base.tmp" "$guard_dir/expected-base" || return 1
+
+  local q_guard q_repo q_pr q_branch
+  printf -v q_guard '%q' "$guard_dir"
+  printf -v q_repo '%q' "$repository"
+  printf -v q_pr '%q' "$pr_number"
+  printf -v q_branch '%q' "$branch"
+  cat >"$hooks_dir/pre-push" <<HOOK
+#!/usr/bin/env bash
+set -euo pipefail
+GUARD_DIR=$q_guard
+GUARD_REPO=$q_repo
+GUARD_PR=$q_pr
+GUARD_BRANCH=$q_branch
+
+block_stale() {
+  printf 'MANUL_PROACTIVE_PR_STALE_HEAD: %s\n' "\$1" >&2
+  exit 1
+}
+block_scope() {
+  printf 'MANUL_PROACTIVE_PR_PUSH_BLOCKED: %s\n' "\$1" >&2
+  exit 1
+}
+
+remote_name="\${1:-}"
+[ "\$remote_name" = "origin" ] || block_scope "push is restricted to origin"
+expected_head="\$(cat "\$GUARD_DIR/expected-head" 2>/dev/null || true)"
+expected_base="\$(cat "\$GUARD_DIR/expected-base" 2>/dev/null || true)"
+[ -n "\$expected_head" ] && [ -n "\$expected_base" ] || block_stale "guard snapshot is missing"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "\${local_ref:-}" ] || continue
+  [ "\$remote_ref" = "refs/heads/\$GUARD_BRANCH" ] || block_scope "push is restricted to PR branch \$GUARD_BRANCH"
+  [[ "\$local_sha" =~ ^[0-9a-fA-F]{40,64}$ ]] || block_scope "deleting or invalid PR branch refs is forbidden"
+
+  current_head="\$(git ls-remote origin "\$remote_ref" 2>/dev/null | awk 'NR==1 {print \$1}')"
+  [ -n "\$current_head" ] || block_stale "could not read current remote PR head"
+  [ "\$current_head" = "\$expected_head" ] || block_stale "remote PR head advanced from the task snapshot"
+
+  pr_snapshot="\$(gh pr view "\$GUARD_PR" --repo "\$GUARD_REPO" --json state,headRefOid,baseRefOid --jq '[.state, .headRefOid, .baseRefOid] | @tsv' 2>/dev/null)" || block_stale "could not revalidate live PR head/base"
+  IFS=\
+# area. This is a rename (not a copy), so large working trees and uncommitted
+# files survive host/worker recovery without leaving two writable checkouts.
+# The recovery area is under runtime state, never under another task workspace
+# and never included in the OpenCode workspace allowlist.
+workspace_preserve_recovery_snapshot() {
+  local ws_id="$1" requested_task_id="${2:-}"
+  [[ "$ws_id" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo "workspace recovery: invalid workspace id; refusing to discard it" >&2
+    return 1
+  }
+
+  local workspace_path="$WORKSPACES_DIR/$ws_id"
+  if [ ! -e "$workspace_path" ] && [ ! -L "$workspace_path" ]; then
+    return 0
+  fi
+  if [ -L "$workspace_path" ] || [ ! -d "$workspace_path" ]; then
+    echo "workspace recovery: refusing unsafe workspace path: $workspace_path" >&2
+    return 1
+  fi
+
+  local workspaces_real workspace_real manul_real state_real recovery_root task_id safe_task_id destination
+  workspaces_real="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  workspace_real="$(realpath -e "$workspace_path" 2>/dev/null)" || return 1
+  case "$workspace_real" in
+    "$workspaces_real"/*) ;;
+    *) echo "workspace recovery: workspace path escaped its root; preserving in place" >&2; return 1 ;;
+  esac
+
+  task_id="$requested_task_id"
+  if [ -z "$task_id" ]; then
+    task_id="$(sqlite3 "$DB" "SELECT COALESCE(currentTaskId,'') FROM workspaces WHERE workspaceId='$(sql_escape "$ws_id")' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  safe_task_id="$(printf '%s' "${task_id:-unmapped}" | sed 's/[^A-Za-z0-9._-]/_/g' | cut -c1-100)"
+  manul_real="$(realpath -e "$MANUL_DIR" 2>/dev/null)" || return 1
+  mkdir -p "$MANUL_STATE_DIR/recovery/workspaces" || return 1
+  state_real="$(realpath -e "$MANUL_STATE_DIR" 2>/dev/null)" || return 1
+  case "$state_real" in
+    "$manul_real"/state) ;;
+    *) echo "workspace recovery: runtime state path escaped MANUL_DIR; preserving in place" >&2; return 1 ;;
+  esac
+  recovery_root="$(realpath -e "$state_real/recovery/workspaces" 2>/dev/null)" || return 1
+  case "$recovery_root" in
+    "$state_real"/recovery/workspaces) ;;
+    *) echo "workspace recovery: recovery path is not canonical; preserving in place" >&2; return 1 ;;
+  esac
+  chmod 700 "$state_real/recovery" "$recovery_root" 2>/dev/null || return 1
+
+  destination="$recovery_root/${ws_id}-${safe_task_id}-$(date -u +%Y%m%dT%H%M%S%N)-$"
+  [ ! -e "$destination" ] && [ ! -L "$destination" ] || {
+    echo "workspace recovery: destination already exists; preserving in place" >&2
+    return 1
+  }
+  if ! mv -T -- "$workspace_real" "$destination"; then
+    echo "workspace recovery: failed to preserve $workspace_path; refusing deletion" >&2
+    return 1
+  fi
+  chmod 700 "$destination" 2>/dev/null || true
+  # The archive retention clock starts when the snapshot is created, not when
+  # the source workspace was last modified. mv preserves directory mtimes.
+  touch "$destination" 2>/dev/null || true
+  echo "workspace recovery: preserved workspace=$ws_id task=${task_id:-unmapped} path=$destination" >&2
+}
+
+workspace_mark_broken() {
+  local ws_id="$1"
+  local safe_ws_id
+  safe_ws_id="$(sql_escape "$ws_id")"
+  if ! workspace_preserve_recovery_snapshot "$ws_id"; then
+    echo "workspace_mark_broken: recovery snapshot failed; workspace remains registered and on disk" >&2
+    return 1
+  fi
+  sqlite3 "$DB" "BEGIN IMMEDIATE; DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws_id'; UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$safe_ws_id'; COMMIT;" 2>/dev/null
+}
+
+workspace_repo_matches() {
+  local task_repo="$1"
+  local actual_repo="$2"
+
+  # Normalize GitHub HTTPS/SSH URLs to owner/repo.
+  local normalized_actual="${actual_repo#https://github.com/}"
+  normalized_actual="${normalized_actual#http://github.com/}"
+  normalized_actual="${normalized_actual#git@github.com:}"
+  normalized_actual="${normalized_actual#ssh://git@github.com/}"
+  normalized_actual="${normalized_actual#github.com/}"
+  normalized_actual="${normalized_actual%.git}"
+  normalized_actual="${normalized_actual%/}"
+  [ "$normalized_actual" = "$task_repo" ] && return 0
+
+  # `git clone --local` can leave a local filesystem path as origin.
+  # The workspace directory structure is $MANUL_DIR/workspace/<slug>
+  # where <slug> is derived from owner/repo by replacing '/' with '-'.
+  if [[ "$actual_repo" == /* ]]; then
+    local resolved_path="${actual_repo%.git}"
+
+    # Check if this is a known workspace path pattern
+    if [[ "$resolved_path" == */workspace/* ]]; then
+      local slug="${resolved_path##*/workspace/}"
+      # Compute expected slug from task_repo (replaces '/' with '-')
+      local expected_slug
+      expected_slug="$(printf '%s' "$task_repo" | sed 's/\//-/g')"
+      [ "$slug" = "$expected_slug" ] && return 0
+    fi
+
+    # Fallback: compare path components for arbitrary local paths
+    local owner repo_name
+    owner="$(basename "$(dirname "$actual_repo")")"
+    repo_name="$(basename "$actual_repo")"
+    repo_name="${repo_name%.git}"
+    [ "${owner}/${repo_name}" = "$task_repo" ] && return 0
+
+    local resolved_origin
+    if resolved_origin="$(realpath -e "$actual_repo" 2>/dev/null)"; then
+      owner="$(basename "$(dirname "$resolved_origin")")"
+      repo_name="$(basename "$resolved_origin")"
+      repo_name="${repo_name%.git}"
+      [ "${owner}/${repo_name}" = "$task_repo" ] && return 0
+    fi
+  fi
+
+  return 1
+}
+
+
+# Convert a GitHub owner/repository identifier to a safe workspace-relative path.
+workspace_repo_relative_path() {
+  local repository="${1:-}" owner repo_name
+  [[ "$repository" =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]] || return 1
+  owner="$(printf '%s' "$repository" | cut -d/ -f1)"
+  repo_name="$(printf '%s' "$repository" | cut -d/ -f2)"
+  [ "$owner" != "." ] && [ "$owner" != ".." ] || return 1
+  [ "$repo_name" != "." ] && [ "$repo_name" != ".." ] || return 1
+  printf 'repos/%s/%s\n' "$owner" "$repo_name"
+}
+
+# Resolve a nested checkout path strictly inside the leased workspace root.
+# Symlinked path components are rejected to prevent path traversal.
+workspace_primary_repo_path() {
+  local workspace_root="$1" repository="$2"
+  local relative root_real owner repo_name repos_path owner_path checkout_path resolved
+  relative="$(workspace_repo_relative_path "$repository")" || return 1
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  [ -d "$root_real" ] || return 1
+  repos_path="$root_real/repos"
+  [ ! -L "$repos_path" ] || return 1
+  mkdir -p "$repos_path" || return 1
+  [ "$(realpath -e "$repos_path" 2>/dev/null)" = "$root_real/repos" ] || return 1
+  owner="$(printf '%s' "$relative" | cut -d/ -f2)"
+  repo_name="$(basename "$relative")"
+  owner_path="$repos_path/$owner"
+  [ ! -L "$owner_path" ] || return 1
+  mkdir -p "$owner_path" || return 1
+  [ "$(realpath -e "$owner_path" 2>/dev/null)" = "$repos_path/$owner" ] || return 1
+  checkout_path="$owner_path/$repo_name"
+  [ ! -L "$checkout_path" ] || return 1
+  resolved="$(realpath -m "$checkout_path" 2>/dev/null)" || return 1
+  case "$resolved" in "$root_real"/*) ;; *) return 1 ;; esac
+  [ "$resolved" = "$checkout_path" ] || return 1
+  printf '%s\n' "$checkout_path"
+}
+
+# Move an existing legacy root checkout as one unit. This preserves .git,
+# ignored files, local commits, and dirty PR work across the layout migration.
+workspace_migrate_legacy_checkout() {
+  local workspace_root="$1" repository="$2"
+  local relative root_real actual_root actual_origin workspace_parent workspace_name staging owner repo_name
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  [ -e "$root_real/.git" ] || return 0
+  [ ! -L "$root_real/.git" ] || return 1
+  actual_root="$(git -C "$root_real" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$actual_root" ] && [ "$(realpath -e "$actual_root" 2>/dev/null)" = "$root_real" ] || return 1
+  actual_origin="$(git -C "$root_real" remote get-url origin 2>/dev/null || true)"
+  workspace_repo_matches "$repository" "$actual_origin" || return 2
+  relative="$(workspace_repo_relative_path "$repository")" || return 1
+  owner="$(printf '%s' "$relative" | cut -d/ -f2)"
+  repo_name="$(basename "$relative")"
+  workspace_parent="$(dirname "$root_real")"
+  workspace_name="$(basename "$root_real")"
+  staging="$workspace_parent/.${workspace_name}.migration.$$"
+  [ ! -e "$staging" ] || return 1
+  mv "$root_real" "$staging" || return 1
+  if ! mkdir -p "$root_real/repos/$owner"; then
+    rmdir "$root_real" 2>/dev/null || true
+    mv "$staging" "$root_real" 2>/dev/null || true
+    return 1
+  fi
+  if ! mv "$staging" "$root_real/repos/$owner/$repo_name"; then
+    rmdir "$root_real/repos/$owner" "$root_real/repos" "$root_real" 2>/dev/null || true
+    mv "$staging" "$root_real" 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
+# Prepare the primary checkout inside the task root. Never erase an existing
+# mismatched checkout because it may hold unpushed commits or user changes.
+# Initialize nested repositories after every branch change. The shared
+# repository cache is intentionally only a bare source; it does not guarantee
+# that nested Git submodules have been initialized in task-local checkouts.
+workspace_sync_submodules() {
+  local workdir="$1"
+  [ -f "$workdir/.gitmodules" ] || return 0
+
+  if ! git -C "$workdir" submodule sync --recursive >&2; then
+    echo "workspace_sync_submodules: failed to synchronize submodule URLs in $workdir" >&2
+    return 1
+  fi
+  if ! git -C "$workdir" submodule update --init --recursive >&2; then
+    echo "workspace_sync_submodules: failed to initialize nested repositories in $workdir" >&2
+    return 1
+  fi
+}
+
+workspace_prepare_primary_checkout() {
+  local workspace_root="$1" repository="$2" repo_cache="$3"
+  local checkout actual_origin
+  workspace_migrate_legacy_checkout "$workspace_root" "$repository" || return $?
+  checkout="$(workspace_primary_repo_path "$workspace_root" "$repository")" || return 1
+  if [ -e "$checkout" ]; then
+    if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
+      return 2
+    fi
+    actual_origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || true)"
+    workspace_repo_matches "$repository" "$actual_origin" || return 2
+  else
+    [ -d "$repo_cache/.git" ] || return 1
+    if ! git clone --local --no-hardlinks "$repo_cache" "$checkout" 2>/dev/null; then
+      [ ! -e "$checkout" ] || rm -rf -- "$checkout"
+      return 1
+    fi
+    git -C "$checkout" remote set-url origin "https://github.com/$repository" || return 1
+  fi
+  if ! workspace_sync_submodules "$checkout"; then
+    echo "workspace_prepare_primary_checkout: nested repository initialization failed for '$repository'" >&2
+    return 1
+  fi
+  mkdir -p "$(realpath -e "$workspace_root")/tmp" || return 1
+  printf '%s\n' "$checkout"
+}
+
+
+
+# Rebuild a broken checkout by cloning the exact requested branch from its
+# remote. The old checkout is preserved under this task's tmp directory before
+# replacement; the shared repository cache is never changed by this fallback.
+workspace_recover_primary_checkout() {
+  local workspace_root="$1" repository="$2" source_checkout="$3" branch="$4"
+  [ -n "$workspace_root" ] && [ -n "$repository" ] && [ -n "$source_checkout" ] && [ -n "$branch" ] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || {
+    echo "workspace_recover_primary_checkout: invalid target branch '$branch'" >&2
+    return 1
+  }
+
+  local root_real checkout checkout_parent source_checkout_real repo_name origin_url
+  root_real="$(realpath -e "$workspace_root" 2>/dev/null)" || return 1
+  checkout="$(workspace_primary_repo_path "$root_real" "$repository" 2>/dev/null)" || return 1
+  checkout_parent="$(dirname "$checkout")"
+  repo_name="$(basename "$checkout")"
+  source_checkout_real="$(realpath -e "$source_checkout" 2>/dev/null || true)"
+  origin_url=""
+
+  # Only reuse an origin URL from the exact expected primary checkout and only
+  # when it still identifies the requested repository. Otherwise use its
+  # canonical GitHub URL; no sibling checkout or shared cache is consulted.
+  if [ -n "$source_checkout_real" ] && [ "$source_checkout_real" = "$checkout" ] &&
+     [ -e "$source_checkout_real/.git" ] && [ ! -L "$source_checkout_real/.git" ]; then
+    origin_url="$(git -C "$source_checkout_real" remote get-url origin 2>/dev/null || true)"
+    if [ -n "$origin_url" ] && ! workspace_repo_matches "$repository" "$origin_url"; then
+      echo "workspace_recover_primary_checkout: origin did not match '$repository'; using its canonical remote URL" >&2
+      origin_url=""
+    fi
+  fi
+  if [ -z "$origin_url" ]; then
+    origin_url="https://github.com/$repository"
+  fi
+
+  local temp_checkout="$checkout_parent/.$repo_name.recovery-$(date +%s%N)"
+  if [ -e "$temp_checkout" ] || [ -L "$temp_checkout" ]; then
+    echo "workspace_recover_primary_checkout: temporary checkout path already exists; refusing to overwrite it" >&2
+    return 1
+  fi
+
+  local tmp_root="$root_real/tmp"
+  [ ! -L "$tmp_root" ] || {
+    echo "workspace_recover_primary_checkout: task tmp path is a symlink" >&2
+    return 1
+  }
+  mkdir -p "$tmp_root" || return 1
+  [ "$(realpath -e "$tmp_root" 2>/dev/null)" = "$tmp_root" ] || return 1
+  local recovery_root="$tmp_root/checkout-recovery"
+  [ ! -L "$recovery_root" ] || {
+    echo "workspace_recover_primary_checkout: recovery path is a symlink" >&2
+    return 1
+  }
+  mkdir -p "$recovery_root" || return 1
+  recovery_root="$(realpath -e "$recovery_root" 2>/dev/null)" || return 1
+  case "$recovery_root" in "$root_real"/*) ;; *)
+    echo "workspace_recover_primary_checkout: recovery path escaped the task workspace" >&2
+    return 1
+    ;;
+  esac
+
+  # Clone exactly the requested branch from the repository remote. This also
+  # repairs a checkout whose local Git metadata is unusable, without guessing a
+  # default branch. If the requested branch cannot be fetched, leave the old
+  # checkout at its original path and report the blocker.
+  if ! git clone --quiet --recurse-submodules --single-branch --branch "$branch" --no-hardlinks "$origin_url" "$temp_checkout"; then
+    [ ! -e "$temp_checkout" ] || rm -rf -- "$temp_checkout"
+    echo "workspace_recover_primary_checkout: could not clone remote branch '$branch' from '$origin_url'" >&2
+    return 1
+  fi
+  local expected_head
+  expected_head="$(git -C "$temp_checkout" rev-parse "refs/remotes/origin/$branch^{commit}" 2>/dev/null)" || {
+    rm -rf -- "$temp_checkout"
+    echo "workspace_recover_primary_checkout: remote tracking ref for '$branch' is missing after clone" >&2
+    return 1
+  }
+  if [ "$(git -C "$temp_checkout" symbolic-ref --short HEAD 2>/dev/null)" != "$branch" ] ||
+     [ "$(git -C "$temp_checkout" rev-parse HEAD 2>/dev/null)" != "$expected_head" ] ||
+     [ -n "$(git -C "$temp_checkout" status --porcelain 2>/dev/null)" ]; then
+    rm -rf -- "$temp_checkout"
+    echo "workspace_recover_primary_checkout: fresh checkout verification failed for '$branch'" >&2
+    return 1
+  fi
+
+  local backup="" branch_slug recovery_stamp suffix=0 existing_real
+  branch_slug="$(printf '%s' "$branch" | sed 's#[^A-Za-z0-9._-]#_#g')"
+  recovery_stamp="$(date -u +%Y%m%dT%H%M%SZ)-$(date +%s%N)"
+  backup="$recovery_root/$repo_name-$branch_slug-$recovery_stamp"
+  while [ -e "$backup" ] || [ -L "$backup" ]; do
+    suffix=$((suffix + 1))
+    backup="$recovery_root/$repo_name-$branch_slug-$recovery_stamp-$suffix"
+  done
+
+  if [ -e "$checkout" ] || [ -L "$checkout" ]; then
+    if [ ! -d "$checkout" ] || [ -L "$checkout" ]; then
+      rm -rf -- "$temp_checkout"
+      echo "workspace_recover_primary_checkout: existing checkout path is not a safe directory; it was left untouched" >&2
+      return 1
+    fi
+    existing_real="$(realpath -e "$checkout" 2>/dev/null || true)"
+    if [ -z "$existing_real" ] || [ "$existing_real" != "$checkout" ]; then
+      rm -rf -- "$temp_checkout"
+      echo "workspace_recover_primary_checkout: existing checkout path is invalid; it was left untouched" >&2
+      return 1
+    fi
+    if ! mv -- "$checkout" "$backup"; then
+      rm -rf -- "$temp_checkout"
+      echo "workspace_recover_primary_checkout: could not archive existing checkout; it was left untouched" >&2
+      return 1
+    fi
+  fi
+
+  if ! mv -- "$temp_checkout" "$checkout"; then
+    if [ -d "$backup" ] && [ ! -e "$checkout" ] && [ ! -L "$checkout" ]; then
+      mv -- "$backup" "$checkout" 2>/dev/null || true
+    fi
+    echo "workspace_recover_primary_checkout: could not install fresh checkout; previous data remains in recovery storage at '$backup'" >&2
+    return 1
+  fi
+
+  if [ -d "$backup" ]; then
+    echo "workspace_recover_primary_checkout: rebuilt '$repository' at '$branch' ($expected_head); previous checkout preserved at '$backup'" >&2
+  else
+    echo "workspace_recover_primary_checkout: created '$repository' at '$branch' ($expected_head)" >&2
+  fi
+  return 0
+}
+
+# Prepare an issue-task checkout at the resolved base branch. The caller fetches
+# origin and chooses the base branch first. Failures trigger a fresh clone at
+# that same branch, never a fallback to an assumed default.
+workspace_prepare_task_base_branch() {
+  local workdir="$1" branch="$2" workspace_root="$3" repository="$4"
+  [ -n "$branch" ] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
+
+  if [ ! -d "$workdir/.git" ] ||
+     ! git -C "$workdir" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    echo "workspace_prepare_task_base_branch: Git metadata or origin ref for '$branch' is unavailable; attempting branch-specific recovery" >&2
+    if workspace_recover_primary_checkout "$workspace_root" "$repository" "$workdir" "$branch"; then
+      return 0
+    fi
+    return 1
+  fi
+
+  local failed_step=""
+  if ! git -C "$workdir" checkout -B "$branch" "origin/$branch" >/dev/null 2>&1; then
+    failed_step="checkout"
+  elif ! git -C "$workdir" reset --hard "origin/$branch" --quiet 2>/dev/null; then
+    failed_step="reset"
+  elif ! git -C "$workdir" clean -fd --quiet 2>/dev/null; then
+    failed_step="clean"
+  elif [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" != "$branch" ] ||
+       [ "$(git -C "$workdir" rev-parse HEAD 2>/dev/null)" != "$(git -C "$workdir" rev-parse "origin/$branch" 2>/dev/null)" ]; then
+    failed_step="verification"
+  fi
+
+  if [ -z "$failed_step" ]; then
+    if ! workspace_sync_submodules "$workdir"; then
+      echo "workspace_prepare_task_base_branch: submodule initialization failed for '$branch'" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  echo "workspace_prepare_task_base_branch: ordinary '$failed_step' failed for target '$branch'; trying a fresh clone at the same target" >&2
+  if workspace_recover_primary_checkout "$workspace_root" "$repository" "$workdir" "$branch"; then
+    if [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" = "$branch" ] &&
+       [ "$(git -C "$workdir" rev-parse HEAD 2>/dev/null)" = "$(git -C "$workdir" rev-parse "origin/$branch" 2>/dev/null)" ]; then
+      echo "workspace_prepare_task_base_branch: recovered checkout at '$branch'" >&2
+      return 0
+    fi
+  fi
+  echo "workspace_prepare_task_base_branch: recovery failed for target '$branch'; original checkout remains preserved when possible" >&2
+  return 1
+}
+
+# Clone configured related repositories into this task's workspace. The shared
+# cache is a source only. Related repos are read-only by default; dirty/diverged
+# prior checkouts are preserved and reported instead of destructively reset.
+workspace_prepare_related_checkouts() {
+  local workspace_root="$1" primary_repository="$2"
+  shift 2
+  WORKSPACE_RELATED_PATHS=""
+  WORKSPACE_RELATED_UNAVAILABLE=""
+  local repository cache cache_rc checkout relative actual_origin branch local_head cache_head
+  for repository in "$@"; do
+    [ -n "$repository" ] || continue
+    if [ "$(printf '%s' "$repository" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$primary_repository" | tr '[:upper:]' '[:lower:]')" ]; then
+      continue
+    fi
+    relative="$(workspace_repo_relative_path "$repository" 2>/dev/null || true)"
+    if [ -z "$relative" ]; then
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: invalid repository identifier"
+      continue
+    fi
+    checkout="$(workspace_primary_repo_path "$workspace_root" "$repository" 2>/dev/null || true)"
+    if [ -z "$checkout" ]; then
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: unsafe checkout path"
+      continue
+    fi
+    cache_rc=0
+    cache="$(ensure_repo "$repository")" || cache_rc=$?
+    if [ "$cache_rc" -ne 0 ] || [ -z "$cache" ] || [ ! -d "$cache/.git" ]; then
+      [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+      WORKSPACE_RELATED_UNAVAILABLE+="- $repository: shared cache unavailable (status $cache_rc)"
+      continue
+    fi
+
+    if [ ! -e "$checkout" ]; then
+      if git clone --local --no-hardlinks "$cache" "$checkout" >/dev/null 2>&1; then
+        if ! git -C "$checkout" remote set-url origin "https://github.com/$repository" >/dev/null 2>&1; then
+          rm -rf -- "$checkout"
+          [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+          WORKSPACE_RELATED_UNAVAILABLE+="- $repository: failed to configure origin"
+          release_repo_lock "$repository"
+          continue
+        fi
+      else
+        [ ! -e "$checkout" ] || rm -rf -- "$checkout"
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: clone failed"
+        release_repo_lock "$repository"
+        continue
+      fi
+    else
+      if [ ! -e "$checkout/.git" ] || [ -L "$checkout/.git" ]; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout is not a Git repository; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      actual_origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || true)"
+      if ! workspace_repo_matches "$repository" "$actual_origin"; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout origin mismatch; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      if ! git -C "$checkout" diff --quiet 2>/dev/null || ! git -C "$checkout" diff --cached --quiet 2>/dev/null; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout has tracked changes; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      branch="$(git -C "$cache" symbolic-ref --short HEAD 2>/dev/null || git -C "$cache" branch --show-current 2>/dev/null || true)"
+      if [ -z "$branch" ] || [ "$(git -C "$checkout" symbolic-ref --short HEAD 2>/dev/null || true)" != "$branch" ]; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: existing checkout is on a different/detached branch; preserved"
+        release_repo_lock "$repository"
+        continue
+      fi
+      if ! git -C "$checkout" fetch --quiet "$cache" "+refs/heads/$branch:refs/remotes/manul-cache/$branch" 2>/dev/null; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: could not refresh from the current cache"
+        release_repo_lock "$repository"
+        continue
+      fi
+      local_head="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || true)"
+      cache_head="$(git -C "$checkout" rev-parse "refs/remotes/manul-cache/$branch" 2>/dev/null || true)"
+      if [ -z "$cache_head" ]; then
+        [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+        WORKSPACE_RELATED_UNAVAILABLE+="- $repository: refreshed branch ref is missing"
+        release_repo_lock "$repository"
+        continue
+      elif [ "$local_head" != "$cache_head" ]; then
+        if git -C "$checkout" merge-base --is-ancestor "$local_head" "$cache_head" 2>/dev/null; then
+          if ! git -C "$checkout" merge --ff-only "$cache_head" >/dev/null 2>&1; then
+            [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+            WORKSPACE_RELATED_UNAVAILABLE+="- $repository: fast-forward refresh failed; preserved"
+            release_repo_lock "$repository"
+            continue
+          fi
+        else
+          [ -z "$WORKSPACE_RELATED_UNAVAILABLE" ] || WORKSPACE_RELATED_UNAVAILABLE+=$'\n'
+          WORKSPACE_RELATED_UNAVAILABLE+="- $repository: local commits would be overwritten by refresh; preserved"
+          release_repo_lock "$repository"
+          continue
+        fi
+      fi
+    fi
+    release_repo_lock "$repository"
+    [ -z "$WORKSPACE_RELATED_PATHS" ] || WORKSPACE_RELATED_PATHS+=$'\n'
+    WORKSPACE_RELATED_PATHS+="- $repository: $relative (read-only)"
+  done
+  return 0
+}
+
+workspace_get_path() {
+  local task_id="$1"
+  local safe_task_id
+  safe_task_id="$(sql_escape "$task_id")"
+  local expected_ws_id="${2:-}"
+  local safe_ws_id=""
+  local mapped_ws_id=""
+  local path
+
+  # Prefer an explicit lease ID from dispatch. For helper callers that do not
+  # pass one, follow the task's persisted mapping before using the legacy
+  # currentTaskId lookup used by context-only test fixtures.
+  if [ -z "$expected_ws_id" ]; then
+    expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+  fi
+  if [ -n "$expected_ws_id" ]; then
+    safe_ws_id="$(sql_escape "$expected_ws_id")"
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  else
+    path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+  fi
+
+  if [ -z "$path" ]; then
+    mapped_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null || true)"
+    # Reclaim only if the task's persisted mapping agrees with the explicit
+    # lease, otherwise fail closed instead of reclaiming another workspace.
+    if [ -z "$expected_ws_id" ] || [ "$mapped_ws_id" = "$expected_ws_id" ]; then
+      workspace_reclaim "$task_id" >/dev/null 2>&1 || true
+      if [ -n "$expected_ws_id" ]; then
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      else
+        path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Resolve and validate the workspace root before probing any checkout.
+  # A DB value or symlink must never make this helper inspect another workspace.
+  if [ -n "$path" ]; then
+    local root_real expected_path expected_real registered_real
+    if [ -z "$expected_ws_id" ]; then
+      expected_ws_id="$(sqlite3 "$DB" "SELECT workspaceId FROM workspaces WHERE currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+    fi
+    root_real="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null || true)"
+    expected_path="$WORKSPACES_DIR/$expected_ws_id"
+    expected_real="$(realpath -e "$expected_path" 2>/dev/null || true)"
+    registered_real="$(realpath -e "$path" 2>/dev/null || true)"
+
+    # A persisted BUSY lease may outlive the physical workspace directory (for
+    # example after a runtime cleanup or host restart). Recreate only the exact
+    # canonical directory owned by this task; never follow a symlink or trust a
+    # path supplied only by the database. The repository checkout is rebuilt
+    # later from its shared cache, while all ownership checks remain fail-closed.
+    if [ -n "$root_real" ] &&
+       [[ "$expected_ws_id" =~ ^ws-[A-Za-z0-9._-]+$ ]] &&
+       [ "$path" = "$expected_path" ] &&
+       [ -z "$expected_real" ] &&
+       [ ! -e "$expected_path" ] &&
+       [ ! -L "$expected_path" ] &&
+       [ "$(realpath -e "$(dirname "$expected_path")" 2>/dev/null || true)" = "$root_real" ]; then
+      if mkdir -- "$expected_path" 2>/dev/null; then
+        expected_real="$(realpath -e "$expected_path" 2>/dev/null || true)"
+        registered_real="$(realpath -e "$path" 2>/dev/null || true)"
+      fi
+    fi
+
+    if [ -z "$root_real" ] || [ -z "$expected_ws_id" ] || [ -L "$expected_path" ] || [ -L "$path" ] || [ -z "$expected_real" ] || [ "$expected_real" != "$root_real/$expected_ws_id" ] || [ "$registered_real" != "$expected_real" ]; then
+      path=""
+    fi
+  fi
+  [ -n "$path" ] || { printf '\n'; return 0; }
+
+  # Validate root and nested primary checkouts. Preserve mismatched checkout
+  # state because it may contain unpushed PR commits or uncommitted changes.
+  if [ -n "$path" ]; then
+    local task_repo actual_repo candidate_checkout relative
+    task_repo="$(sqlite3 "$DB" "SELECT repository FROM processed_comments WHERE commentId='$safe_task_id' LIMIT 1;" 2>/dev/null)"
+    candidate_checkout="$path"
+    if [ -n "$task_repo" ] && [ ! -e "$path/.git" ]; then
+      relative="$(workspace_repo_relative_path "$task_repo" 2>/dev/null || true)"
+      if [ -z "$relative" ]; then
+        path=""
+      else
+        local owner_component
+        owner_component="$(printf '%s' "$relative" | cut -d/ -f2)"
+        if [ -L "$path/repos" ] || [ -L "$path/repos/$owner_component" ] || [ -L "$path/$relative" ]; then
+          path=""
+        else
+          candidate_checkout="$path/$relative"
+        fi
+      fi
+    fi
+    if [ -n "$path" ] && [ -L "$candidate_checkout/.git" ]; then
+      path=""
+    fi
+    if [ -n "$path" ] && [ -e "$candidate_checkout/.git" ] && [ -n "$task_repo" ]; then
+      actual_repo="$(git -C "$candidate_checkout" remote get-url origin 2>/dev/null || true)"
+      if [ -n "$actual_repo" ] && ! workspace_repo_matches "$task_repo" "$actual_repo"; then
+        path=""
+      fi
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
+# Validate both lease ownership and the exact physical checkout path before
+# dispatch. A valid BUSY row is not enough if the executor is pointed at a
+# different workspace (for example, a stale checkout from an earlier task).
+workspace_owned_path_matches() {
+  local ws_id="$1"
+  local task_id="$2"
+  local candidate_path="$3"
+  [ -n "$ws_id" ] && [ -n "$task_id" ] && [ -n "$candidate_path" ] || return 1
+
+  local safe_ws_id safe_task_id registered_path workspace_root registered_real candidate_real
+  safe_ws_id="$(sql_escape "$ws_id")"
+  safe_task_id="$(sql_escape "$task_id")"
+  registered_path="$(sqlite3 "$DB" "SELECT workspacePath FROM workspaces WHERE workspaceId='$safe_ws_id' AND currentTaskId='$safe_task_id' AND status='BUSY' LIMIT 1;" 2>/dev/null || true)"
+  [ -n "$registered_path" ] && [ -d "$registered_path" ] && [ -d "$candidate_path" ] || return 1
+
+  workspace_root="$(realpath -e "$WORKSPACES_DIR" 2>/dev/null)" || return 1
+  registered_real="$(realpath -e "$registered_path" 2>/dev/null)" || return 1
+  candidate_real="$(realpath -e "$candidate_path" 2>/dev/null)" || return 1
+
+  case "$registered_real" in
+    "$workspace_root"/*) ;;
+    *) return 1 ;;
+  esac
+  [ "$registered_real" = "$candidate_real" ]
+}
+
+workspace_cleanup_stale() {
+  local stale_threshold="${1:-3600}"
+
+  # Reclaim BUSY workspaces that are not owned by a live running task.
+  # Queued/completed/failed tasks must never pin a workspace across daemon restarts.
+  # lastUsedAt is only a coarse staleness signal for a running task.
+  local has_liveness_columns
+  has_liveness_columns="$(sqlite3 "$DB" "SELECT COUNT(*) FROM pragma_table_info('processed_comments') WHERE name IN ('heartbeatAt','leaseExpiresAt','workerPid');" 2>/dev/null || echo 0)"
+
+  if [ "${has_liveness_columns:-0}" -eq 3 ]; then
+    local rows
+    rows="$(sqlite3 -separator '|' "$DB" "
+      SELECT w.workspaceId,
+             COALESCE(w.currentTaskId,''),
+             COALESCE(pc.status,''),
+             COALESCE(pc.heartbeatAt,''),
+             COALESCE(pc.leaseExpiresAt,''),
+             COALESCE(pc.workerPid,'')
+      FROM workspaces w
+      LEFT JOIN processed_comments pc ON pc.commentId=w.currentTaskId
+      WHERE w.status='BUSY';
+    " 2>/dev/null || true)"
+
+    while IFS='|' read -r ws_id task_id task_status heartbeat_at lease_at worker_pid; do
+      [ -n "$ws_id" ] || continue
+      local stale=true
+
+      if [ "$task_status" = "running" ]; then
+        # A live worker owns the workspace even if its timestamps are old.
+        if [ -n "$worker_pid" ] && [ "$worker_pid" != "0" ] && kill -0 "$worker_pid" 2>/dev/null; then
+          stale=false
+        elif [ -n "$heartbeat_at" ] && [ "$heartbeat_at" > "$(date -d "-${stale_threshold} seconds" '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        elif [ -n "$lease_at" ] && [ "$lease_at" > "$(date '+%Y-%m-%d %H:%M:%S')" ] 2>/dev/null ]; then
+          stale=false
+        fi
+      fi
+
+      if [ "$stale" = true ]; then
+        if workspace_preserve_recovery_snapshot "$ws_id" "$task_id"; then
+          sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+        else
+          # A failed snapshot must keep the old workspace registered: cleanup
+          # must never convert a recovery error into silent data loss.
+          echo "workspace_cleanup_stale: could not preserve workspace=$ws_id task=$task_id; leaving it BUSY for operator recovery" >&2
+        fi
+      fi
+    done <<< "$rows"
+  else
+    # Backward-compatible fallback for databases predating liveness columns.
+    # Iterate one workspace at a time so the filesystem can be preserved before
+    # a stale BUSY row becomes disposable.
+    local legacy_rows
+    legacy_rows="$(sqlite3 -separator '|' "$DB" "SELECT workspaceId, COALESCE(currentTaskId,'') FROM workspaces WHERE status='BUSY' AND lastUsedAt < datetime('now', '-${stale_threshold} seconds');" 2>/dev/null || true)"
+    while IFS='|' read -r ws_id task_id; do
+      [ -n "$ws_id" ] || continue
+      if workspace_preserve_recovery_snapshot "$ws_id" "$task_id"; then
+        sqlite3 "$DB" "UPDATE workspaces SET status='BROKEN' WHERE workspaceId='$(sql_escape "$ws_id")' AND status='BUSY';" 2>/dev/null || true
+      else
+        echo "workspace_cleanup_stale: could not preserve workspace=$ws_id task=$task_id; leaving it BUSY for operator recovery" >&2
+      fi
+    done <<< "$legacy_rows"
+  fi
+
+  # Broken workspaces are disposable. Idle workspaces are not lease-stale:
+  # unbound IDLE pool slots must be pruned by workspace-gc.sh, which atomically
+  # claims the GC state and archives the directory before deleting its row.
+  # A timestamp-only DELETE here can orphan the physical workspace and can
+  # discard a slot while a queued task is being attached to it.
+  sqlite3 "$DB" "
+    DELETE FROM workspace_contexts
+    WHERE workspaceId IN (SELECT workspaceId FROM workspaces WHERE status='BROKEN');
+
+    DELETE FROM workspaces
+    WHERE status='BROKEN';
+  " 2>/dev/null || true
+}
+
+workspace_available_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='IDLE'"
+}
+
+workspace_busy_count() {
+  sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
+}
+
+export -f workspace_preserve_recovery_snapshot workspace_restore_recovery_snapshot workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\t' read -r pr_state live_head live_base <<<"\$pr_snapshot"
+  [ "\$pr_state" = "OPEN" ] || block_stale "PR is no longer open"
+  [ "\$live_head" = "\$expected_head" ] || block_stale "GitHub PR head changed during the task"
+  [ "\$live_base" = "\$expected_base" ] || block_stale "GitHub PR target/base changed during the task"
+
+  git -C "\$PWD" merge-base --is-ancestor "\$current_head" "\$local_sha" 2>/dev/null || block_stale "non-fast-forward PR pushes are forbidden"
+  # Advance the guard before the actual network push. A racing remote update
+  # makes that push fail normally; the next attempt will see the mismatch and
+  # will be restarted from a fresh checkout rather than rebasing old work.
+  printf '%s\\n' "\$local_sha" >"\$GUARD_DIR/expected-head.tmp"
+  mv -f "\$GUARD_DIR/expected-head.tmp" "\$GUARD_DIR/expected-head"
+done
+HOOK
+  chmod 700 "$hooks_dir/pre-push" || return 1
+  git -C "$workdir" config --local core.hooksPath "$hooks_dir" || return 1
+  printf '%s\n' "$guard_dir"
+}
+
+# Remove only Manul-owned proactive push hooks; never unset a user-defined hook path.
+workspace_remove_proactive_pr_push_guard() {
+  local workdir="$1" guard_root="$2" existing
+  [ -d "$workdir/.git" ] || return 0
+  existing="$(git -C "$workdir" config --local --get core.hooksPath 2>/dev/null || true)"
+  case "$existing" in
+    "$guard_root"/*)
+      git -C "$workdir" config --local --unset core.hooksPath 2>/dev/null || return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 # Move a workspace that is about to be discarded into a private recovery
 # area. This is a rename (not a copy), so large working trees and uncommitted
 # files survive host/worker recovery without leaving two writable checkouts.
