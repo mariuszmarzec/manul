@@ -56,6 +56,7 @@ CREATE TABLE conversations(
 CREATE TABLE processed_comments(
   commentId TEXT PRIMARY KEY,
   repository TEXT,
+  issueNumber INTEGER,
   prNumber INTEGER,
   status TEXT,
   action TEXT,
