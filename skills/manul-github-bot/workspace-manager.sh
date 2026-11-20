@@ -418,23 +418,24 @@ workspace_prepare_pr_branch() {
   [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" = "$branch" ]
 }
 
-# Install an isolated pre-push guard for proactive PR work.
-# It permits only fast-forward pushes to the observed PR source branch and
-# rejects a push if either the PR head or its target/base SHA moved meanwhile.
+# Pin proactive PR work to the exact remote head/base observed before the agent starts.
+# This hook rejects both normal and force pushes after either side moves. It only
+# permits one delivery push per task, so a rejected push is retried from fresh state.
 workspace_install_proactive_pr_push_guard() {
   local workdir="$1" guard_dir="$2" repository="$3" pr_number="$4"
   local branch="$5" expected_head="$6" expected_base="$7"
   [ -d "$workdir/.git" ] || return 1
-  [[ "$pr_number" =~ ^[0-9]+$ ]] || return 1
+  [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || return 1
   [[ "$expected_head" =~ ^[0-9a-fA-F]{40,64}$ ]] || return 1
   [[ "$expected_base" =~ ^[0-9a-fA-F]{40,64}$ ]] || return 1
-  git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
   [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
   [[ "$guard_dir" == /* ]] || return 1
 
-  local existing_hooks hooks_dir
+  local existing_hooks hooks_dir state_file
   existing_hooks="$(git -C "$workdir" config --local --get core.hooksPath 2>/dev/null || true)"
   hooks_dir="$guard_dir/hooks"
+  state_file="$guard_dir/guard.json"
   if [ -n "$existing_hooks" ] && [ "$existing_hooks" != "$hooks_dir" ]; then
     echo "workspace guard: refusing to replace an existing custom core.hooksPath" >&2
     return 1
@@ -442,50 +443,56 @@ workspace_install_proactive_pr_push_guard() {
 
   mkdir -p "$hooks_dir" || return 1
   chmod 700 "$guard_dir" "$hooks_dir" 2>/dev/null || true
-  printf '%s\n' "$expected_head" >"$guard_dir/expected-head.tmp" || return 1
-  mv -f "$guard_dir/expected-head.tmp" "$guard_dir/expected-head" || return 1
-  printf '%s\n' "$expected_base" >"$guard_dir/expected-base.tmp" || return 1
-  mv -f "$guard_dir/expected-base.tmp" "$guard_dir/expected-base" || return 1
+  jq -n \
+    --arg repository "$repository" \
+    --arg prNumber "$pr_number" \
+    --arg branch "$branch" \
+    --arg expectedHead "$expected_head" \
+    --arg expectedBase "$expected_base" \
+    '{repository:$repository,prNumber:$prNumber,branch:$branch,expectedHead:$expectedHead,expectedBase:$expectedBase}' \
+    >"$state_file.tmp" || return 1
+  mv -f "$state_file.tmp" "$state_file" || return 1
 
-  local q_guard q_repo q_pr q_branch
-  printf -v q_guard '%q' "$guard_dir"
-  printf -v q_repo '%q' "$repository"
-  printf -v q_pr '%q' "$pr_number"
-  printf -v q_branch '%q' "$branch"
-  cat >"$hooks_dir/pre-push" <<HOOK
+  cat >"$hooks_dir/pre-push" <<'HOOK'
 #!/usr/bin/env bash
 set -euo pipefail
-GUARD_DIR=$q_guard
-GUARD_REPO=$q_repo
-GUARD_PR=$q_pr
-GUARD_BRANCH=$q_branch
+GUARD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+STATE_FILE="$GUARD_DIR/guard.json"
 
 block_stale() {
-  printf 'MANUL_PROACTIVE_PR_STALE_HEAD: %s\n' "\$1" >&2
+  printf 'MANUL_PROACTIVE_PR_STALE_HEAD: %s\n' "$1" >&2
   exit 1
 }
 block_scope() {
-  printf 'MANUL_PROACTIVE_PR_PUSH_BLOCKED: %s\n' "\$1" >&2
+  printf 'MANUL_PROACTIVE_PR_PUSH_BLOCKED: %s\n' "$1" >&2
   exit 1
 }
 
-remote_name="\${1:-}"
-[ "\$remote_name" = "origin" ] || block_scope "push is restricted to origin"
-expected_head="\$(cat "\$GUARD_DIR/expected-head" 2>/dev/null || true)"
-expected_base="\$(cat "\$GUARD_DIR/expected-base" 2>/dev/null || true)"
-[ -n "\$expected_head" ] && [ -n "\$expected_base" ] || block_stale "guard snapshot is missing"
+remote_name="${1:-}"
+[ "$remote_name" = "origin" ] || block_scope "push is restricted to origin"
+repository="$(jq -r '.repository // empty' "$STATE_FILE" 2>/dev/null)"
+pr_number="$(jq -r '.prNumber // empty' "$STATE_FILE" 2>/dev/null)"
+branch="$(jq -r '.branch // empty' "$STATE_FILE" 2>/dev/null)"
+expected_head="$(jq -r '.expectedHead // empty' "$STATE_FILE" 2>/dev/null)"
+expected_base="$(jq -r '.expectedBase // empty' "$STATE_FILE" 2>/dev/null)"
+[ -n "$repository" ] && [ -n "$pr_number" ] && [ -n "$branch" ] &&
+  [ -n "$expected_head" ] && [ -n "$expected_base" ] ||
+  block_stale "guard snapshot is missing"
 
+updates=0
 while read -r local_ref local_sha remote_ref remote_sha; do
-  [ -n "\${local_ref:-}" ] || continue
-  [ "\$remote_ref" = "refs/heads/\$GUARD_BRANCH" ] || block_scope "push is restricted to PR branch \$GUARD_BRANCH"
-  [[ "\$local_sha" =~ ^[0-9a-fA-F]{40,64}$ ]] || block_scope "deleting or invalid PR branch refs is forbidden"
+  [ -n "${local_ref:-}" ] || continue
+  updates=$((updates + 1))
+  [ "$remote_ref" = "refs/heads/$branch" ] || block_scope "push is restricted to PR branch $branch"
+  [[ "$local_sha" =~ ^[0-9a-fA-F]{40,64}$ ]] || block_scope "deleting or invalid PR branch refs are forbidden"
 
-  current_head="\$(git ls-remote origin "\$remote_ref" 2>/dev/null | awk 'NR==1 {print \$1}')"
-  [ -n "\$current_head" ] || block_stale "could not read current remote PR head"
-  [ "\$current_head" = "\$expected_head" ] || block_stale "remote PR head advanced from the task snapshot"
+  current_head="$(git ls-remote --heads origin "$remote_ref" 2>/dev/null | awk 'NR==1 {print $1}')"
+  [ -n "$current_head" ] || block_stale "could not read current remote PR head"
+  [ "$current_head" = "$expected_head" ] || block_stale "remote PR head advanced after this task started"
 
-  pr_snapshot="\$(gh pr view "\$GUARD_PR" --repo "\$GUARD_REPO" --json state,headRefOid,baseRefOid --jq '[.state, .headRefOid, .baseRefOid] | @tsv' 2>/dev/null)" || block_stale "could not revalidate live PR head/base"
-  IFS=\
+  pr_snapshot="$(gh pr view "$pr_number" --repo "$repository" --json state,headRefOid,baseRefOid --jq '[.state, .headRefOid, .baseRefOid] | @tsv' 2>/dev/null)" ||
+    block_stale "could not revalidate live PR head/base"
+  IFS=
 # area. This is a rename (not a copy), so large working trees and uncommitted
 # files survive host/worker recovery without leaving two writable checkouts.
 # The recovery area is under runtime state, never under another task workspace
@@ -1233,37 +1240,29 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_preserve_recovery_snapshot workspace_restore_recovery_snapshot workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\\t' read -r pr_state live_head live_base <<<"\$pr_snapshot"
-  [ "\$pr_state" = "OPEN" ] || block_stale "PR is no longer open"
-  [ "\$live_head" = "\$expected_head" ] || block_stale "GitHub PR head changed during the task"
-  [ "\$live_base" = "\$expected_base" ] || block_stale "GitHub PR target/base changed during the task"
+export -f workspace_preserve_recovery_snapshot workspace_restore_recovery_snapshot workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null\t' read -r pr_state live_head live_base <<<"$pr_snapshot"
+  [ "$pr_state" = "OPEN" ] || block_stale "PR is no longer open"
+  [ "$live_head" = "$expected_head" ] || block_stale "GitHub PR head changed after this task started"
+  [ "$live_base" = "$expected_base" ] || block_stale "GitHub PR target/base changed after this task started"
 
-  git -C "\$PWD" merge-base --is-ancestor "\$current_head" "\$local_sha" 2>/dev/null || block_stale "non-fast-forward PR pushes are forbidden"
-  # Advance the guard before the actual network push. A racing remote update
-  # makes that push fail normally; the next attempt will see the mismatch and
-  # will be restarted from a fresh checkout rather than rebasing old work.
-  printf '%s\\n' "\$local_sha" >"\$GUARD_DIR/expected-head.tmp"
-  mv -f "\$GUARD_DIR/expected-head.tmp" "\$GUARD_DIR/expected-head"
+  git merge-base --is-ancestor "$current_head" "$local_sha" 2>/dev/null ||
+    block_stale "non-fast-forward pushes are forbidden for proactive PR work"
 done
+
+[ "$updates" -gt 0 ] || exit 0
 HOOK
   chmod 700 "$hooks_dir/pre-push" || return 1
   git -C "$workdir" config --local core.hooksPath "$hooks_dir" || return 1
   printf '%s\n' "$guard_dir"
 }
 
-# Remove only Manul-owned proactive push hooks; never unset a user-defined hook path.
 workspace_remove_proactive_pr_push_guard() {
-  local workdir="$1" guard_root="$2" existing
+  local workdir="$1" guard_dir="$2" existing
   [ -d "$workdir/.git" ] || return 0
   existing="$(git -C "$workdir" config --local --get core.hooksPath 2>/dev/null || true)"
-  case "$existing" in
-    "$guard_root"/*)
-      git -C "$workdir" config --local --unset core.hooksPath 2>/dev/null || return 1
-      ;;
-    *)
-      return 0
-      ;;
-  esac
+  if [ "$existing" = "$guard_dir/hooks" ]; then
+    git -C "$workdir" config --local --unset core.hooksPath 2>/dev/null || return 1
+  fi
 }
 
 # Move a workspace that is about to be discarded into a private recovery
