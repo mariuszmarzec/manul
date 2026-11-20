@@ -3564,6 +3564,7 @@ requeue_proactive_pr_stale_head() {
 
   if [ -n "$workdir" ] && [ -n "$guard_dir" ]; then
     workspace_remove_proactive_pr_push_guard "$workdir" "$guard_dir" || log "WARN: failed to remove proactive push guard for $comment_id"
+    rm -rf -- "$guard_dir" 2>/dev/null || true
   fi
   if [ -n "$workspace_id" ]; then
     sqlite3 "$DB" "DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws';" 2>>"$LOG" || true
