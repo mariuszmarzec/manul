@@ -171,6 +171,15 @@ init_schema() {
     }
   done
 
+  # Mark tasks created by the proactive PR policy so the daemon can apply its
+  # PR-head push guard and stale-remote cooldown without changing explicit
+  # non-proactive review requests.
+  local proactive_cols
+  proactive_cols="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null)" || return 1
+  if ! printf '%s\\n' "$proactive_cols" | grep -q '|proactivePR|'; then
+    sqlite3_retry "ALTER TABLE processed_comments ADD COLUMN proactivePR INTEGER NOT NULL DEFAULT 0;" 3 || return 1
+  fi
+
   # Migrate generic root task-source identity fields. PR review data is related context only.
   local source_cols
   source_cols="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null)" || true
@@ -953,6 +962,15 @@ $review_prompt"
         fi
       fi
     fi
+  fi
+
+  # The source review row remains the event receipt; flag the actual
+  # implementation task so the daemon can recognize it as proactive PR work.
+  if [ "$PROACTIVE_FEEDBACK" = true ] && [ -n "$new_task_id" ]; then
+    sqlite3_retry "UPDATE processed_comments SET proactivePR=1 WHERE commentId='$(sql_escape "$new_task_id")' AND action='REVIEW_FIX';" 3 || {
+      echo "ERROR: failed to mark proactive review task $new_task_id" >&2
+      return 1
+    }
   fi
 
   # ========================================================================
