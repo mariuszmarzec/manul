@@ -1912,8 +1912,14 @@ render_poll_request_batch() {
           if [ "$proactive_pr_enabled" -eq 1 ]; then
             review_handler_args+=(--proactive-feedback)
           fi
+          local prior_review_state
+          prior_review_state="$(sqlite3 "$DB" "SELECT COALESCE(status,'') FROM processed_comments WHERE commentId='review:$(sql_escape "$review_id")' AND action='REVIEW' LIMIT 1;" 2>>"$LOG" || true)"
           if "$MANUL_DIR/manul-pr-review.sh" handle "${review_handler_args[@]}" --json >>"$LOG" 2>&1; then
-            if [ "$proactive_pr_enabled" -eq 1 ]; then
+            # Do not renew cooldown when the same already-created review task
+            # is merely recovered by a later polling cycle.
+            if [ "$proactive_pr_enabled" -eq 1 ] &&
+               [ "$prior_review_state" != "task_created" ] &&
+               [ "$prior_review_state" != "completed" ]; then
               pr_watcher_policy_mark_attempted fixAndAnswerComments "$repo" "$pr_num" "review:$review_id" || log "WARN: failed to persist review cooldown for $repo#$pr_num"
             fi
             log "review $review_id on $repo#$pr_num processed successfully"
