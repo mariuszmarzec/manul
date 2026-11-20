@@ -152,14 +152,24 @@ The scope is configured independently for each policy. For example,
 `ciFix.prScope` does not inherit `proactivity.fixAndAnswerComments.prScope`,
 and neither setting changes `conflictResolveAndMerge.prScope`.
 
-For CI fixes, `waitBeforeFirstMinutes` (default `30`) gives you time to keep
-working on a PR before Manul intervenes. The timer starts from the later of the
-latest failed-check completion and the PR's last `updatedAt` activity; new PR
-activity restarts it, while routine polling does not. After a CI-fix task has
-been queued, `cooldownMinutes` (default `60`) sets the minimum interval before
-another automatic fix task for that repository/PR can be queued. Before enqueueing,
-Manul rechecks the PR head, activity timestamp, and failing check so it does not
-act on a PR that changed during the eligibility check.
+All three proactive PR tools use the same timing defaults, configured
+independently under their own policy:
+
+- `waitBeforeFirstMinutes` (default `30`) delays the first action until the
+  later of the triggering event (comment/review or failed CI) and the PR's
+  latest activity. Conflict resolution uses the PR's latest activity.
+- `cooldownMinutes` (default `60`) is the minimum interval before another
+  proactive task for that policy and PR can be queued.
+- Polling does not renew either timer. The cooldown timestamp is updated only
+  when a task is actually queued.
+
+Before pushing a proactive PR fix, Manul pins the source branch head and target
+base SHA and installs a guarded Git pre-push check. If the PR head or base moves
+while the agent is working, the push is rejected; Manul does not pull/rebase
+over the newer work or force-push. It requeues the review/comment task after
+`cooldownMinutes` with a fresh workspace, while CI/conflict tasks are retried
+against the refreshed PR state. The next attempt fetches the newest PR head
+and base before starting.
 
 Conflict tasks are tied to the PR head and target/base commit SHAs observed by
 the poller. Before making changes, the agent must re-check that the same PR is
