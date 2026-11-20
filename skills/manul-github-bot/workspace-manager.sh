@@ -418,6 +418,50 @@ workspace_prepare_pr_branch() {
   [ "$(git -C "$workdir" symbolic-ref --short HEAD 2>/dev/null)" = "$branch" ]
 }
 
+# Install the shared, version-controlled pre-push guard for a proactive PR task.
+workspace_install_proactive_pr_push_guard() {
+  local workdir="$1" guard_dir="$2" repository="$3" pr_number="$4"
+  local branch="$5" expected_head="$6" expected_base="$7"
+  local existing_hooks hooks_source
+  [ -d "$workdir/.git" ] || return 1
+  [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$expected_head" =~ ^[0-9a-fA-F]{40,64}$ ]] || return 1
+  [[ "$expected_base" =~ ^[0-9a-fA-F]{40,64}$ ]] || return 1
+  [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
+  [[ "$guard_dir" == /* ]] || return 1
+
+  existing_hooks="$(git -C "$workdir" config --local --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$existing_hooks" ] && [ "$existing_hooks" != "$guard_dir" ]; then
+    echo "workspace guard: refusing to replace an existing custom core.hooksPath" >&2
+    return 1
+  fi
+  hooks_source="$SCRIPT_DIR/proactive-pr-pre-push.sh"
+  [ -f "$hooks_source" ] || return 1
+  mkdir -p "$guard_dir" || return 1
+  chmod 700 "$guard_dir" 2>/dev/null || true
+  cp "$hooks_source" "$guard_dir/pre-push" || return 1
+  chmod 700 "$guard_dir/pre-push" || return 1
+  git -C "$workdir" config --local core.hooksPath "$guard_dir" &&
+    git -C "$workdir" config --local manul.proactive.repository "$repository" &&
+    git -C "$workdir" config --local manul.proactive.prNumber "$pr_number" &&
+    git -C "$workdir" config --local manul.proactive.branch "$branch" &&
+    git -C "$workdir" config --local manul.proactive.expectedHead "$expected_head" &&
+    git -C "$workdir" config --local manul.proactive.expectedBase "$expected_base"
+}
+
+workspace_remove_proactive_pr_push_guard() {
+  local workdir="$1" guard_dir="$2" existing
+  [ -d "$workdir/.git" ] || return 0
+  existing="$(git -C "$workdir" config --local --get core.hooksPath 2>/dev/null || true)"
+  [ "$existing" = "$guard_dir" ] || return 0
+  git -C "$workdir" config --local --unset core.hooksPath 2>/dev/null || return 1
+  local key
+  for key in repository prNumber branch expectedHead expectedBase; do
+    git -C "$workdir" config --local --unset "manul.proactive.$key" 2>/dev/null || true
+  done
+}
+
 # Move a workspace that is about to be discarded into a private recovery
 # area. This is a rename (not a copy), so large working trees and uncommitted
 # files survive host/worker recovery without leaving two writable checkouts.

@@ -65,7 +65,9 @@ cat >"$CONFIG" <<'JSON'
   "proactivity": {"prAuthorAllowed": ["allowed-user"]},
   "conflictResolveAndMerge": {
     "enabled": false,
-    "prScope": "AllUserAuthoredPr"
+    "prScope": "AllUserAuthoredPr",
+    "waitBeforeFirstMinutes": 0,
+    "cooldownMinutes": 0
   }
 }
 JSON
@@ -97,7 +99,8 @@ cat >"$MOCK_PRS" <<'JSON'
     "title": "Conflict PR",
     "url": "https://github.com/test/repo/pull/42",
     "author": {"login": "allowed-user"},
-    "isDraft": false
+    "isDraft": false,
+    "updatedAt": "2025-01-01T00:00:00Z"
   },
   {
     "number": 43,
@@ -106,7 +109,8 @@ cat >"$MOCK_PRS" <<'JSON'
     "title": "Unapproved PR",
     "url": "https://github.com/test/repo/pull/43",
     "author": {"login": "other-user"},
-    "isDraft": false
+    "isDraft": false,
+    "updatedAt": "2025-01-01T00:00:00Z"
   },
   {
     "number": 44,
@@ -115,7 +119,8 @@ cat >"$MOCK_PRS" <<'JSON'
     "title": "Draft PR",
     "url": "https://github.com/test/repo/pull/44",
     "author": {"login": "allowed-user"},
-    "isDraft": true
+    "isDraft": true,
+    "updatedAt": "2025-01-01T00:00:00Z"
   },
   {
     "number": 45,
@@ -124,22 +129,23 @@ cat >"$MOCK_PRS" <<'JSON'
     "title": "Clean PR",
     "url": "https://github.com/test/repo/pull/45",
     "author": {"login": "allowed-user"},
-    "isDraft": false
+    "isDraft": false,
+    "updatedAt": "2025-01-01T00:00:00Z"
   }
 ]
 JSON
 
 for n in 42 43 44; do
   cat >"$DETAILS_DIR/$n.json" <<JSON
-{"mergeStateStatus":"DIRTY","mergeable":"CONFLICTING","headRefOid":"head-$n-v1","baseRefOid":"base-$n-v1","isDraft":false}
+{"mergeStateStatus":"DIRTY","mergeable":"CONFLICTING","headRefOid":"head-$n-v1","baseRefOid":"base-$n-v1","isDraft":false,"updatedAt":"2025-01-01T00:00:00Z"}
 JSON
 done
 cat >"$DETAILS_DIR/45.json" <<'JSON'
-{"mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","headRefOid":"head-45-v1","baseRefOid":"base-45-v1","isDraft":false}
+{"mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","headRefOid":"head-45-v1","baseRefOid":"base-45-v1","isDraft":false,"updatedAt":"2025-01-01T00:00:00Z"}
 JSON
 # GitHub's detail payload is authoritative for draft state as well.
 cat >"$DETAILS_DIR/44.json" <<'JSON'
-{"mergeStateStatus":"DIRTY","mergeable":"CONFLICTING","headRefOid":"head-44-v1","baseRefOid":"base-44-v1","isDraft":true}
+{"mergeStateStatus":"DIRTY","mergeable":"CONFLICTING","headRefOid":"head-44-v1","baseRefOid":"base-44-v1","isDraft":true,"updatedAt":"2025-01-01T00:00:00Z"}
 JSON
 
 source "$SCRIPT_DIR/manul-pr-watcher.sh"
@@ -175,7 +181,7 @@ cat >"$CONFIG" <<'JSON'
 {
   "allowedUsers": ["allowed-user"],
   "proactivity": {"prAuthorAllowed": ["allowed-user"]},
-  "conflictResolveAndMerge": {"enabled": true, "prScope": "AllUserAuthoredPr"}
+  "conflictResolveAndMerge": {"enabled": true, "prScope": "AllUserAuthoredPr", "waitBeforeFirstMinutes": 0, "cooldownMinutes": 0}
 }
 JSON
 CONFLICT_RESOLVE_AND_MERGE_ENABLED=true
@@ -225,7 +231,7 @@ scan_conflicted_prs "test/repo"
 
 # A changed PR head creates a fresh task, but the unapproved and draft PRs stay excluded.
 cat >"$DETAILS_DIR/42.json" <<'JSON'
-{"mergeStateStatus":"DIRTY","mergeable":"CONFLICTING","headRefOid":"head-42-v2","baseRefOid":"base-42-v1","isDraft":false}
+{"mergeStateStatus":"DIRTY","mergeable":"CONFLICTING","headRefOid":"head-42-v2","baseRefOid":"base-42-v1","isDraft":false,"updatedAt":"2025-01-01T00:00:00Z"}
 JSON
 scan_conflicted_prs "test/repo"
 [ "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments;")" = "2" ] || {
@@ -235,7 +241,7 @@ scan_conflicted_prs "test/repo"
 
 # OnlyManulPr still requires exact Manul ownership, regardless of allow-listed author.
 cat >"$CONFIG" <<'JSON'
-{"conflictResolveAndMerge":{"enabled":true,"prScope":"OnlyManulPr"}}
+{"conflictResolveAndMerge":{"enabled":true,"prScope":"OnlyManulPr","waitBeforeFirstMinutes":0,"cooldownMinutes":0}}
 JSON
 CONFLICT_RESOLVE_AND_MERGE_PR_SCOPE="$(conflict_resolve_and_merge_scope)"
 MANUL_OWNED_PR=43

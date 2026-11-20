@@ -1762,6 +1762,30 @@ ensure_recovery_tracking_columns() {
     }
     log "migration: agentStartedAt column added; legacy running claims preserved as execution attempts"
   fi
+
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\\n' "$columns" | grep -q '|freshWorkspaceOnRetry|'; then
+    local alter_fresh
+    alter_fresh="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN freshWorkspaceOnRetry INTEGER NOT NULL DEFAULT 0; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|freshWorkspaceOnRetry|'; then
+        log "ERROR: failed to add freshWorkspaceOnRetry column: $alter_fresh"
+        return 1
+      fi
+    }
+    log "migration: freshWorkspaceOnRetry column added"
+  fi
+
+  columns="$(sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>>"$LOG")" || return 1
+  if ! printf '%s\\n' "$columns" | grep -q '|proactivePR|'; then
+    local alter_proactive
+    alter_proactive="$(sqlite3 "$DB" "BEGIN IMMEDIATE; ALTER TABLE processed_comments ADD COLUMN proactivePR INTEGER NOT NULL DEFAULT 0; COMMIT;" 2>&1)" || {
+      if ! sqlite3 "$DB" "PRAGMA table_info(processed_comments);" 2>/dev/null | grep -q '|proactivePR|'; then
+        log "ERROR: failed to add proactivePR column: $alter_proactive"
+        return 1
+      fi
+    }
+    log "migration: proactivePR column added"
+  fi
   return 0
 }
 
@@ -3517,6 +3541,104 @@ requeue_task() {
   handle_pre_execution_failure "$comment_id" "$claim_token" "$repo" "$issue_num" "" "$reply_to" "Source revalidation encountered a transient infrastructure error before agent startup." "" "$attempt_fallback" "source_transient_revalidation"
 }
 
+# Requeue a proactive PR task after a rejected stale-head push.
+# This is not an implementation failure: do not consume an attempt or resume the old workspace.
+requeue_proactive_pr_stale_head() {
+  local comment_id="$1" claim_token="$2" safe_comment_id="$3" repo="$4"
+  local pr_number="$5" policy="$6" workspace_id="$7" context_id="$8"
+  local workdir="$9" guard_dir="${10}" cooldown safe_repo safe_ws safe_context safe_token safe_policy now result changes
+
+  case "$policy" in
+    fixAndAnswerComments) cooldown="$(jq -r '.proactivity.fixAndAnswerComments.cooldownMinutes // 60' "$CONFIG" 2>/dev/null || echo 60)" ;;
+    ciFix) cooldown="$(jq -r '.ciFix.cooldownMinutes // 60' "$CONFIG" 2>/dev/null || echo 60)" ;;
+    conflictResolveAndMerge) cooldown="$(jq -r '.conflictResolveAndMerge.cooldownMinutes // 60' "$CONFIG" 2>/dev/null || echo 60)" ;;
+    *) return 1 ;;
+  esac
+  if ! [[ "$cooldown" =~ ^[0-9]+$ ]] || [ "$cooldown" -gt 10080 ]; then cooldown=60; fi
+  safe_repo="$(sql_escape "$repo")"
+  safe_ws="$(sql_escape "$workspace_id")"
+  safe_context="$(sql_escape "$context_id")"
+  safe_token="$(sql_escape "$claim_token")"
+  safe_policy="$(sql_escape "$policy")"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  if [ -n "$workdir" ] && [ -n "$guard_dir" ]; then
+    workspace_remove_proactive_pr_push_guard "$workdir" "$guard_dir" || log "WARN: failed to remove proactive push guard for $comment_id"
+    rm -rf -- "$guard_dir" 2>/dev/null || true
+  fi
+  if [ -n "$workspace_id" ]; then
+    # Do not return the stale checkout to the idle pool. Archive it outside
+    # every agent workspace so the next lease (even if it reuses this workspace
+    # ID) recreates an empty directory and clones the current PR head.
+    if workspace_preserve_recovery_snapshot "$workspace_id" "$comment_id"; then
+      sqlite3 "$DB" "DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws';" 2>>"$LOG" || true
+      workspace_release "$workspace_id" "$comment_id" || log "WARN: failed to release archived PR workspace $workspace_id"
+    else
+      log "ERROR: could not archive stale PR workspace $workspace_id; marking it BROKEN to prevent reuse"
+      sqlite3 "$DB" "
+        BEGIN IMMEDIATE;
+        DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws';
+        UPDATE workspaces SET status='BROKEN',currentTaskId=NULL,lastUsedAt=datetime('now')
+        WHERE workspaceId='$safe_ws' AND status='BUSY' AND currentTaskId='$(sql_escape "$comment_id")';
+        COMMIT;
+      " 2>>"$LOG" || return 1
+    fi
+  elif [ -n "$context_id" ]; then
+    sqlite3 "$DB" "DELETE FROM workspace_contexts WHERE contextId='$safe_context';" 2>>"$LOG" || true
+  fi
+
+  result="$(sqlite3 "$DB" "
+    UPDATE processed_comments
+    SET status='queued',
+        attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+        processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL,
+        workerPid=NULL, claimToken=NULL, agentStartedAt=NULL,
+        session_id=NULL, workspaceId=NULL, freshWorkspaceOnRetry=1,
+        nextAttemptAt=datetime('now', '+${cooldown} minutes')
+    WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_token';
+    SELECT changes();
+  " 2>>"$LOG")" || return 1
+  changes="$(printf '%s\n' "$result" | tail -1)"
+  [ "$changes" = "1" ] || {
+    log "ERROR: stale PR retry could not transition $comment_id (changes=$changes)"
+    return 1
+  }
+
+  case "$policy" in
+    ciFix)
+      sqlite3 "$DB" "
+        CREATE TABLE IF NOT EXISTS ci_fix_attempts (
+          repository TEXT NOT NULL, prNumber INTEGER NOT NULL, attemptedAt TEXT NOT NULL,
+          PRIMARY KEY(repository,prNumber)
+        );
+        INSERT INTO ci_fix_attempts(repository,prNumber,attemptedAt)
+        VALUES('$safe_repo',$pr_number,'$now')
+        ON CONFLICT(repository,prNumber) DO UPDATE SET attemptedAt=excluded.attemptedAt;
+      " 2>>"$LOG" || return 1
+      ;;
+    *)
+      sqlite3 "$DB" "
+        CREATE TABLE IF NOT EXISTS proactive_pr_policy_attempts (
+          policy TEXT NOT NULL, repository TEXT NOT NULL, prNumber INTEGER NOT NULL,
+          lastQueuedAt TEXT NOT NULL, taskId TEXT,
+          PRIMARY KEY(policy,repository,prNumber)
+        );
+        INSERT INTO proactive_pr_policy_attempts(policy,repository,prNumber,lastQueuedAt,taskId)
+        VALUES('$safe_policy','$safe_repo',$pr_number,'$now','$safe_comment_id')
+        ON CONFLICT(policy,repository,prNumber) DO UPDATE SET
+          lastQueuedAt=excluded.lastQueuedAt,taskId=excluded.taskId;
+      " 2>>"$LOG" || return 1
+      ;;
+  esac
+
+  stop_heartbeat "$comment_id"
+  if [ "$TASK_EXECUTION_KIND" = "repository" ]; then release_task_repo_lock "$repo"; fi
+  log "dispatch: proactive PR task $comment_id rejected because the remote head/base changed; retry after ${cooldown}m in a fresh workspace"
+  lc_log "PROACTIVE_PR_STALE_REQUEUED" "task=$comment_id repo=$repo pr=$pr_number policy=$policy cooldown=$cooldown"
+  release_task_lock
+  set_activity "$comment_id" "queued"
+}
+
 # Evaluate task completion decision based on wrapper output and verification
 # Sets: COMPLETION_SUCCESS, FAIL_REASON, FINAL_COMMENT
 # Args: repo issue_num comment_id safe_comment_id attempt rc stdout_file db [repo_dir] [workdir] [claim_token] [initial_head] [initial_branch] [initial_base_branch]
@@ -4372,32 +4494,45 @@ dispatch_once() {
     local TASK_PROMPT_FILE
     TASK_PROMPT_FILE="$(manul_task_file_path "$TASK_PROMPT_DIR" "$COMMENT_ID" "md")"
 
-    # Determine task type from commentUrl metadata (do NOT call gh pr view)
+    # Identify proactive policy and resolve PR metadata.
     local TASK_TYPE="issue"
-    local PR_HEAD_BRANCH=""
-    local TASK_PR_NUMBER="N/A"
-    local TASK_PR_RECOVERED="false"
-    local PR_NUM_FROM_URL=""
+    local PR_HEAD_BRANCH="" PR_HEAD_SHA="" PR_BASE_BRANCH="" PR_BASE_SHA="" PR_UPDATED_AT=""
+    local TASK_PR_NUMBER="N/A" TASK_PR_RECOVERED="false" PR_NUM_FROM_URL=""
+    local PROACTIVE_PR_POLICY="" PR_GUARD_DIR=""
+    case "$COMMENT_ID" in
+      ci_fix:*) PROACTIVE_PR_POLICY="ciFix" ;;
+      conflict_resolve_merge:*) PROACTIVE_PR_POLICY="conflictResolveAndMerge" ;;
+      *)
+        local proactive_pr_flag
+        proactive_pr_flag="$(sqlite3 "$DB" "SELECT COALESCE(proactivePR,0) FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo 0)"
+        [ "$proactive_pr_flag" = "1" ] && PROACTIVE_PR_POLICY="fixAndAnswerComments"
+        ;;
+    esac
     if [[ "$COMMENT_URL" == *"/pull/"* ]]; then
       if [[ "$COMMENT_URL" == *"#discussion_r"* ]]; then
         TASK_TYPE="pr_review_comment"
-        # Extract numeric review comment ID from commentId prefix (review:<id>)
         REPLY_TO="${COMMENT_ID#review:}"
       else
         TASK_TYPE="pr_conversation_comment"
       fi
-      # Extract PR number from URL for branch resolution
       PR_NUM_FROM_URL="$(printf '%s' "$COMMENT_URL" | grep -oE 'pull/[0-9]+' | grep -oE '[0-9]+' || echo "")"
       if [ -n "$PR_NUM_FROM_URL" ]; then
         TASK_PR_NUMBER="$PR_NUM_FROM_URL"
-      fi
-      if [ -n "$PR_NUM_FROM_URL" ] && [ "$PR_NUM_FROM_URL" != "$ISSUE_NUM" ]; then
         ISSUE_NUM="$PR_NUM_FROM_URL"
       fi
-      # Fetch PR head branch for PR-tied tasks
-      if [ -n "$PR_NUM_FROM_URL" ]; then
-        PR_HEAD_BRANCH="$(gh pr view "$ISSUE_NUM" --repo "$REPO" --json headRefName --jq '.headRefName // ""' 2>>"$LOG" || echo "")"
-      fi
+    fi
+    if [ -n "$PROACTIVE_PR_POLICY" ] && [ -z "$PR_NUM_FROM_URL" ] && [[ "$ISSUE_NUM" =~ ^[1-9][0-9]*$ ]]; then
+      PR_NUM_FROM_URL="$ISSUE_NUM"
+      TASK_PR_NUMBER="$ISSUE_NUM"
+    fi
+    if [ -n "$PR_NUM_FROM_URL" ]; then
+      local initial_pr_metadata
+      initial_pr_metadata="$(gh pr view "$PR_NUM_FROM_URL" --repo "$REPO" --json state,headRefName,headRefOid,baseRefName,baseRefOid,updatedAt 2>>"$LOG" || echo '{}')"
+      PR_HEAD_BRANCH="$(jq -r '.headRefName // ""' <<<"$initial_pr_metadata" 2>/dev/null || true)"
+      PR_HEAD_SHA="$(jq -r '.headRefOid // ""' <<<"$initial_pr_metadata" 2>/dev/null || true)"
+      PR_BASE_BRANCH="$(jq -r '.baseRefName // ""' <<<"$initial_pr_metadata" 2>/dev/null || true)"
+      PR_BASE_SHA="$(jq -r '.baseRefOid // ""' <<<"$initial_pr_metadata" 2>/dev/null || true)"
+      PR_UPDATED_AT="$(jq -r '.updatedAt // ""' <<<"$initial_pr_metadata" 2>/dev/null || true)"
     fi
 
     cat > "$TASK_PROMPT_FILE" <<'PROMPT_EOF'
@@ -4775,12 +4910,30 @@ REPORT_ONLY_PROMPT
     # Resolution is exact thread -> parent PR -> fresh unbound workspace.
     source "$MANUL_DIR/workspace-manager.sh"
     local WORKSPACE_ID
-    local EXISTING_SESSION_ID EXISTING_WORKSPACE_ID
+    local EXISTING_SESSION_ID EXISTING_WORKSPACE_ID FRESH_WORKSPACE_RETRY
     EXISTING_SESSION_ID="$(sqlite3 "$DB" "SELECT session_id FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || echo "")"
     EXISTING_WORKSPACE_ID="$(sqlite3 "$DB" "SELECT workspaceId FROM processed_comments WHERE commentId='$(sql_escape "$COMMENT_ID")' LIMIT 1;" 2>/dev/null || echo "")"
+    FRESH_WORKSPACE_RETRY="$(sqlite3 "$DB" "SELECT COALESCE(freshWorkspaceOnRetry,0) FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || echo 0)"
+    if [ "$FRESH_WORKSPACE_RETRY" = "1" ]; then
+      local safe_old_workspace safe_context_id
+      safe_old_workspace="$(sql_escape "$EXISTING_WORKSPACE_ID")"
+      safe_context_id="$(sql_escape "$CONVERSATION_ID")"
+      sqlite3 "$DB" "
+        DELETE FROM workspace_contexts WHERE workspaceId='$safe_old_workspace' OR contextId='$safe_context_id';
+        UPDATE processed_comments
+        SET freshWorkspaceOnRetry=0,session_id=NULL,workspaceId=NULL
+        WHERE commentId='$safe_comment_id' AND status='running' AND claimToken='$safe_claim_token';
+      " 2>>"$LOG" || {
+        handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$EXISTING_WORKSPACE_ID" "$REPLY_TO" "Could not reset stale proactive PR workspace mapping before a fresh retry." "$PR_NUM_FROM_URL" "$current_attempt" "fresh_pr_workspace_reset"
+        return 0
+      }
+      EXISTING_SESSION_ID=""
+      EXISTING_WORKSPACE_ID=""
+      log "dispatch: task $COMMENT_ID is starting its stale-PR retry in a fresh workspace"
+    fi
 
     local PARENT_WORKSPACE_CONTEXT_ID=""
-    if [ -n "$PR_HEAD_BRANCH" ] && [ -n "${PR_NUM_FROM_URL:-}" ] && [[ "$COMMENT_URL" == *"#discussion_r"* ]]; then
+    if [ -n "$PR_HEAD_BRANCH" ] && [ -n "${PR_NUM_FROM_URL:-}" ] && [[ "$COMMENT_URL" == *"#discussion_r"* ]] && [ "$FRESH_WORKSPACE_RETRY" != "1" ]; then
       PARENT_WORKSPACE_CONTEXT_ID="conv-${REPO}-issue-${PR_NUM_FROM_URL}"
     fi
 
@@ -4940,6 +5093,43 @@ REPORT_ONLY_PROMPT
          fi
        fi
      fi
+     # Pin proactive PR work only after the source branch has been fetched.
+     # A race during checkout becomes a cooldown retry, never an implicit rebase.
+     if [ -n "$PROACTIVE_PR_POLICY" ]; then
+       local live_pr_metadata live_state live_branch live_head live_base_branch live_base
+       live_pr_metadata="$(gh pr view "$PR_NUM_FROM_URL" --repo "$REPO" --json state,headRefName,headRefOid,baseRefName,baseRefOid,updatedAt 2>>"$LOG" || echo '{}')"
+       live_state="$(jq -r '.state // ""' <<<"$live_pr_metadata" 2>/dev/null || true)"
+       live_branch="$(jq -r '.headRefName // ""' <<<"$live_pr_metadata" 2>/dev/null || true)"
+       live_head="$(jq -r '.headRefOid // ""' <<<"$live_pr_metadata" 2>/dev/null || true)"
+       live_base_branch="$(jq -r '.baseRefName // ""' <<<"$live_pr_metadata" 2>/dev/null || true)"
+       live_base="$(jq -r '.baseRefOid // ""' <<<"$live_pr_metadata" 2>/dev/null || true)"
+       local local_pr_head current_pr_branch
+       local_pr_head="$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null || true)"
+       current_pr_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || true)"
+       if [ "$live_state" != "OPEN" ] || [ -z "$live_head" ] || [ -z "$live_base" ] ||
+          [ "$live_branch" != "$PR_HEAD_BRANCH" ] || [ "$current_pr_branch" != "$PR_HEAD_BRANCH" ] ||
+          [ "$local_pr_head" != "$live_head" ]; then
+         FAIL_REASON="PR head or base changed while Manul prepared the task workspace; refusing to work from a stale checkout"
+         log "dispatch: $FAIL_REASON ($REPO#$PR_NUM_FROM_URL; local=$local_pr_head remote=$live_head branch=$current_pr_branch)"
+         requeue_proactive_pr_stale_head "$COMMENT_ID" "$CLAIM_TOKEN" "$safe_comment_id" "$REPO" "$PR_NUM_FROM_URL" "$PROACTIVE_PR_POLICY" "$WORKSPACE_ID" "$CONVERSATION_ID" "$WORKDIR" "$PR_GUARD_DIR" || log "ERROR: failed to requeue stale proactive PR task $COMMENT_ID"
+         set_activity "$COMMENT_ID" "queued"
+         return 0
+       fi
+       PR_HEAD_SHA="$live_head"
+       PR_BASE_BRANCH="$live_base_branch"
+       PR_BASE_SHA="$live_base"
+       PR_UPDATED_AT="$(jq -r '.updatedAt // ""' <<<"$live_pr_metadata" 2>/dev/null || true)"
+       local safe_guard_task
+       safe_guard_task="$(printf '%s' "$COMMENT_ID" | sed 's/[^A-Za-z0-9._-]/_/g')"
+       PR_GUARD_DIR="$MANUL_STATE_DIR/pr-push-guards/$safe_guard_task"
+       if ! workspace_install_proactive_pr_push_guard "$WORKDIR" "$PR_GUARD_DIR" "$REPO" "$PR_NUM_FROM_URL" "$PR_HEAD_BRANCH" "$PR_HEAD_SHA" "$PR_BASE_SHA" 2>>"$LOG"; then
+         log "ERROR: could not install proactive PR push guard for $REPO#$PR_NUM_FROM_URL; refusing agent execution"
+         handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not install the mandatory PR head/base push guard; no code was pushed." "$PR_NUM_FROM_URL" "$current_attempt" "proactive_pr_push_guard"
+         return 0
+       fi
+       log "dispatch: installed proactive push guard for $REPO#$PR_NUM_FROM_URL head=$PR_HEAD_SHA base=$PR_BASE_SHA policy=$PROACTIVE_PR_POLICY"
+     fi
+
 log "dispatch: task $COMMENT_ID repository located at $REPO_DIR, workspace=$WORKSPACE_ID ($WORKDIR)"
 
      # Hard workspace validation before agent dispatch. The workspace lease
@@ -5136,6 +5326,23 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
     prompt_content="${prompt_content//__INITIAL_BASE_BRANCH__/$INITIAL_BASE_BRANCH}"
     printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
+
+    if [ -n "$PROACTIVE_PR_POLICY" ]; then
+      cat >> "$TASK_PROMPT_FILE" <<'PROACTIVE_PR_PUSH_SAFETY'
+
+## Proactive PR concurrency and push safety — mandatory
+
+Manul pinned the exact PR source HEAD and target/base SHA before starting this task. A pre-push hook enforces this snapshot for normal and force pushes.
+
+- Work only on the already checked-out PR branch. Make and commit the complete fix locally, then perform one normal push to origin for this branch.
+- Do not run git pull, rebase onto a newer PR head, merge a newer PR head, cherry-pick user commits, or otherwise integrate later source-branch updates during this task.
+- Do not use --force, --force-with-lease, --no-verify, an alternate hooks path, direct GitHub ref APIs, or any mechanism that bypasses the pre-push guard.
+- For conflict resolution, fetch and integrate only the target/base branch snapshot pinned by Manul. Stop if its SHA differs from the pinned base SHA.
+- If the push reports MANUL_PROACTIVE_PR_STALE_HEAD, a non-fast-forward rejection, fetch first, or that the remote contains work, stop immediately. Do not fetch/rebase/pull and retry the push. Report TASK_FAILED: STALE_PR_HEAD and let Manul retry after cooldown in a fresh workspace against the latest PR state.
+- Do not report success until the push and PR verification succeed.
+
+PROACTIVE_PR_PUSH_SAFETY
+    fi
 
     fi
 
@@ -5485,6 +5692,23 @@ SDD_CHECKPOINT_PROTOCOL
        return 0
      fi
 
+     # Detect and requeue a rejected proactive PR push BEFORE ordinary
+     # completion evaluation can consume an attempt or change the task state.
+     if [ -n "$PROACTIVE_PR_POLICY" ] && {
+       grep -Eiq 'MANUL_PROACTIVE_PR_STALE_HEAD|non-fast-forward|fetch first|remote contains work|stale info' "$STDOUT_FILE" "$STDERR_FILE" 2>/dev/null ||
+       printf '%s' "$exec_raw_stderr" | grep -Eiq 'MANUL_PROACTIVE_PR_STALE_HEAD|non-fast-forward|fetch first|remote contains work|stale info' 2>/dev/null
+     }; then
+       log "dispatch: detected stale proactive PR push rejection for $COMMENT_ID; bypassing ordinary failure accounting"
+       if ! requeue_proactive_pr_stale_head "$COMMENT_ID" "$CLAIM_TOKEN" "$safe_comment_id" "$REPO" "$PR_NUM_FROM_URL" "$PROACTIVE_PR_POLICY" "$WORKSPACE_ID" "$CONVERSATION_ID" "$WORKDIR" "$PR_GUARD_DIR"; then
+         log "ERROR: proactive stale-PR retry transition failed for $COMMENT_ID"
+         update_task_completion "$COMMENT_ID" "failed" "Could not safely queue a fresh retry after stale PR head." "$CLAIM_TOKEN" || true
+       fi
+       archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
+       rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
+       set_activity "$COMMENT_ID" "queued"
+       return 0
+     fi
+
      # Call production completion evaluation function
           local delivery_mode="implementation"
      if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
@@ -5614,6 +5838,12 @@ Zadanie główne pozostaje otwarte. Usuń przeszkodę i edytuj to podzadanie, ab
     # Stop heartbeat after task completion/failure
     stop_heartbeat "$COMMENT_ID"
     lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
+
+    # Remove the task-scoped hook before returning the workspace to the pool.
+    if [ -n "$PR_GUARD_DIR" ] && [ -n "$WORKDIR" ]; then
+      workspace_remove_proactive_pr_push_guard "$WORKDIR" "$PR_GUARD_DIR" || log "WARN: failed to remove proactive push guard for $COMMENT_ID"
+      rm -rf -- "$PR_GUARD_DIR" 2>/dev/null || true
+    fi
 
     # Release workspace back to pool
     local task_workspace_id

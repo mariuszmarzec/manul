@@ -56,16 +56,23 @@ CREATE TABLE conversations(
 CREATE TABLE processed_comments(
   commentId TEXT PRIMARY KEY,
   repository TEXT,
+  issueNumber INTEGER,
   prNumber INTEGER,
   status TEXT,
   action TEXT,
   conversationId TEXT,
-  createdAt TEXT
+  createdAt TEXT,
+  prompt TEXT
 );
 CREATE TABLE conversation_messages(commentId TEXT);
 "
 
 source "$SCRIPT_DIR/manul-pr-watcher.sh"
+pr_watcher_ensure_baseline() {
+  local baseline="2020-01-01T00:00:00Z"
+  sqlite3 "$DB" "INSERT OR IGNORE INTO meta(key,value) VALUES('pr_watcher_baseline','$baseline');"
+  printf '%s' "$baseline"
+}
 
 cat >"$MOCK_BIN/gh" <<'GH'
 #!/usr/bin/env bash
@@ -181,7 +188,8 @@ cat >"$MOCK_PRS" <<'JSON'
     "number": 42,
     "author": {"login": "allowed-user"},
     "url": "https://github.com/test/repo/pull/42",
-    "title": "Example PR"
+    "title": "Example PR",
+    "updatedAt": "2025-01-01T00:00:00Z"
   }
 ]
 JSON
@@ -191,21 +199,21 @@ cat >"$MOCK_ISSUE_COMMENTS" <<'JSON'
     "id": 401,
     "html_url": "https://github.com/test/repo/pull/42#issuecomment-401",
     "body": "Please handle this regression",
-    "created_at": "2999-01-01T00:00:00Z",
+    "created_at": "2025-02-01T00:00:00Z",
     "user": {"login": "reviewer", "type": "User"}
   },
   {
     "id": 402,
     "html_url": "https://github.com/test/repo/pull/42#issuecomment-402",
     "body": "Bot noise",
-    "created_at": "2999-01-01T00:00:00Z",
+    "created_at": "2025-02-01T00:00:00Z",
     "user": {"login": "some-bot", "type": "Bot"}
   },
   {
     "id": 403,
     "html_url": "https://github.com/test/repo/pull/42#issuecomment-403",
     "body": "Result — manul 🐈",
-    "created_at": "2999-01-01T00:00:00Z",
+    "created_at": "2025-02-01T00:00:00Z",
     "user": {"login": "manul", "type": "User"}
   }
 ]
@@ -216,7 +224,7 @@ cat >"$MOCK_INLINE_COMMENTS" <<'JSON'
     "id": 501,
     "html_url": "https://github.com/test/repo/pull/42#discussion_r501",
     "body": "The new path can return null",
-    "created_at": "2999-01-01T00:00:00Z",
+    "created_at": "2025-02-01T00:00:00Z",
     "pull_request_review_id": null,
     "in_reply_to_id": null,
     "user": {"login": "reviewer", "type": "User"}
@@ -225,7 +233,7 @@ cat >"$MOCK_INLINE_COMMENTS" <<'JSON'
     "id": 502,
     "html_url": "https://github.com/test/repo/pull/42#discussion_r502",
     "body": "I can reproduce this on Android too",
-    "created_at": "2999-01-01T00:01:00Z",
+    "created_at": "2025-02-01T00:01:00Z",
     "pull_request_review_id": 88,
     "in_reply_to_id": 501,
     "user": {"login": "reviewer", "type": "User"}
@@ -234,7 +242,7 @@ cat >"$MOCK_INLINE_COMMENTS" <<'JSON'
     "id": 503,
     "html_url": "https://github.com/test/repo/pull/42#discussion_r503",
     "body": "This root comment belongs to a submitted review",
-    "created_at": "2999-01-01T00:02:00Z",
+    "created_at": "2025-02-01T00:02:00Z",
     "pull_request_review_id": 88,
     "in_reply_to_id": null,
     "user": {"login": "reviewer", "type": "User"}
@@ -243,7 +251,7 @@ cat >"$MOCK_INLINE_COMMENTS" <<'JSON'
     "id": 504,
     "html_url": "https://github.com/test/repo/pull/42#discussion_r504",
     "body": "Bot inline noise",
-    "created_at": "2999-01-01T00:00:00Z",
+    "created_at": "2025-02-01T00:00:00Z",
     "pull_request_review_id": null,
     "in_reply_to_id": null,
     "user": {"login": "some-bot", "type": "Bot"}
@@ -252,7 +260,7 @@ cat >"$MOCK_INLINE_COMMENTS" <<'JSON'
     "id": 505,
     "html_url": "https://github.com/test/repo/pull/42#discussion_r505",
     "body": "Already replied — manul 🐈",
-    "created_at": "2999-01-01T00:00:00Z",
+    "created_at": "2025-02-01T00:00:00Z",
     "pull_request_review_id": null,
     "in_reply_to_id": null,
     "user": {"login": "manul", "type": "User"}
@@ -261,7 +269,8 @@ cat >"$MOCK_INLINE_COMMENTS" <<'JSON'
 JSON
 
 scan_proactive_pr_comments "test/repo"
-expected="$(printf '%s\n' proactive-comment-401 proactive-inline-501 proactive-inline-502)"
+# Only one proactive task for this PR may be queued within one cooldown window.
+expected="$(printf '%s\n' proactive-comment-401)"
 actual="$(cat "$MOCK_HANDLER_LOG")"
 [ "$actual" = "$expected" ] || {
   echo "FAIL proactive events: expected [$expected], got [$actual]" >&2
