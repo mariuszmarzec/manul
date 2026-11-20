@@ -5678,32 +5678,27 @@ SDD_CHECKPOINT_PROTOCOL
        return 0
      fi
 
-     # Detect a rejected proactive PR push before TASK_DONE can be accepted.
+     # Detect and requeue a rejected proactive PR push BEFORE ordinary
+     # completion evaluation can consume an attempt or change the task state.
      if [ -n "$PROACTIVE_PR_POLICY" ] && {
        grep -Eiq 'MANUL_PROACTIVE_PR_STALE_HEAD|non-fast-forward|fetch first|remote contains work|stale info' "$STDOUT_FILE" "$STDERR_FILE" 2>/dev/null ||
        printf '%s' "$exec_raw_stderr" | grep -Eiq 'MANUL_PROACTIVE_PR_STALE_HEAD|non-fast-forward|fetch first|remote contains work|stale info' 2>/dev/null
      }; then
-       exec_failure_code="PROACTIVE_PR_STALE_HEAD"
-       exec_summary="The PR head or target/base advanced while the agent was working. The push was rejected; Manul will retry after cooldown from a fresh workspace."
-       rc=1
-       log "dispatch: detected stale proactive PR push rejection for $COMMENT_ID"
+       log "dispatch: detected stale proactive PR push rejection for $COMMENT_ID; bypassing ordinary failure accounting"
+       if ! requeue_proactive_pr_stale_head "$COMMENT_ID" "$CLAIM_TOKEN" "$safe_comment_id" "$REPO" "$PR_NUM_FROM_URL" "$PROACTIVE_PR_POLICY" "$WORKSPACE_ID" "$CONVERSATION_ID" "$WORKDIR" "$PR_GUARD_DIR"; then
+         log "ERROR: proactive stale-PR retry transition failed for $COMMENT_ID"
+         update_task_completion "$COMMENT_ID" "failed" "Could not safely queue a fresh retry after stale PR head." "$CLAIM_TOKEN" || true
+       fi
+       archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
+       rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
+       set_activity "$COMMENT_ID" "queued"
+       return 0
      fi
 
      # Call production completion evaluation function
           local delivery_mode="implementation"
      if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
      evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE" "$TASK_EXECUTION_KIND"
-
-    if [ -n "$PROACTIVE_PR_POLICY" ] && [ "$exec_failure_code" = "PROACTIVE_PR_STALE_HEAD" ]; then
-      requeue_proactive_pr_stale_head "$COMMENT_ID" "$CLAIM_TOKEN" "$safe_comment_id" "$REPO" "$PR_NUM_FROM_URL" "$PROACTIVE_PR_POLICY" "$WORKSPACE_ID" "$CONVERSATION_ID" "$WORKDIR" "$PR_GUARD_DIR" || {
-        log "ERROR: proactive stale-PR retry transition failed for $COMMENT_ID"
-        update_task_completion "$COMMENT_ID" "failed" "Could not safely queue a fresh retry after stale PR head." "$CLAIM_TOKEN" || true
-      }
-      archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
-      rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
-      set_activity "$COMMENT_ID" "queued"
-      return 0
-    fi
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
