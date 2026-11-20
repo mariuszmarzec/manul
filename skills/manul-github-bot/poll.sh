@@ -1882,6 +1882,13 @@ render_poll_request_batch() {
           fi
         fi
 
+        review_pr_updated_at="$(jq -r '.updatedAt // empty' <<<"$pr_obj")"
+        if [ "$should_handle_review" = true ] && [ "$proactive_pr_enabled" -eq 1 ]; then
+          if ! pr_watcher_policy_eligible fixAndAnswerComments "$repo" "$pr_num" "$review_created" "$review_pr_updated_at"; then
+            should_handle_review=false
+          fi
+        fi
+
         if [ "$should_handle_review" = true ]; then
           log "processing review $review_id on $repo#$pr_num (state=$review_state, inline_comments=$review_inline_count)"
           existing_conv="$(sqlite3 "$DB" "SELECT conversationId FROM conversations WHERE repository='$(sql_escape "$repo")' AND activePrNumber=$pr_num AND status != 'COMPLETED' LIMIT 1;" 2>/dev/null || echo "")"
@@ -1906,6 +1913,9 @@ render_poll_request_batch() {
             review_handler_args+=(--proactive-feedback)
           fi
           if "$MANUL_DIR/manul-pr-review.sh" handle "${review_handler_args[@]}" --json >>"$LOG" 2>&1; then
+            if [ "$proactive_pr_enabled" -eq 1 ]; then
+              pr_watcher_policy_mark_attempted fixAndAnswerComments "$repo" "$pr_num" "review:$review_id" || log "WARN: failed to persist review cooldown for $repo#$pr_num"
+            fi
             log "review $review_id on $repo#$pr_num processed successfully"
           else
             log "WARN: failed to process review $review_id on $repo#$pr_num"
@@ -1916,7 +1926,7 @@ render_poll_request_batch() {
           log "received $review_state review on $repo#$pr_num with no eligible inline review comments (no task created)"
         fi
       done < <(echo "$reviews_json" | jq -c '.[]' 2>/dev/null)
-    done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url,author 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)
+    done < <(gh pr list --repo "$repo" --state open --json number,headRefName,baseRefName,title,url,author,updatedAt 2>>"$LOG" | jq -c '.[]' 2>>"$LOG" || true)
   fi
 
   # Pick up new PR conversation comments and standalone inline comments that
