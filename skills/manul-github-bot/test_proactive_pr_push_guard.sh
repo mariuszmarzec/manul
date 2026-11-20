@@ -63,6 +63,13 @@ git -C "$WORK" commit -qam "Manul fix"
 git -C "$WORK" push -q origin HEAD:refs/heads/feature/proactive-guard
 echo "PASS: push succeeds when the PR head and base are unchanged"
 
+# A later task must pin the newly pushed PR head, not reuse its prior snapshot.
+workspace_remove_proactive_pr_push_guard "$WORK" "$GUARD_DIR"
+HEAD_SHA="$(git -C "$WORK" rev-parse HEAD)"
+export MOCK_PR_HEAD="$HEAD_SHA"
+workspace_install_proactive_pr_push_guard \
+  "$WORK" "$GUARD_DIR" "owner/repo" 42 "feature/proactive-guard" "$HEAD_SHA" "$BASE_SHA"
+
 # Simulate the user pushing another commit after Manul checked out the branch.
 git clone -q --branch feature/proactive-guard "$REMOTE" "$USER_WORK"
 git -C "$USER_WORK" config user.name "User"
@@ -87,6 +94,10 @@ echo "PASS: push is blocked after a concurrent PR-head update"
 git -C "$WORK" fetch -q origin feature/proactive-guard
 git -C "$WORK" reset --hard -q origin/feature/proactive-guard
 LATEST_HEAD="$(git -C "$WORK" rev-parse HEAD)"
+workspace_remove_proactive_pr_push_guard "$WORK" "$GUARD_DIR"
+export MOCK_PR_HEAD="$LATEST_HEAD"
+workspace_install_proactive_pr_push_guard \
+  "$WORK" "$GUARD_DIR" "owner/repo" 42 "feature/proactive-guard" "$LATEST_HEAD" "$BASE_SHA"
 printf '%s\n' "new base commit" >"$TEST_DIR/base.txt"
 git -C "$WORK" checkout -q master
 cp "$TEST_DIR/base.txt" "$WORK/base.txt"
@@ -97,7 +108,7 @@ NEW_BASE_SHA="$(git -C "$WORK" rev-parse HEAD)"
 git -C "$WORK" checkout -q feature/proactive-guard
 git -C "$WORK" reset --hard -q "$LATEST_HEAD"
 export MOCK_PR_HEAD="$LATEST_HEAD" MOCK_PR_BASE="$NEW_BASE_SHA"
-# The existing guard still pins BASE_SHA, so the current PR target/base check fails.
+# This task pins the current PR head and the old target SHA; only the target moves.
 printf '%s\n' "work after target update" >>"$WORK/file.txt"
 git -C "$WORK" commit -qam "work after target update"
 if output="$(git -C "$WORK" push origin HEAD:refs/heads/feature/proactive-guard 2>&1)"; then
