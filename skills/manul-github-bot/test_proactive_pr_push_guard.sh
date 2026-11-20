@@ -77,7 +77,8 @@ git -C "$USER_WORK" config user.email "user@example.test"
 printf '%s\n' "user's concurrent change" >>"$USER_WORK/file.txt"
 git -C "$USER_WORK" commit -qam "user concurrent change"
 git -C "$USER_WORK" push -q origin HEAD:refs/heads/feature/proactive-guard
-git -C "$WORK" fetch -q origin feature/proactive-guard
+# Keep Manul's remote-tracking ref at the original pinned head. The pre-push
+# guard must independently query ls-remote and observe the user's new commit.
 printf '%s\n' "stale Manul follow-up" >>"$WORK/file.txt"
 git -C "$WORK" commit -qam "stale Manul follow-up"
 if output="$(git -C "$WORK" push origin HEAD:refs/heads/feature/proactive-guard 2>&1)"; then
