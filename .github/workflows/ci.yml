@@ -1,9 +1,8 @@
 name: Manul CI
 
+# Automatic runs are disabled to conserve GitHub Actions minutes.
+# Run this workflow manually with workflow_dispatch when desired.
 on:
-  push:
-    branches: [master, main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
