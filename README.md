@@ -166,10 +166,10 @@ independently under their own policy:
 Before pushing a proactive PR fix, Manul pins the source branch head and target
 base SHA and installs a guarded Git pre-push check. If the PR head or base moves
 while the agent is working, the push is rejected; Manul does not pull/rebase
-over the newer work or force-push. It requeues the review/comment task after
-`cooldownMinutes` with a fresh workspace, while CI/conflict tasks are retried
-against the refreshed PR state. The next attempt fetches the newest PR head
-and base before starting.
+over the newer work or force-push. Every affected proactive task (review/comment,
+CI-fix, or conflict resolution) is requeued after its own `cooldownMinutes` in a
+fresh workspace. The next attempt fetches the newest PR head and target/base
+before starting.
 
 Conflict tasks are tied to the PR head and target/base commit SHAs observed by
 the poller. Before making changes, the agent must re-check that the same PR is
