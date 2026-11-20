@@ -3567,8 +3567,22 @@ requeue_proactive_pr_stale_head() {
     rm -rf -- "$guard_dir" 2>/dev/null || true
   fi
   if [ -n "$workspace_id" ]; then
-    sqlite3 "$DB" "DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws';" 2>>"$LOG" || true
-    workspace_release "$workspace_id" "$comment_id" || log "WARN: failed to release stale PR workspace $workspace_id"
+    # Do not return the stale checkout to the idle pool. Archive it outside
+    # every agent workspace so the next lease (even if it reuses this workspace
+    # ID) recreates an empty directory and clones the current PR head.
+    if workspace_preserve_recovery_snapshot "$workspace_id" "$comment_id"; then
+      sqlite3 "$DB" "DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws';" 2>>"$LOG" || true
+      workspace_release "$workspace_id" "$comment_id" || log "WARN: failed to release archived PR workspace $workspace_id"
+    else
+      log "ERROR: could not archive stale PR workspace $workspace_id; marking it BROKEN to prevent reuse"
+      sqlite3 "$DB" "
+        BEGIN IMMEDIATE;
+        DELETE FROM workspace_contexts WHERE workspaceId='$safe_ws';
+        UPDATE workspaces SET status='BROKEN',currentTaskId=NULL,lastUsedAt=datetime('now')
+        WHERE workspaceId='$safe_ws' AND status='BUSY' AND currentTaskId='$(sql_escape "$comment_id")';
+        COMMIT;
+      " 2>>"$LOG" || return 1
+    fi
   elif [ -n "$context_id" ]; then
     sqlite3 "$DB" "DELETE FROM workspace_contexts WHERE contextId='$safe_context';" 2>>"$LOG" || true
   fi
