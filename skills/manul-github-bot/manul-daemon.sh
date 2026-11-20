@@ -5312,6 +5312,23 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__INITIAL_BASE_BRANCH__/$INITIAL_BASE_BRANCH}"
     printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
 
+    if [ -n "$PROACTIVE_PR_POLICY" ]; then
+      cat >> "$TASK_PROMPT_FILE" <<'PROACTIVE_PR_PUSH_SAFETY'
+
+## Proactive PR concurrency and push safety — mandatory
+
+Manul pinned the exact PR source HEAD and target/base SHA before starting this task. A pre-push hook enforces this snapshot for normal and force pushes.
+
+- Work only on the already checked-out PR branch. Make and commit the complete fix locally, then perform one normal push to origin for this branch.
+- Do not run git pull, rebase onto a newer PR head, merge a newer PR head, cherry-pick user commits, or otherwise integrate later source-branch updates during this task.
+- Do not use --force, --force-with-lease, --no-verify, an alternate hooks path, direct GitHub ref APIs, or any mechanism that bypasses the pre-push guard.
+- For conflict resolution, fetch and integrate only the target/base branch snapshot pinned by Manul. Stop if its SHA differs from the pinned base SHA.
+- If the push reports MANUL_PROACTIVE_PR_STALE_HEAD, a non-fast-forward rejection, fetch first, or that the remote contains work, stop immediately. Do not fetch/rebase/pull and retry the push. Report TASK_FAILED: STALE_PR_HEAD and let Manul retry after cooldown in a fresh workspace against the latest PR state.
+- Do not report success until the push and PR verification succeed.
+
+PROACTIVE_PR_PUSH_SAFETY
+    fi
+
     fi
 
     # Every execution kind now owns a dedicated task workspace (repository
@@ -5660,10 +5677,32 @@ SDD_CHECKPOINT_PROTOCOL
        return 0
      fi
 
+     # Detect a rejected proactive PR push before TASK_DONE can be accepted.
+     if [ -n "$PROACTIVE_PR_POLICY" ] && {
+       grep -Eiq 'MANUL_PROACTIVE_PR_STALE_HEAD|non-fast-forward|fetch first|remote contains work|stale info' "$STDOUT_FILE" "$STDERR_FILE" 2>/dev/null ||
+       printf '%s' "$exec_raw_stderr" | grep -Eiq 'MANUL_PROACTIVE_PR_STALE_HEAD|non-fast-forward|fetch first|remote contains work|stale info' 2>/dev/null
+     }; then
+       exec_failure_code="PROACTIVE_PR_STALE_HEAD"
+       exec_summary="The PR head or target/base advanced while the agent was working. The push was rejected; Manul will retry after cooldown from a fresh workspace."
+       rc=1
+       log "dispatch: detected stale proactive PR push rejection for $COMMENT_ID"
+     fi
+
      # Call production completion evaluation function
           local delivery_mode="implementation"
      if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
      evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE" "$TASK_EXECUTION_KIND"
+
+    if [ -n "$PROACTIVE_PR_POLICY" ] && [ "$exec_failure_code" = "PROACTIVE_PR_STALE_HEAD" ]; then
+      requeue_proactive_pr_stale_head "$COMMENT_ID" "$CLAIM_TOKEN" "$safe_comment_id" "$REPO" "$PR_NUM_FROM_URL" "$PROACTIVE_PR_POLICY" "$WORKSPACE_ID" "$CONVERSATION_ID" "$WORKDIR" "$PR_GUARD_DIR" || {
+        log "ERROR: proactive stale-PR retry transition failed for $COMMENT_ID"
+        update_task_completion "$COMMENT_ID" "failed" "Could not safely queue a fresh retry after stale PR head." "$CLAIM_TOKEN" || true
+      }
+      archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
+      rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
+      set_activity "$COMMENT_ID" "queued"
+      return 0
+    fi
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an
@@ -5789,6 +5828,12 @@ Zadanie główne pozostaje otwarte. Usuń przeszkodę i edytuj to podzadanie, ab
     # Stop heartbeat after task completion/failure
     stop_heartbeat "$COMMENT_ID"
     lc_log "HEARTBEAT_STOP" "task=$COMMENT_ID"
+
+    # Remove the task-scoped hook before returning the workspace to the pool.
+    if [ -n "$PR_GUARD_DIR" ] && [ -n "$WORKDIR" ]; then
+      workspace_remove_proactive_pr_push_guard "$WORKDIR" "$PR_GUARD_DIR" || log "WARN: failed to remove proactive push guard for $COMMENT_ID"
+      rm -rf -- "$PR_GUARD_DIR" 2>/dev/null || true
+    fi
 
     # Release workspace back to pool
     local task_workspace_id
