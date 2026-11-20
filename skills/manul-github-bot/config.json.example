@@ -99,12 +99,16 @@
     "prAuthorAllowed": [],
     "fixAndAnswerComments": {
       "enabled": true,
-      "prScope": "OnlyManulPr"
+      "prScope": "OnlyManulPr",
+      "waitBeforeFirstMinutes": 30,
+      "cooldownMinutes": 60
     }
   },
   "conflictResolveAndMerge": {
     "enabled": false,
-    "prScope": "OnlyManulPr"
+    "prScope": "OnlyManulPr",
+    "waitBeforeFirstMinutes": 30,
+    "cooldownMinutes": 60
   },
   "ciFix": {
     "enabled": true,
