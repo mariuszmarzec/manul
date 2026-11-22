@@ -1289,7 +1289,7 @@ queue_normalized_source_task() {
   normalized_prompt="$(jq -r ".prompt // .body // empty" <<<"$task_json")"
   source_action="$(jq -r '.action // "IMPLEMENT"' <<<"$task_json")"
   case "$source_action" in
-    IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER) ;;
+    IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER|TEAM) ;;
     *) source_action="IMPLEMENT" ;;
   esac
   [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] && [ -n "$normalized_prompt" ] || return 0

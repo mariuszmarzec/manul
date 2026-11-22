@@ -4101,8 +4101,15 @@ else
     local NEW_ATTEMPTS
     NEW_ATTEMPTS="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id';" 2>/dev/null || echo "0")"
     local MAX_ATTEMPTS
-    MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
-    
+    if [ "$TASK_ACTION" = "TEAM" ]; then
+      MAX_ATTEMPTS="$(jq -r '.automation.maxTeamAttempts // 20' "$CONFIG" 2>/dev/null || echo 20)"
+    else
+      MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+    fi
+    if ! [[ "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] || [ "$MAX_ATTEMPTS" -lt 1 ]; then
+      if [ "$TASK_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
+    fi
+
     if [ "$FAILURE_CODE" = "RUNTIME_PERMISSION_BLOCKED" ]; then
       # Permission denials are deterministic until the operator/policy changes.
       # Do not burn the remaining attempts re-running the same blocked tool call.
@@ -4245,6 +4252,23 @@ report_only_workspace_cleanup() {
 }
 
 dispatch_once() {
+  # Reconcile Team child task states before selecting work. The coordinator
+  # uses one SQLite transaction to wake a waiting parent at most once.
+  if [ -f "$DAEMON_SCRIPT_DIR/team-coordinator.py" ]; then
+    local team_reconcile_output="" team_reconcile_rc=0
+    team_reconcile_output="$(python3 "$DAEMON_SCRIPT_DIR/team-coordinator.py" --db "$DB" reconcile 2>>"$LOG")" || team_reconcile_rc=$?
+    if [ "$team_reconcile_rc" -ne 0 ]; then
+      log "WARN: Team workflow reconciliation failed (rc=$team_reconcile_rc)"
+    else
+      local team_resumed_count
+      team_resumed_count="$(printf '%s' "$team_reconcile_output" | jq -r '(.resumed // []) | length' 2>/dev/null || echo 0)"
+      if [ "$team_resumed_count" -gt 0 ]; then
+        log "dispatch: Team coordinator re-queued $team_resumed_count parent workflow(s)"
+        lc_log "TEAM_WORKFLOW_RESUMED" "count=$team_resumed_count"
+      fi
+    fi
+  fi
+
   retry_pending_terminal_lifecycle_comments || log "WARN: terminal lifecycle outbox scan failed"
 
   # SQLite is the sole input to the consumer. Polling is handled by a
@@ -4368,8 +4392,16 @@ dispatch_once() {
     ACTUAL_ATTEMPTS="$(sqlite3 "$DB" "SELECT attempts FROM processed_comments WHERE commentId='$safe_comment_id' AND status='queued';" 2>/dev/null || echo "0")"
 
     # Check max attempts BEFORE claiming (guard against watchdog recovery resetting attempts)
-    local MAX_ATTEMPTS
-    MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+    local MAX_ATTEMPTS QUEUED_ACTION
+    QUEUED_ACTION="$(sqlite3 "$DB" "SELECT COALESCE(action,'IMPLEMENT') FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
+    if [ "$QUEUED_ACTION" = "TEAM" ]; then
+      MAX_ATTEMPTS="$(jq -r '.automation.maxTeamAttempts // 20' "$CONFIG" 2>/dev/null || echo 20)"
+    else
+      MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
+    fi
+    if ! [[ "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] || [ "$MAX_ATTEMPTS" -lt 1 ]; then
+      if [ "$QUEUED_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
+    fi
     if [ "${ACTUAL_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       log "dispatch: task $COMMENT_ID already at max attempts ($ACTUAL_ATTEMPTS >= $MAX_ATTEMPTS), marking as failed"
       lc_log "TASK_MAX_ATTEMPTS" "task=$COMMENT_ID repo=$REPO attempts=$ACTUAL_ATTEMPTS max=$MAX_ATTEMPTS"
@@ -5759,6 +5791,43 @@ TEAM_CHECKPOINT_PROTOCOL
          log "WARN: workflow checkpoint persistence failed for task $COMMENT_ID"
        fi
      fi
+     # A TEAM parent parks instead of completing when its plan has dispatched
+     # independent child tasks. Child completion is reconciled by every worker
+     # loop; the parent is re-queued only after all referenced children are
+     # terminal. A malformed/conflicting wait marker fails closed.
+     if [ "$TASK_ACTION" = "TEAM" ] && [ -s "$STDOUT_FILE" ] &&
+        grep -q '^TASK_WAITING_FOR_TEAM$' "$STDOUT_FILE"; then
+       local team_wait_count
+       team_wait_count="$(grep -c '^TASK_WAITING_FOR_TEAM$' "$STDOUT_FILE" || true)"
+       if [ "$team_wait_count" -eq 1 ] &&
+          ! grep -qE '^TASK_(DONE|COMPLETED|FAILED|NEEDS_USER_BEGIN|NEEDS_USER_END)([[:space:]:]|$)' "$STDOUT_FILE"; then
+         local team_park_output="" team_park_rc=0
+         team_park_output="$(python3 "$DAEMON_SCRIPT_DIR/team-coordinator.py" --db "$DB" park \
+           --repo "$REPO" --conversation-id "$CONVERSATION_ID" --task-id "$COMMENT_ID" \
+           --claim-token "$CLAIM_TOKEN" 2>>"$LOG")" || team_park_rc=$?
+         if [ "$team_park_rc" -eq 0 ] &&
+            [ "$(printf '%s' "$team_park_output" | jq -r '.parked // false' 2>/dev/null || echo false)" = "true" ]; then
+           log "dispatch: parked Team parent $COMMENT_ID while child tasks run"
+           lc_log "TEAM_WORKFLOW_WAITING_CHILDREN" "task=$COMMENT_ID repo=$REPO"
+           archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
+           rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
+           stop_heartbeat "$COMMENT_ID"
+           if task_has_workspace; then
+             workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || log "WARN: workspace release after Team park did not match task $COMMENT_ID"
+           fi
+           if [ "$TASK_EXECUTION_KIND" = "repository" ]; then release_task_repo_lock "$REPO"; fi
+           release_task_lock
+           set_activity "$COMMENT_ID" "waiting_children"
+           return 0
+         fi
+         log "ERROR: Team parent $COMMENT_ID could not be parked: $team_park_output"
+         rc=1
+       else
+         log "ERROR: Team parent $COMMENT_ID emitted a malformed or conflicting TASK_WAITING_FOR_TEAM marker"
+         rc=1
+       fi
+     fi
+
      # Retain a runtime session only when the adapter explicitly requests
      # continuation. Completion, ordinary failures, and malformed continuation
      # results clear stale session state while preserving the workspace mapping.
@@ -5841,7 +5910,7 @@ TEAM_CHECKPOINT_PROTOCOL
 
      # Call production completion evaluation function
           local delivery_mode="implementation"
-     if [[ "$TASK_ACTION" == "VERIFY" || "$TASK_ACTION" == "TEAM" ]]; then delivery_mode="comment_only"; fi
+     if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
      evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE" "$TASK_EXECUTION_KIND"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the

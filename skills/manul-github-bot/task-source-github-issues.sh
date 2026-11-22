@@ -45,9 +45,11 @@ task_source_github_issues_poll() {
           | ($raw_prompt | sub("^[ \t\r\n]+"; "")) as $command_prompt
           | (if ($command_prompt | test("^(verify|investigate)([ \t\r\n]|$)"; "i")) then "VERIFY"
              elif ($command_prompt | test("^review-fix([ \t\r\n]|$)")) then "REVIEW_FIX"
+             elif ($command_prompt | test("^team([ \\t\\r\\n]|$)"; "i")) then "TEAM"
              else "IMPLEMENT" end) as $action
           | (if $action == "VERIFY" then ($command_prompt | sub("^(verify|investigate)([ \t\r\n]+|$)"; ""; "i"))
              elif $action == "REVIEW_FIX" then ($command_prompt | sub("^review-fix([ \t\r\n]+|$)"; ""))
+             elif $action == "TEAM" then ($command_prompt | sub("^team([ \\t\\r\\n]+|$)"; ""; "i"))
              else $command_prompt end) as $task_prompt
           | select(($task_prompt | gsub("[ \t\r\n]"; "")) != "")
           | {
