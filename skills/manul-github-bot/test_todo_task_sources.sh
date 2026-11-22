@@ -549,7 +549,8 @@ team_root='{"id":991,"description":"/manul team add notification center","subTas
 team_resolution='{"repository":"owner/catalog-a","executionKind":"repository","method":"explicit_repository_name"}'
 team_source="$(todo_task_to_source_json "$team_root" todo_local_mcp "$team_resolution")"
 assert_eq "Todo /manul team retains a dedicated action" "TEAM" "$(jq -r '.action' <<<"$team_source")"
-assert_contains "Todo Team prompt retains the requested outcome" "$(jq -r '.prompt' <<<"$team_source")" "team add notification center"
+assert_contains "Todo Team prompt retains the requested outcome" "$(jq -r '.prompt' <<<"$team_source")" "add notification center"
+if todo_task_is_answer_request "$team_root"; then fail "Todo /manul team must never use the no-repository answer path"; else ok "Todo /manul team is always repository-backed"; fi
 
 remote_resolution="$(todo_task_resolve_repository "$REMOTE_SOURCE" '{"id":91,"description":"/manul Implement remote project"}')"
 assert_eq "remote alias resolves the remote project" "owner/remote" "$(jq -r '.repository' <<<"$remote_resolution")"

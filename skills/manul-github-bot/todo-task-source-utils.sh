@@ -440,7 +440,7 @@ todo_strip_manul_trigger() {
         sub(/^[[:space:]]*\/manul[[:space:]]+report([[:space:]]+|$)/, "")
         found = 1
       } else if (!found && tolower($0) ~ /^[[:space:]]*\/manul[[:space:]]+team([[:space:]]|$)/) {
-        sub(/^[[:space:]]*\/manul[[:space:]]+team([[:space:]]+|$)/, "")
+        sub(/^[[:space:]]*\/[^[:space:]]+[[:space:]]+[^[:space:]]+([[:space:]]+|$)/, "")
         found = 1
       } else if (!found && $0 ~ /^[[:space:]]*\/manul([[:space:]]|$)/) {
         sub(/^[[:space:]]*\/manul([[:space:]]+|$)/, "")
@@ -456,6 +456,15 @@ todo_strip_manul_trigger() {
 # uniquely allowlisted repository and create a routing blocker when missing.
 todo_task_is_answer_request() {
   local task_json="$1" description
+  # /manul team is an explicit repository-backed orchestration request, never
+  # an informational answer, even when its goal is phrased as a question.
+  if jq -e '
+    def nodes: ., (.subTasks[]? | nodes);
+    any([nodes | (.description // "")];
+      test("(?m)^[[:space:]]*/manul[[:space:]]+team([[:space:]]|$)"; "i"))
+  ' <<<"$task_json" >/dev/null 2>&1; then
+    return 1
+  fi
   description="$(jq -r '
     def strip_trigger:
       gsub("(?m)^[[:space:]]*/manul([[:space:]]+report)?([[:space:]]+|$)"; "");
@@ -550,7 +559,7 @@ todo_task_to_source_json() {
   local trigger_action
   trigger_action="$(jq -r '
     def nodes: ., (.subTasks[]? | nodes);
-    [nodes | (.description // "") | split("\\n")[]
+    [nodes | (.description // "") | split("\n")[]
       | select(test("^[[:space:]]*/manul[[:space:]]+team([[:space:]]|$)"; "i"))][0] // ""
   ' <<<"$task_json" | awk '{print tolower($2)}')"
   if [ "$trigger_action" = "team" ]; then action="TEAM"; fi
