@@ -1081,7 +1081,7 @@ has_unresolved_manul_tasks() {
 
     # EXISTS returns exactly 0/1 internally. Capture it so this helper emits
     # no stray "1" on stdout; callers depend on its exit status, not SQL output.
-    if ! found="$(sqlite3 "$DB" "SELECT EXISTS(SELECT 1 FROM processed_comments WHERE repository='$safe_repo' AND issueNumber=$issue AND commentId NOT LIKE 'ci_fix:%' AND status IN ('queued','running','failed') AND (status!='failed' OR attempts <= 2));" 2>>"$LOG")"; then
+    if ! found="$(sqlite3 "$DB" "SELECT EXISTS(SELECT 1 FROM processed_comments WHERE repository='$safe_repo' AND issueNumber=$issue AND commentId NOT LIKE 'ci_fix:%' AND status IN ('queued','running','waiting_children','failed') AND (status!='failed' OR attempts <= 2));" 2>>"$LOG")"; then
         # Fail closed: on DB/query errors, do not launch a duplicate CI fix task.
         log "WARN: unresolved-task check failed for $repo#$issue; skipping CI auto-fix conservatively"
         return 0
