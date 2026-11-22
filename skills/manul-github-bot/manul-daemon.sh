@@ -5503,7 +5503,7 @@ MANUL_WORKFLOW_STATE_BEGIN
   "workflowType": "sdd",
   "repository": "<owner/repo>",
   "phase": "<phase_slug>",
-  "status": "<active|waiting_human|blocked|completed>",
+  "status": "<active|waiting_children|waiting_human|blocked|completed>",
   "data": {
     "sourceIssue": "<issue-or-task>",
     "baselinePr": "<optional PR number>",
@@ -5576,12 +5576,27 @@ MANUL_WORKFLOW_STATE_BEGIN
     "schemaVersion": 1,
     "prApprovedByMan": true,
     "trackers": ["github_issues"],
-    "items": [],
+    "items": [
+      {
+        "id": "work-item-id",
+        "status": "created",
+        "dependsOn": [],
+        "trackerRefs": [
+          {"provider": "github_issues", "sourceId": "owner/repo#123"}
+        ]
+      }
+    ],
     "decisions": [],
     "assumptions": []
   }
 }
 MANUL_WORKFLOW_STATE_END
+
+When all independent child tasks are created and dispatchable, emit
+`TASK_WAITING_FOR_TEAM` on its own final line instead of TASK_DONE. Manul
+parks the parent and resumes it after all tracker references are terminal.
+On resumption, use the refreshed checkpoint to integrate, replan, or request
+a human decision.
 
 Only non-secret metadata is allowed. Manul validates and persists checkpoints;
 do not access Manul databases or runtime state directly.
