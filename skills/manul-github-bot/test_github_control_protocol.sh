@@ -1160,6 +1160,18 @@ test_sdd_bootstrap_is_parsed() {
   [ "$agent" = "sdd" ] && [ "$selection" = "explicit" ] && [ "$prompt" = "bootstrap" ]
 }
 
+# Test 52: /manul team selects Team workflow while leaving role selection automatic
+test_team_command_is_parsed() {
+  local now output action agent selection prompt
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(events parse-comment --repo "test/repo" --issue "103" --comment-id "321" --body "/manul team add notification center" --author "user" --created "$now" --json 2>/dev/null)" || return 1
+  action="$(echo "$output" | jq -r '.command.action // empty')"
+  agent="$(echo "$output" | jq -r '.command.agent // empty')"
+  selection="$(echo "$output" | jq -r '.command.agentSelection // empty')"
+  prompt="$(echo "$output" | jq -r '.command.prompt // empty')"
+  [ "$action" = "TEAM" ] && [ -z "$agent" ] && [ "$selection" = "automatic" ] && [ "$prompt" = "add notification center" ]
+}
+
 # Test 42: unknown role supplied through --agent is preserved for fail-closed validation
 test_unknown_agent_flag_is_not_silently_discarded() {
   local now output agent selection prompt
@@ -1265,6 +1277,7 @@ run_test "Test 43: --auto before run is parsed and stripped" test_auto_flag_befo
 run_test "Test 44: --auto with --agent is parsed and stripped" test_auto_flag_with_explicit_agent_is_parsed
 run_test "Test 50: /manul sdd command is parsed" test_sdd_command_is_parsed
 run_test "Test 51: /manul sdd bootstrap is parsed explicitly" test_sdd_bootstrap_is_parsed
+run_test "Test 52: /manul team enters Team workflow" test_team_command_is_parsed
 
 # End-to-end test
 echo ""
