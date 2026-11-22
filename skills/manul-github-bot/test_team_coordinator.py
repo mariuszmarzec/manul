@@ -120,6 +120,22 @@ class TeamCoordinatorTests(unittest.TestCase):
             "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
         ).fetchone()[0]
         self.assertEqual(row, "waiting_children")
+        stored = self.db.execute(
+            "SELECT status,phase,stateJson FROM workflow_instances WHERE workflowId=?",
+            (self.workflow_id,)
+        ).fetchone()
+        self.assertEqual(stored[0:2], ("waiting_children", "waiting_children"))
+        item = json.loads(stored[2])["data"]["items"][0]
+        self.assertEqual(item["status"], "running")
+        self.assertEqual(item["trackerRefs"][0]["execution"]["status"], "queued")
+        self.assertEqual(self.db.execute(
+            "SELECT COUNT(*) FROM workflow_events WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0], 1)
+        # Repeated unchanged reconciliation must be idempotent.
+        self.assertEqual(self.run_reconcile(), 0)
+        self.assertEqual(self.db.execute(
+            "SELECT COUNT(*) FROM workflow_events WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0], 1)
 
     def test_reconcile_wakes_parent_once_after_child_completion(self):
         self.db.execute(

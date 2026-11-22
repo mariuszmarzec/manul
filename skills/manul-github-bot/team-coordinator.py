@@ -254,6 +254,12 @@ def reconcile(args: argparse.Namespace) -> int:
                     all_terminal = False
             state["data"]["items"] = items
             if not all_terminal:
+                # Persist partial child progress as an idempotent workflow event.
+                # A worker retry with an unchanged snapshot creates no duplicate;
+                # later child transitions update the same durable workflow.
+                state["status"] = "waiting_children"
+                state["phase"] = "waiting_children"
+                add_event(db, workflow, state, parent_task_id, "waiting_children")
                 waiting += 1
                 continue
 
