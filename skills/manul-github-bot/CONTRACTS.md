@@ -13,6 +13,7 @@ Supported commands parsed from a `/manul` command are:
 | `/manul <role> <task>` | `IMPLEMENT` using the explicit-role shorthand |
 | `/manul sdd bootstrap` | Explicit SDD Baseline initialization; never inferred |
 | `/manul sdd <task>` | SDD task; requires an existing approved SDD baseline |
+| `/manul team <goal>` | `TEAM` workflow; plans/decomposes work through the existing Orchestrator |
 | `/manul review-fix <prompt>` | `REVIEW_FIX` |
 | `/manul continue <answer>` | resume a `blocked_user` task |
 | `/manul verify <prompt>` | `VERIFY` |

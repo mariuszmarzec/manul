@@ -194,6 +194,8 @@ AGENT=sdd; PROMPT="Change requirement behavior"
 run_case "explicit SDD role stays on the SDD agent" expect_sdd_agent_route
 ACTION=REVIEW_FIX; AGENT=""; PROMPT="Fix review feedback"
 run_case "review-fix in SDD repo stays behind SDD routing" expect_sdd_route
+ACTION=TEAM; AGENT="orchestrator"; PROMPT="Plan and deliver a feature"
+run_case "Team workflow in SDD repo stays with the SDD lifecycle owner" expect_sdd_agent_route
 ACTION=IMPLEMENT; AGENT=coder; PROMPT="Implement a feature"
 run_case "direct Coder bypass is blocked" expect_blocked
 AGENT=sdd; PROMPT="bootstrap"

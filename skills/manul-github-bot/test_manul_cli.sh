@@ -326,7 +326,8 @@ test_status() {
       (commentId, repository, issueNumber, status, attempts, createdAt, taskSourceType, taskSourceId)
     VALUES
       ('todo-local-status','owner/todo',0,'queued',0,datetime('now'),'todo_local_mcp','420@0123456789abcdef'),
-      ('todo-remote-status','owner/fiteo',0,'queued',0,datetime('now'),'todo_remote_mcp','421@fedcba9876543210');
+      ('todo-remote-status','owner/fiteo',0,'queued',0,datetime('now'),'todo_remote_mcp','421@fedcba9876543210'),
+      ('team-waiting-status','owner/team',5,'waiting_children',0,datetime('now'),'github_issues','owner/team#5');
   "
 
   OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list --json 2>&1)
@@ -362,6 +363,26 @@ test_status() {
     pass "List JSON defaults recovery diagnostics on a legacy DB without the columns"
   else
     fail "List JSON defaults recovery diagnostics on a legacy DB without the columns" "preExecutionFailures=0 and agentStartedAt=null" "$OUTPUT"
+  fi
+
+  if printf '%s' "$OUTPUT" | jq -e 'any(.[]; .taskId == "team-waiting-status" and .status == "waiting_children")' >/dev/null 2>&1; then
+    pass "Default task list includes parked Team parents"
+  else
+    fail "Default task list includes parked Team parents" "waiting_children task visible" "$OUTPUT"
+  fi
+
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list --status waiting_children --json 2>&1)
+  if printf '%s' "$OUTPUT" | jq -e 'length == 1 and .[0].taskId == "team-waiting-status" and .[0].status == "waiting_children"' >/dev/null 2>&1; then
+    pass "Status filter returns parked Team parents"
+  else
+    fail "Status filter returns parked Team parents" "one waiting_children task" "$OUTPUT"
+  fi
+
+  OUTPUT=$(MANUL_DIR="$MANUL_DIR" bash "$SCRIPT_DIR/manul-status.sh" --list 2>&1)
+  if printf '%s' "$OUTPUT" | grep -q "WAITING"; then
+    pass "Compact task list labels parked Team parents as WAITING"
+  else
+    fail "Compact task list labels parked Team parents as WAITING" "WAITING status label" "$OUTPUT"
   fi
 
   # A queued row on the legacy schema has no agent start timestamp. Single-task

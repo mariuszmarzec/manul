@@ -72,6 +72,8 @@ SCRIPTS=(
     "migrate-repository-config.sh"
     "migrate-sdd-agent-config.sh"
     "sdd-policy.py"
+    "team-policy.py"
+    "team-coordinator.py"
     "workflow-state.py"
     "manul-conversation-linker.sh"
     "manul-conversation.sh"

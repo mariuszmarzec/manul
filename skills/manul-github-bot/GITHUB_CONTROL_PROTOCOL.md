@@ -303,6 +303,9 @@ configuration leaves the standard workflow unchanged.
 - Ordinary `IMPLEMENT` and `REVIEW_FIX` tasks in an initialized SDD
   repository are routed to the Orchestrator with the SDD skill context.
   The Orchestrator delegates the lifecycle to the `sdd` agent.
+- `TEAM` tasks (`/manul team`) in an SDD repository are routed directly to
+  the SDD lifecycle owner with both SDD and Team contracts. Team configuration
+  cannot weaken SDD specification or human-approval gates.
 - Direct implementation-role shorthand is blocked for these tasks.
 - Manul verifies the `agents[]` allow-list, canonical role files and the
   shared SDD skill before model invocation. OpenCode native role availability

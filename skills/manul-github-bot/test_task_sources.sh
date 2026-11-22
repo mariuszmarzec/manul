@@ -120,6 +120,7 @@ cat <<'JSON'
   {"number":11,"html_url":"https://github.com/owner/issues/issues/11","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Run root task","body":"/manul implement this"},
   {"number":13,"html_url":"https://github.com/owner/issues/issues/13","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Diagnostics only","body":"/manul verify\nDiagnose only and report findings without changing code"},
   {"number":14,"html_url":"https://github.com/owner/issues/issues/14","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Investigate only","body":"/manul Investigate\nInvestigate only and report findings without changing code"},
+  {"number":15,"html_url":"https://github.com/owner/issues/issues/15","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"Team workflow","body":"/manul team add notification center"},
   {"number":12,"html_url":"https://github.com/owner/issues/pull/12","user":{"login":"alice"},"created_at":"2026-10-08T10:00:00Z","updated_at":"2026-10-08T10:00:00Z","title":"PR is not root","body":"/manul should never be a source","pull_request":{"url":"https://api.github.com/repos/owner/issues/pulls/12"}}
 ]
 JSON
@@ -140,6 +141,11 @@ investigate_task="$(printf '%s\n' "$github_tasks" | jq -c 'select(.taskSourceId 
 assert_contains "GitHub /manul investigate issue is discovered" "$github_tasks" '"taskSourceId":"owner/issues#14"'
 assert_contains "investigate command is mapped to VERIFY" "$investigate_task" '"action":"VERIFY"'
 assert_eq "investigate prefix is removed from the task prompt" "Investigate only and report findings without changing code" "$(jq -r '.prompt' <<<"$investigate_task")"
+
+team_task="$(printf '%s\\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#15")')"
+assert_contains "GitHub /manul team is discovered" "$team_task" '"taskSourceId":"owner/issues#15"'
+assert_contains "GitHub /manul team keeps its dedicated action" "$team_task" '"action":"TEAM"'
+assert_eq "GitHub Team command prefix is removed from prompt" "add notification center" "$(jq -r '.prompt' <<<"$team_task")"
 
 # Queue a normalized VERIFY source through the production queueing function and assert
 # the explicit delivery action survives persistence in processed_comments.
@@ -176,6 +182,13 @@ actual_action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE comm
 actual_prompt="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 assert_eq "VERIFY action persists through source queueing" "VERIFY" "$actual_action"
 assert_eq "verify prompt persists without command prefix" "Diagnose only and report findings without changing code" "$actual_prompt"
+team_task="$(printf '%s\\n' "$github_tasks" | jq -c 'select(.taskSourceId == "owner/issues#15")')"
+queue_normalized_source_task "$team_task"
+team_action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='source:github_issues:owner/issues#15';")"
+team_prompt="$(sqlite3 "$DB" "SELECT prompt FROM processed_comments WHERE commentId='source:github_issues:owner/issues#15';")"
+assert_eq "TEAM action survives GitHub source queueing" "TEAM" "$team_action"
+assert_eq "TEAM prompt survives GitHub source queueing" "add notification center" "$team_prompt"
+
 actual_heartbeat="$(sqlite3 "$DB" "SELECT coalesce(heartbeatAt,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 actual_lease="$(sqlite3 "$DB" "SELECT coalesce(leaseExpiresAt,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 assert_eq "queued source task starts without heartbeat" "" "$actual_heartbeat"

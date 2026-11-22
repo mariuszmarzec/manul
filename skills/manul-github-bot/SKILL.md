@@ -232,6 +232,43 @@ or conversation mapping. This runtime continuation is distinct from
 `/manul continue <answer>`, which resumes a task blocked on user input.
 
 
+## Team Workflow
+
+Use `/manul team <goal>` to ask Manul to plan and coordinate a feature across
+multiple independent tasks. The incoming task may originate in GitHub Issues
+or Todo; that source does not select where child tasks are tracked.
+
+Manul validates the target repository's optional `.manul/team.yaml` before
+starting the Orchestrator. `prApprovedByMan` defaults to `true`. GitHub
+Issues is selected when enabled; when it is disabled, the single enabled Todo
+provider is selected. If multiple Todo providers are enabled, list the
+intended providers explicitly instead of letting Manul guess. Multiple
+trackers may be deliberately enabled, but tasks are not automatically
+duplicated across them.
+
+The Team skill is installed from Globalskills at
+`team-workflow/SKILL.md`. It uses the existing Orchestrator, SDD lifecycle,
+specialist roles, task-source adapters, workflow checkpoint registry and
+Manul execution workspaces. Every independently executable work item must be
+a separate root task to receive its own Manul workspace. Nested Todo subtasks
+remain ordered steps within one task and do not create separate executions.
+
+A Team request in an SDD-enabled repository is routed to the SDD lifecycle
+owner. SDD specification and human approval gates remain mandatory even when
+`prApprovedByMan: false`.
+
+Optional repository configuration:
+
+```yaml
+version: 1
+prApprovedByMan: true
+trackers:
+  - github_issues
+```
+
+The file is optional; omitting it keeps human approval as the default and
+uses deterministic tracker resolution.
+
 ## Task sources
 
 The root work item is owned by a configured task source. GitHub Issues are the default source. Additional providers can be enabled in `.taskSources[]` and are polled independently.

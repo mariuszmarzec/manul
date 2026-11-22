@@ -660,6 +660,94 @@ MOCK_EOF
 }
 
 # =============================================================================
+# Test: a parked Team parent must keep a merged-PR conversation open
+# =============================================================================
+test_waiting_team_parent_blocks_merged_conversation_close() {
+  local dir db state
+  dir="$(mktemp -d /tmp/conv-reg-team-wait-XXXXXX)"
+  db="$dir/manul.db"
+  sqlite3 "$db" "
+    CREATE TABLE conversations(
+      conversationId TEXT PRIMARY KEY,
+      activePrNumber INTEGER,
+      activePrUrl TEXT,
+      status TEXT NOT NULL DEFAULT 'OPEN',
+      updatedAt TEXT
+    );
+    CREATE TABLE processed_comments(conversationId TEXT, status TEXT);
+    INSERT INTO conversations VALUES('team-conv', 77, 'https://github.com/o/r/pull/77', 'OPEN', datetime('now'));
+    INSERT INTO processed_comments VALUES('team-conv', 'waiting_children');
+  "
+
+  DB="$db"
+  LOG="$dir/poll.log"
+  sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+  log() { :; }
+  source <(sed -n '/^close_merged_pr_conversations()/,/^}/p' "$SCRIPT_DIR/poll.sh")
+
+  close_merged_pr_conversations "77"
+  state="$(sqlite3 "$DB" "SELECT status || ':' || activePrNumber FROM conversations WHERE conversationId='team-conv';")"
+  if [ "$state" != "OPEN:77" ]; then
+    echo "ERROR: parked Team parent did not protect its conversation from auto-close (state=$state)"
+    rm -rf "$dir"
+    return 1
+  fi
+
+  sqlite3 "$DB" "UPDATE processed_comments SET status='completed' WHERE conversationId='team-conv';"
+  close_merged_pr_conversations "77"
+  state="$(sqlite3 "$DB" "SELECT status || ':' || COALESCE(activePrNumber,'null') FROM conversations WHERE conversationId='team-conv';")"
+  rm -rf "$dir"
+  [ "$state" = "COMPLETED:null" ] || {
+    echo "ERROR: conversation did not close after Team parent completed (state=$state)"
+    return 1
+  }
+}
+
+# =============================================================================
+# Test: a parked Team parent prevents duplicate automatic CI-fix tasks
+# =============================================================================
+test_waiting_team_parent_blocks_duplicate_ci_fix() {
+  local dir db source
+  dir="$(mktemp -d /tmp/conv-reg-team-ci-XXXXXX)"
+  db="$dir/manul.db"
+  sqlite3 "$db" "
+    CREATE TABLE processed_comments(
+      commentId TEXT, repository TEXT, issueNumber INTEGER,
+      status TEXT, attempts INTEGER
+    );
+    INSERT INTO processed_comments
+      VALUES('team-parent','test-org/test-repo',17,'waiting_children',1);
+  "
+
+  DB="$db"
+  LOG="$dir/poll.log"
+  : >"$LOG"
+  source="$(sed -n '/^has_unresolved_manul_tasks() {$/,/^}/p' "$SCRIPT_DIR/poll.sh")"
+  if [ -z "$source" ]; then
+    echo "ERROR: has_unresolved_manul_tasks was not found"
+    rm -rf "$dir"
+    return 1
+  fi
+  eval "$source"
+
+  if ! has_unresolved_manul_tasks "test-org/test-repo" 17; then
+    echo "ERROR: parked Team parent was not considered an unresolved task"
+    rm -rf "$dir"
+    return 1
+  fi
+
+  sqlite3 "$DB" "UPDATE processed_comments SET status='completed' WHERE commentId='team-parent';"
+  if has_unresolved_manul_tasks "test-org/test-repo" 17; then
+    echo "ERROR: completed Team parent still blocks a new CI-fix task"
+    rm -rf "$dir"
+    return 1
+  fi
+
+  rm -rf "$dir"
+  return 0
+}
+
+# =============================================================================
 # Run tests
 # =============================================================================
 run_test "helper functions and persistence logic" test_helpers_and_persistence
@@ -668,6 +756,8 @@ run_test "review thread: every comment persisted, identity based on root only" t
 run_test "baseId dedup prevents duplicate queued tasks" test_baseid_dedup_no_duplicates
 run_test "bot comments (.user.type == Bot) are filtered out" test_bot_comment_filtering
 run_test "installation baseline excludes pre-install comments" test_installation_baseline_filtering
+run_test "waiting Team parent prevents merged-PR conversation auto-close" test_waiting_team_parent_blocks_merged_conversation_close
+run_test "waiting Team parent prevents duplicate automatic CI fixes" test_waiting_team_parent_blocks_duplicate_ci_fix
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Results: $PASSED passed, $FAILED failed (out of $TOTAL tests)"

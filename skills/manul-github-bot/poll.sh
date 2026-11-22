@@ -667,7 +667,7 @@ close_merged_pr_conversations() {
       AND NOT EXISTS (
         SELECT 1 FROM processed_comments t
         WHERE t.conversationId = c.conversationId
-          AND t.status IN ('queued', 'running', 'blocked_user')
+          AND t.status IN ('queued', 'running', 'waiting_children', 'blocked_user')
       );" 2>>"$LOG") || query_err="FAILED"
   if [ "$query_err" = "FAILED" ]; then
     log "ERROR: failed to query conversations for merged PR auto-close"
@@ -1081,7 +1081,7 @@ has_unresolved_manul_tasks() {
 
     # EXISTS returns exactly 0/1 internally. Capture it so this helper emits
     # no stray "1" on stdout; callers depend on its exit status, not SQL output.
-    if ! found="$(sqlite3 "$DB" "SELECT EXISTS(SELECT 1 FROM processed_comments WHERE repository='$safe_repo' AND issueNumber=$issue AND commentId NOT LIKE 'ci_fix:%' AND status IN ('queued','running','failed') AND (status!='failed' OR attempts <= 2));" 2>>"$LOG")"; then
+    if ! found="$(sqlite3 "$DB" "SELECT EXISTS(SELECT 1 FROM processed_comments WHERE repository='$safe_repo' AND issueNumber=$issue AND commentId NOT LIKE 'ci_fix:%' AND status IN ('queued','running','waiting_children','failed') AND (status!='failed' OR attempts <= 2));" 2>>"$LOG")"; then
         # Fail closed: on DB/query errors, do not launch a duplicate CI fix task.
         log "WARN: unresolved-task check failed for $repo#$issue; skipping CI auto-fix conservatively"
         return 0
@@ -1289,7 +1289,7 @@ queue_normalized_source_task() {
   normalized_prompt="$(jq -r ".prompt // .body // empty" <<<"$task_json")"
   source_action="$(jq -r '.action // "IMPLEMENT"' <<<"$task_json")"
   case "$source_action" in
-    IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER) ;;
+    IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER|TEAM) ;;
     *) source_action="IMPLEMENT" ;;
   esac
   [ -n "$source_type" ] && [ -n "$source_id" ] && [ -n "$body" ] && [ -n "$normalized_prompt" ] || return 0

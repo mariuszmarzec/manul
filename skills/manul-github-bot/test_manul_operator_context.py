@@ -71,6 +71,11 @@ class OperatorContextTests(unittest.TestCase):
                     "Summarize the fix", "Verified result summary", None,
                 ),
                 (
+                    "waiting-team-1", "owner/repo", 13, "waiting_children", "github_issues",
+                    "owner/repo#13", "orchestrator", 1, recent_activity, recent_activity,
+                    None, "Coordinate the feature", "Waiting for child tasks", None,
+                ),
+                (
                     "old-1", "owner/repo", 12, "completed", "github_issues",
                     "12", "coder", 1, "2026-10-01 10:00:00", None,
                     "2026-10-01 10:10:00", "Old task", "Old summary", None,
@@ -114,11 +119,13 @@ class OperatorContextTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(output.read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["activeTaskCountInRecent300Rows"], 1)
-        self.assertEqual({task["taskId"] for task in payload["tasks"]}, {"running-1", "done-1"})
+        self.assertEqual(payload["activeTaskCountInRecent300Rows"], 2)
+        self.assertEqual({task["taskId"] for task in payload["tasks"]}, {"running-1", "done-1", "waiting-team-1"})
         done = next(task for task in payload["tasks"] if task["taskId"] == "done-1")
         self.assertEqual(done["sourceId"], "116372")
         self.assertEqual(done["resultSummary"], "Verified result summary")
+        waiting = next(task for task in payload["tasks"] if task["taskId"] == "waiting-team-1")
+        self.assertEqual(waiting["status"], "waiting_children")
         self.assertIn("lifecycle.log", payload["logs"])
         self.assertEqual(before, self.digest(), "context collection must not mutate the source DB")
         self.assertEqual(output.stat().st_mode & 0o777, 0o600)

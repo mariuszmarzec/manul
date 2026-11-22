@@ -583,7 +583,7 @@ cmd_close() {
   
   # Check all tasks are complete
   local incomplete
-  incomplete="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(sql_escape "$CONVERSATION_ID")' AND status IN ('queued', 'running', 'blocked_user');" 2>/dev/null)"
+  incomplete="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE conversationId='$(sql_escape "$CONVERSATION_ID")' AND status IN ('queued', 'running', 'waiting_children', 'blocked_user');" 2>/dev/null)"
   
   if [ "$incomplete" -gt 0 ]; then
     error_exit "Cannot close conversation with incomplete tasks" 3

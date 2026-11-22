@@ -545,6 +545,15 @@ assert_eq "catalog alias resolves the canonical local repository" "owner/local" 
 assert_eq "catalog alias records its resolution method" "catalog_alias" "$(jq -r '.method' <<<"$local_resolution")"
 assert_eq "catalog alias records the matched phrase" "local project" "$(jq -r '.matchedAlias' <<<"$local_resolution")"
 
+team_root='{"id":991,"description":"/manul team add notification center","subTasks":[],"isToDo":true}'
+team_resolution='{"repository":"owner/catalog-a","executionKind":"repository","method":"explicit_repository_name"}'
+team_source="$(todo_task_to_source_json "$team_root" todo_local_mcp "$team_resolution")"
+assert_eq "Todo /manul team retains a dedicated action" "TEAM" "$(jq -r '.action' <<<"$team_source")"
+assert_contains "Todo Team prompt retains the requested outcome" "$(jq -r '.prompt' <<<"$team_source")" "add notification center"
+if todo_task_is_answer_request "$team_root"; then fail "Todo /manul team must never use the no-repository answer path"; else ok "Todo /manul team is always repository-backed"; fi
+team_nested_root='{"id":992,"description":"Parent feature","subTasks":[{"description":"/manul team add nested notification flow","subTasks":[],"isToDo":true}],"isToDo":true}'
+if todo_task_is_answer_request "$team_nested_root"; then fail "Nested /manul team must never use the no-repository answer path"; else ok "Nested Todo /manul team is repository-backed"; fi
+
 remote_resolution="$(todo_task_resolve_repository "$REMOTE_SOURCE" '{"id":91,"description":"/manul Implement remote project"}')"
 assert_eq "remote alias resolves the remote project" "owner/remote" "$(jq -r '.repository' <<<"$remote_resolution")"
 remote_skill_prompt="$(HOME="$SKILLS_HOME" todo_task_to_source_json '{"id":91,"description":"/manul Implement remote project","subTasks":[],"isToDo":true}' todo_remote_mcp "$remote_resolution")"
@@ -1067,7 +1076,7 @@ assert_eq "single-line update text has no redundant trailing hard break" "Single
 agent_executor_source="$(cat "$SCRIPT_DIR/agent-executor.sh")"
 poll_source="$(cat "$SCRIPT_DIR/poll.sh")"
 assert_contains "agent executor maps ANSWER to tool-free operator_query" "$agent_executor_source" 'adapter_execution_kind="operator_query"'
-assert_contains "source poller accepts the explicit ANSWER action" "$poll_source" 'IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER)'
+assert_contains "source poller accepts the explicit ANSWER action" "$poll_source" 'IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER|TEAM)'
 assert_contains "source poller accepts answer execution only for Todo and without a repository" "$poll_source" 'execution_kind" = "answer"'
 
 # Normal standalone operation must not need aicode to export helper paths.
