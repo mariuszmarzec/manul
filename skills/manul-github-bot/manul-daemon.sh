@@ -4107,7 +4107,7 @@ else
       MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     fi
     if ! [[ "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] || [ "$MAX_ATTEMPTS" -lt 1 ]; then
-      if [ "$QUEUED_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
+      if [ "$TASK_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
     fi
 
     if [ "$FAILURE_CODE" = "RUNTIME_PERMISSION_BLOCKED" ]; then
@@ -4400,7 +4400,7 @@ dispatch_once() {
       MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     fi
     if ! [[ "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] || [ "$MAX_ATTEMPTS" -lt 1 ]; then
-      if [ "$TASK_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
+      if [ "$QUEUED_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
     fi
     if [ "${ACTUAL_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       log "dispatch: task $COMMENT_ID already at max attempts ($ACTUAL_ATTEMPTS >= $MAX_ATTEMPTS), marking as failed"
