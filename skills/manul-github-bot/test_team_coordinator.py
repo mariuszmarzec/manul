@@ -200,6 +200,67 @@ class TeamCoordinatorTests(unittest.TestCase):
         ).fetchone()[0]
         self.assertEqual(phase, "replanning")
 
+    def test_skipped_child_is_terminal_and_does_not_stall_parent(self):
+        self.db.execute(
+            """INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,
+                 taskSourceType,taskSourceId,action)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (self.child_id, "owner/repo", 11, "skipped", 0, "github_issues", "owner/repo#11", "IMPLEMENT")
+        )
+        self.db.execute(
+            "UPDATE processed_comments SET status='waiting_children',claimToken=NULL WHERE commentId=?",
+            (self.parent_id,)
+        )
+        self.db.commit()
+        self.assertEqual(self.run_reconcile(), 0)
+        parent_status = self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0]
+        stored = self.db.execute(
+            "SELECT phase,stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()
+        item = json.loads(stored[1])["data"]["items"][0]
+        self.assertEqual(parent_status, "queued")
+        self.assertEqual(stored[0], "integration")
+        self.assertEqual(item["status"], "skipped")
+        self.assertEqual(item["trackerRefs"][0]["execution"]["status"], "skipped")
+
+    def test_cancelled_child_wakes_parent_for_replanning(self):
+        self.db.execute(
+            """INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,
+                 taskSourceType,taskSourceId,action)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (self.child_id, "owner/repo", 11, "cancelled", 1, "github_issues", "owner/repo#11", "IMPLEMENT")
+        )
+        self.db.execute(
+            "UPDATE processed_comments SET status='waiting_children',claimToken=NULL WHERE commentId=?",
+            (self.parent_id,)
+        )
+        self.db.commit()
+        self.assertEqual(self.run_reconcile(), 0)
+        phase = self.db.execute(
+            "SELECT phase FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0]
+        self.assertEqual(phase, "replanning")
+
+    def test_failed_local_item_without_tracker_refs_replans(self):
+        failed_state = dict(self.state)
+        failed_state["data"] = {"items": [{"id": "local-failure", "status": "failed"}]}
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=?,status='waiting_children' WHERE workflowId=?",
+            (json.dumps(failed_state), self.workflow_id)
+        )
+        self.db.execute(
+            "UPDATE processed_comments SET status='waiting_children',claimToken=NULL WHERE commentId=?",
+            (self.parent_id,)
+        )
+        self.db.commit()
+        self.assertEqual(self.run_reconcile(), 0)
+        phase = self.db.execute(
+            "SELECT phase FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0]
+        self.assertEqual(phase, "replanning")
+
     def test_blocked_child_does_not_wake_parent(self):
         self.db.execute(
             """INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,
