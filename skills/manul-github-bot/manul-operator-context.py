@@ -109,7 +109,7 @@ def load_tasks(db_path: Path, now: dt.datetime) -> tuple[list[dict[str, Any]], d
     finally:
         connection.close()
 
-    active_statuses = {"queued", "running", "blocked_user"}
+    active_statuses = {"queued", "running", "waiting_children", "blocked_user"}
     cutoff = now - dt.timedelta(days=7)
     selected: list[tuple[dt.datetime, dict[str, Any]]] = []
     counts: dict[str, int] = {}
@@ -183,7 +183,7 @@ def main() -> int:
         if lines:
             logs[name] = lines
 
-    active_count = sum(counts.get(status, 0) for status in ("queued", "running", "blocked_user"))
+    active_count = sum(counts.get(status, 0) for status in ("queued", "running", "waiting_children", "blocked_user"))
     snapshot = {
         "generatedAt": now.isoformat(),
         "scope": "read-only operator snapshot; active tasks plus tasks with activity in the last 7 days",
