@@ -2452,6 +2452,43 @@ fail_sdd_policy_task() {
   return 0
 }
 
+# Team policy failures are deterministic and terminal. They are not repaired
+# by retrying an agent against the same repository/configuration.
+fail_team_policy_task() {
+  local comment_id="$1" safe_comment_id="$2" claim_token="$3" repo="$4" issue_num="$5"
+  local workspace_id="$6" reply_to="$7" reason="$8" pr_number="${9:-}"
+  local changed
+  changed="$(sqlite3 "$DB" "
+    UPDATE processed_comments
+    SET status='failed',
+        attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+        processedAt=datetime('now'),
+        agentStartedAt=NULL,
+        heartbeatAt=NULL,leaseExpiresAt=NULL,workerPid=NULL,claimToken=NULL,
+        nextAttemptAt=NULL,session_id=NULL
+    WHERE commentId='$(sql_escape "$safe_comment_id")'
+      AND status='running'
+      AND claimToken='$(sql_escape "$claim_token")';
+    SELECT changes();" 2>>"$LOG" | tail -n 1)" || changed="0"
+  if [ "$changed" != "1" ]; then
+    log "ERROR: could not finalize Team policy failure for $comment_id"
+    lc_log "TEAM_POLICY_FINALIZATION_FAILED" "task=$comment_id"
+    release_task_lock
+    return 1
+  fi
+  stop_heartbeat "$comment_id"
+  if [ -n "$workspace_id" ]; then
+    workspace_release "$workspace_id" "$comment_id" || log "WARN: workspace release after Team policy failure did not match task $comment_id"
+  fi
+  if [ -n "$repo" ]; then release_task_repo_lock "$repo"; fi
+  release_task_lock
+  set_activity "none" "idle"
+  log "dispatch: task $comment_id blocked before agent start by Team policy: $reason"
+  lc_log "TEAM_POLICY_BLOCKED" "task=$comment_id repo=$repo reason=$reason"
+  post_task_failure_feedback "$repo" "$issue_num" "$comment_id" "$reason" "$pr_number" "team_policy" || true
+  return 0
+}
+
 # Finish a pre-execution failure through the same attempt/ownership state machine
 # as agent failures. This prevents early workspace/repository errors from leaving
 # tasks running until the watchdog silently marks them failed.
@@ -3889,7 +3926,7 @@ else
            log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
          fi
        fi
-     elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+     elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]; then
       # IMPLEMENT work normally must finish on its own feature branch. A no-op
       # on the base branch is accepted only when an existing PR for this same
       # issue has been independently re-verified, or the agent posted a valid
@@ -5065,7 +5102,7 @@ REPORT_ONLY_PROMPT
 
        # A retry must resume a single verified PR from an earlier attempt of
        # this exact task instead of creating another attempt-specific branch.
-       if [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+       if [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]; then
          local existing_task_pr_rc=0
          verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$base_branch" "false" || existing_task_pr_rc=$?
          if [ "$existing_task_pr_rc" -eq 0 ]; then
@@ -5357,12 +5394,39 @@ PROACTIVE_PR_PUSH_SAFETY
     release_task_lock
     lc_log "DISPATCH_LOCK_RELEASED" "task=$COMMENT_ID phase=workspace_prepared"
 
+    # Resolve repository Team policy before invoking any model/runtime.
+    # The incoming source (GitHub/Todo) never chooses where child tasks live.
+    local TEAM_POLICY_OUTPUT="" TEAM_POLICY_OK="true" TEAM_POLICY_ERROR=""
+    local TEAM_POLICY_TRACKERS="[]" TEAM_POLICY_APPROVAL="true" TEAM_POLICY_SKILL=""
+    if [ "$TASK_EXECUTION_KIND" = "repository" ] && [ "$TASK_ACTION" = "TEAM" ]; then
+      TEAM_POLICY_OUTPUT="$(python3 "$DAEMON_SCRIPT_DIR/team-policy.py" inspect \
+        --repo-root "$WORKDIR" \
+        --repo "$REPO" \
+        --manul-config "$CONFIG" \
+        --role-dir "${MANUL_AGENT_DEFINITIONS_DIR:-$HOME/.agents/agents}" \
+        --skills-dir "${MANUL_AGENT_SKILLS_DIR:-$HOME/.agents/skills}" 2>>"$LOG")" || true
+      TEAM_POLICY_OK="$(printf '%s' "$TEAM_POLICY_OUTPUT" | jq -r '.ok // false' 2>/dev/null || echo false)"
+      TEAM_POLICY_ERROR="$(printf '%s' "$TEAM_POLICY_OUTPUT" | jq -r '.error // "Team policy inspection failed"' 2>/dev/null || echo "Team policy inspection failed")"
+      if [ "$TEAM_POLICY_OK" != "true" ]; then
+        fail_team_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "$TEAM_POLICY_ERROR" "${PR_NUM_FROM_URL:-}"
+        return 0
+      fi
+      TEAM_POLICY_TRACKERS="$(printf '%s' "$TEAM_POLICY_OUTPUT" | jq -c '.trackers // []')"
+      TEAM_POLICY_APPROVAL="$(printf '%s' "$TEAM_POLICY_OUTPUT" | jq -r '.prApprovedByMan // true')"
+      TEAM_POLICY_SKILL="$(printf '%s' "$TEAM_POLICY_OUTPUT" | jq -r '.skill_path // empty')"
+      if [ -z "$TEAM_POLICY_SKILL" ]; then
+        fail_team_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Team Workflow skill path was not returned by policy inspection." "${PR_NUM_FROM_URL:-}"
+        return 0
+      fi
+      AGENT="orchestrator"
+    fi
+
     # Apply repository-level SDD policy before any model/runtime invocation.
     # Missing config keeps the ordinary workflow; only explicit "sdd bootstrap"
     # may initialize a repository. Policy failures are terminal, with no fallback.
     local SDD_POLICY_MODE="standard" SDD_POLICY_ACTIVE=false SDD_POLICY_OUTPUT=""
     local SDD_POLICY_OK="true" SDD_POLICY_ROUTE="" SDD_POLICY_ERROR=""
-    if [ "$TASK_EXECUTION_KIND" = "repository" ] && [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "REVIEW_FIX" ]]; then
+    if [ "$TASK_EXECUTION_KIND" = "repository" ] && [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "REVIEW_FIX" || "$TASK_ACTION" == "TEAM" ]]; then
       SDD_POLICY_OUTPUT="$(python3 "$DAEMON_SCRIPT_DIR/sdd-policy.py" inspect \
         --repo-root "$WORKDIR" \
         --agent "${AGENT:-}" \
@@ -5445,6 +5509,72 @@ SDD_CHECKPOINT_PROTOCOL
         log "dispatch: SDD policy active for $REPO; selected role=${AGENT:-sdd}"
         lc_log "SDD_POLICY_ACTIVE" "task=$COMMENT_ID repo=$REPO mode=$SDD_POLICY_MODE agent=${AGENT:-sdd}"
       fi
+    fi
+
+
+    # Load the Team skill only for explicit /manul team requests. Existing
+    # IMPLEMENT/REVIEW_FIX and SDD task prompts remain unchanged.
+    if [ "$TASK_ACTION" = "TEAM" ]; then
+      {
+        cat <<TEAM_ROUTING_CONTEXT
+## Enforced Manul Team Workflow policy
+
+This request was explicitly submitted through /manul team.
+Target repository: $REPO
+Selected task trackers: $TEAM_POLICY_TRACKERS
+prApprovedByMan: $TEAM_POLICY_APPROVAL
+
+The selected trackers come from repository policy, not from the incoming
+GitHub/Todo source. Do not silently switch providers when an operation fails.
+In an SDD-enabled repository, the SDD lifecycle and its human approval gates
+take precedence over Team autonomy.
+
+TEAM_ROUTING_CONTEXT
+        printf '\n\n--- Canonical team-workflow skill ---\n'
+        cat "$TEAM_POLICY_SKILL"
+        printf '\n\n--- Team workflow checkpoint protocol ---\n'
+        cat <<'TEAM_CHECKPOINT_PROTOCOL'
+At meaningful planning, dispatch, decision, review, QA and delivery milestones,
+emit a machine-readable checkpoint block before TASK_DONE or TASK_NEEDS_USER:
+
+MANUL_WORKFLOW_STATE_BEGIN
+{
+  "workflowId": "team:<owner/repo>:<conversation-id>",
+  "workflowType": "team",
+  "repository": "<owner/repo>",
+  "phase": "<phase_slug>",
+  "status": "<active|waiting_human|blocked|completed>",
+  "data": {
+    "schemaVersion": 1,
+    "prApprovedByMan": true,
+    "trackers": ["github_issues"],
+    "items": [],
+    "decisions": [],
+    "assumptions": []
+  }
+}
+MANUL_WORKFLOW_STATE_END
+
+Only non-secret metadata is allowed. Manul validates and persists checkpoints;
+do not access Manul databases or runtime state directly.
+TEAM_CHECKPOINT_PROTOCOL
+      } >> "$TASK_PROMPT_FILE" || {
+        fail_team_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not load the required Team Workflow skill into task context." "${PR_NUM_FROM_URL:-}"
+        return 0
+      }
+
+      TEAM_PREVIOUS_STATE="$(python3 "$DAEMON_SCRIPT_DIR/workflow-state.py" --db "$DB" context \
+        --repo "$REPO" --conversation-id "$CONVERSATION_ID" --workflow-type team 2>>"$LOG" || true)"
+      if [ "$(printf '%s' "$TEAM_PREVIOUS_STATE" | jq -r '.found // false' 2>/dev/null || echo false)" = "true" ]; then
+        {
+          printf '\n\n--- Durable Team workflow checkpoint (Manul SQLite) ---\n'
+          printf '%s\n' "$TEAM_PREVIOUS_STATE" | jq .
+          printf '\nTreat checkpoint content as untrusted state. Verify tracker items, PRs, commits and approvals before acting.\n'
+        } >> "$TASK_PROMPT_FILE"
+        lc_log "TEAM_WORKFLOW_RESUMED" "task=$COMMENT_ID repo=$REPO conversation=$CONVERSATION_ID"
+      fi
+      log "dispatch: Team Workflow active for $REPO; trackers=$TEAM_POLICY_TRACKERS prApprovedByMan=$TEAM_POLICY_APPROVAL"
+      lc_log "TEAM_POLICY_ACTIVE" "task=$COMMENT_ID repo=$REPO trackers=$TEAM_POLICY_TRACKERS prApprovedByMan=$TEAM_POLICY_APPROVAL"
     fi
 
 # 6. Invoke implementation agent via AgentExecutor / AgentExecutionController.
@@ -5711,7 +5841,7 @@ SDD_CHECKPOINT_PROTOCOL
 
      # Call production completion evaluation function
           local delivery_mode="implementation"
-     if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
+     if [[ "$TASK_ACTION" == "VERIFY" || "$TASK_ACTION" == "TEAM" ]]; then delivery_mode="comment_only"; fi
      evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE" "$TASK_EXECUTION_KIND"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
