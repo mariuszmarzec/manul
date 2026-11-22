@@ -49,7 +49,7 @@ def load_items(state: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             raise ValueError(f"Team work item {index} must be an object")
         item_status = item.get("status", "planned")
-        if item_status in {"skipped", "cancelled"}:
+        if item_status in TERMINAL and not item.get("trackerRefs"):
             item["status"] = item_status
             result.append(item)
             continue
@@ -137,10 +137,12 @@ def task_execution(db: sqlite3.Connection, provider: str, source_id: str) -> dic
     if row is None:
         return {"status": "pending"}
     status = row["status"]
-    if status not in {"completed", "failed", "blocked_user", "queued", "running", "waiting_children"}:
+    if status not in {"completed", "failed", "stale", "blocked_user", "queued", "running", "waiting_children"}:
         normalized = "pending"
     elif status == "waiting_children":
         normalized = "waiting"
+    elif status == "stale":
+        normalized = "failed"
     else:
         normalized = status
     result: dict[str, Any] = {
@@ -212,12 +214,22 @@ def reconcile(args: argparse.Namespace) -> int:
             ).fetchone()
             if parent is None or parent["action"] != "TEAM" or parent["status"] != "waiting_children":
                 continue
-            state = json.loads(workflow["stateJson"])
-            items = load_items(state)
+            try:
+                state = json.loads(workflow["stateJson"])
+                items = load_items(state)
+            except (json.JSONDecodeError, ValueError, KeyError) as exc:
+                # One corrupt workflow must not prevent unrelated Team parents
+                # from being reconciled by the same worker cycle.
+                waiting += 1
+                print(
+                    f"team-coordinator: skipping invalid workflow {workflow['workflowId']}: {exc}",
+                    file=sys.stderr,
+                )
+                continue
             all_terminal = True
             has_failure = False
             for item in items:
-                if item.get("status") in {"skipped", "cancelled"}:
+                if item.get("status") in TERMINAL and not item.get("trackerRefs"):
                     continue
                 refs = item["trackerRefs"]
                 executions = []

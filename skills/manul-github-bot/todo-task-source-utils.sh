@@ -439,6 +439,9 @@ todo_strip_manul_trigger() {
       if (!found && $0 ~ /^[[:space:]]*\/manul[[:space:]]+report([[:space:]]|$)/) {
         sub(/^[[:space:]]*\/manul[[:space:]]+report([[:space:]]+|$)/, "")
         found = 1
+      } else if (!found && tolower($0) ~ /^[[:space:]]*\/manul[[:space:]]+team([[:space:]]|$)/) {
+        sub(/^[[:space:]]*\/manul[[:space:]]+team([[:space:]]+|$)/, "")
+        found = 1
       } else if (!found && $0 ~ /^[[:space:]]*\/manul([[:space:]]|$)/) {
         sub(/^[[:space:]]*\/manul([[:space:]]+|$)/, "")
         found = 1
