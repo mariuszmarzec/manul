@@ -30,7 +30,7 @@ class TeamCoordinatorTests(unittest.TestCase):
             commentId TEXT PRIMARY KEY, repository TEXT, issueNumber INTEGER,
             status TEXT, attempts INTEGER, prNumber INTEGER, prUrl TEXT, taskSourceUrl TEXT,
             taskSourceType TEXT, taskSourceId TEXT, action TEXT, claimToken TEXT,
-            processedAt TEXT, heartbeatAt TEXT, leaseExpiresAt TEXT, workerPid INTEGER,
+            createdAt TEXT, processedAt TEXT, heartbeatAt TEXT, leaseExpiresAt TEXT, workerPid INTEGER,
             nextAttemptAt TEXT, session_id TEXT, agentStartedAt TEXT
           );
         """)
@@ -112,6 +112,7 @@ class TeamCoordinatorTests(unittest.TestCase):
              "todo_local_mcp", "991@0123456789abcdef", "IMPLEMENT")
         )
         self.db.commit()
+        self.db.row_factory = sqlite3.Row
         execution = module.task_execution(self.db, "todo_local_mcp", "991")
         self.assertEqual(execution["status"], "queued")
         self.assertEqual(execution["sourceId"], "991@0123456789abcdef")
