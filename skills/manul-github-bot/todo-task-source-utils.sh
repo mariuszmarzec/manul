@@ -544,6 +544,13 @@ todo_task_to_source_json() {
   body="$title"
   prompt="$(todo_task_prompt "$task_json" "$source_id" "$execution_kind")"
   action="IMPLEMENT"
+  local trigger_action
+  trigger_action="$(jq -r '
+    def nodes: ., (.subTasks[]? | nodes);
+    [nodes | (.description // "") | split("\\n")[]
+      | select(test("^[[:space:]]*/manul[[:space:]]+team([[:space:]]|$)"; "i"))][0] // ""
+  ' <<<"$task_json" | awk '{print tolower($2)}')"
+  if [ "$trigger_action" = "team" ]; then action="TEAM"; fi
   if [ "$execution_kind" = "answer" ]; then
     action="ANSWER"
   else
