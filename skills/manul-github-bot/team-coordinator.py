@@ -162,6 +162,8 @@ def task_execution(db: sqlite3.Connection, provider: str, source_id: str) -> dic
         normalized = "pending"
     elif status == "waiting_children":
         normalized = "waiting"
+    elif status in {"skipped", "cancelled"}:
+        normalized = status
     elif status == "stale":
         normalized = "failed"
     else:
@@ -252,6 +254,8 @@ def reconcile(args: argparse.Namespace) -> int:
             has_failure = False
             for item in items:
                 if item.get("status") in TERMINAL and not item.get("trackerRefs"):
+                    if item.get("status") in {"failed", "cancelled"}:
+                        has_failure = True
                     continue
                 refs = item["trackerRefs"]
                 executions = []
@@ -269,6 +273,12 @@ def reconcile(args: argparse.Namespace) -> int:
                 elif any(status == "blocked_user" for status in executions):
                     item["status"] = "waiting_user"
                     all_terminal = False
+                elif all(status in TERMINAL for status in executions):
+                    if all(status == "skipped" for status in executions):
+                        item["status"] = "skipped"
+                    else:
+                        item["status"] = "failed"
+                        has_failure = True
                 else:
                     item["status"] = "running" if any(
                         status in {"queued", "running", "waiting"} for status in executions
