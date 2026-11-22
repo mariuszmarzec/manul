@@ -667,7 +667,7 @@ close_merged_pr_conversations() {
       AND NOT EXISTS (
         SELECT 1 FROM processed_comments t
         WHERE t.conversationId = c.conversationId
-          AND t.status IN ('queued', 'running', 'blocked_user')
+          AND t.status IN ('queued', 'running', 'waiting_children', 'blocked_user')
       );" 2>>"$LOG") || query_err="FAILED"
   if [ "$query_err" = "FAILED" ]; then
     log "ERROR: failed to query conversations for merged PR auto-close"
