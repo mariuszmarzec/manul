@@ -460,7 +460,7 @@ todo_task_is_answer_request() {
   # an informational answer, even when its goal is phrased as a question.
   if jq -e '
     def nodes: ., (.subTasks[]? | nodes);
-    any([nodes | (.description // "")];
+    any([nodes | (.description // "")][];
       test("(?m)^[[:space:]]*/manul[[:space:]]+team([[:space:]]|$)"; "i"))
   ' <<<"$task_json" >/dev/null 2>&1; then
     return 1

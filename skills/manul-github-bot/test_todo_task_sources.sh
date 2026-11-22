@@ -551,6 +551,8 @@ team_source="$(todo_task_to_source_json "$team_root" todo_local_mcp "$team_resol
 assert_eq "Todo /manul team retains a dedicated action" "TEAM" "$(jq -r '.action' <<<"$team_source")"
 assert_contains "Todo Team prompt retains the requested outcome" "$(jq -r '.prompt' <<<"$team_source")" "add notification center"
 if todo_task_is_answer_request "$team_root"; then fail "Todo /manul team must never use the no-repository answer path"; else ok "Todo /manul team is always repository-backed"; fi
+team_nested_root='{"id":992,"description":"Parent feature","subTasks":[{"description":"/manul team add nested notification flow","subTasks":[],"isToDo":true}],"isToDo":true}'
+if todo_task_is_answer_request "$team_nested_root"; then fail "Nested /manul team must never use the no-repository answer path"; else ok "Nested Todo /manul team is repository-backed"; fi
 
 remote_resolution="$(todo_task_resolve_repository "$REMOTE_SOURCE" '{"id":91,"description":"/manul Implement remote project"}')"
 assert_eq "remote alias resolves the remote project" "owner/remote" "$(jq -r '.repository' <<<"$remote_resolution")"
