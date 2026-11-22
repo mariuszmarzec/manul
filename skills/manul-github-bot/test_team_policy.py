@@ -58,7 +58,7 @@ class TeamPolicyTests(unittest.TestCase):
             root = Path(temp)
             (root / ".manul").mkdir()
             (root / ".manul/team.yaml").write_text(
-                "version: 1\\nprApprovedByMan: false\\ntrackers:\\n  - github_issues\\n  - todo_remote_mcp\\n"
+                "version: 1\nprApprovedByMan: false\ntrackers:\n  - github_issues\n  - todo_remote_mcp\n"
             )
             result = module.read_team_config(root)
             self.assertIs(result["prApprovedByMan"], False)
@@ -66,9 +66,9 @@ class TeamPolicyTests(unittest.TestCase):
 
     def test_team_config_rejects_duplicate_and_unknown_keys(self):
         for content, expected in [
-            ("version: 1\\nversion: 1\\n", "duplicate"),
-            ("version: 1\\nunknown: yes\\n", "unsupported"),
-            ("version: 1\\nprApprovedByMan: maybe\\n", "must be true or false"),
+            ("version: 1\nversion: 1\n", "duplicate"),
+            ("version: 1\nunknown: yes\n", "unsupported"),
+            ("version: 1\nprApprovedByMan: maybe\n", "must be true or false"),
         ]:
             with self.subTest(content=content), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
