@@ -145,13 +145,19 @@ parse_command() {
   known_agents="$known_agents orchestrator sdd"
 
   # Known actions
-  local known_actions="run review-fix continue verify investigate status close"
+  local known_actions="run team review-fix continue verify investigate status close"
 
   # First token is the action
   local first_token
   first_token="$(echo "$cmd" | awk '{print tolower($1)}')"
 
   case "$first_token" in
+    team)
+      action="TEAM"
+      # Team is an orchestration entry point; the daemon resolves its owner
+      # after repository policy and SDD rules have been inspected.
+      prompt="$(echo "$cmd" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')"
+      ;;
     run)
       action="IMPLEMENT"
       local run_args

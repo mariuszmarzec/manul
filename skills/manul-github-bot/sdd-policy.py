@@ -343,7 +343,7 @@ def inspect(args):
     prompt=args.prompt.strip()
     first=prompt.split(maxsplit=1)[0].lower() if prompt else ""
     bootstrap=args.action=="IMPLEMENT" and args.agent=="sdd" and first=="bootstrap"
-    if args.action not in {"IMPLEMENT","REVIEW_FIX"}:
+    if args.action not in {"IMPLEMENT","REVIEW_FIX","TEAM"}:
         return emit(True,mode="standard",route_agent=args.agent,reason="non-implementation task")
     spec_dir=root/".specification"
     if spec_dir.is_symlink():
@@ -408,7 +408,10 @@ def inspect(args):
         return emit(False,mode=mode,error=f"Required SDD skill is missing: {skill}")
     if args.agent not in {"","main","orchestrator","sdd"}:
         return emit(False,mode=mode,error=f"Direct role '{args.agent}' cannot bypass SDD. Use an ordinary /manul request or /manul sdd <request>.")
-    return emit(True,mode=mode,route_agent=("sdd" if args.agent=="sdd" else "orchestrator"),skill_path=str(skill))
+    # A Team workflow in an SDD repository remains owned by the SDD lifecycle.
+    # Keep ordinary IMPLEMENT/REVIEW_FIX routing unchanged.
+    route_agent = "sdd" if args.agent == "sdd" or args.action == "TEAM" else "orchestrator"
+    return emit(True,mode=mode,route_agent=route_agent,skill_path=str(skill))
 
 def main(argv=None):
     parser=argparse.ArgumentParser()
