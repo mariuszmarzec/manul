@@ -4106,7 +4106,9 @@ else
     else
       MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     fi
-    [[ "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] && [ "$MAX_ATTEMPTS" -ge 1 ] || MAX_ATTEMPTS=20
+    if ! [[ "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] || [ "$MAX_ATTEMPTS" -lt 1 ]; then
+      if [ "$QUEUED_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
+    fi
 
     if [ "$FAILURE_CODE" = "RUNTIME_PERMISSION_BLOCKED" ]; then
       # Permission denials are deterministic until the operator/policy changes.
@@ -4397,8 +4399,10 @@ dispatch_once() {
     else
       MAX_ATTEMPTS="$(jq -r '.automation.maxAttemptsBeforeFail // 3' "$CONFIG" 2>/dev/null || echo 3)"
     fi
-    [[ "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] && [ "$MAX_ATTEMPTS" -ge 1 ] || MAX_ATTEMPTS=20
-    if [ "\${ACTUAL_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
+    if ! [[ "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] || [ "$MAX_ATTEMPTS" -lt 1 ]; then
+      if [ "$TASK_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
+    fi
+    if [ "${ACTUAL_ATTEMPTS:-0}" -ge "$MAX_ATTEMPTS" ]; then
       log "dispatch: task $COMMENT_ID already at max attempts ($ACTUAL_ATTEMPTS >= $MAX_ATTEMPTS), marking as failed"
       lc_log "TASK_MAX_ATTEMPTS" "task=$COMMENT_ID repo=$REPO attempts=$ACTUAL_ATTEMPTS max=$MAX_ATTEMPTS"
       sqlite3 "$DB" "UPDATE processed_comments SET status='failed', processedAt=datetime('now'), heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, nextAttemptAt=NULL WHERE commentId='$safe_comment_id' AND status='queued' AND attempts >= $MAX_ATTEMPTS;" 2>/dev/null
