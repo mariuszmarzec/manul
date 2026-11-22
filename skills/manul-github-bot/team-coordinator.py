@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -65,6 +66,14 @@ def load_items(state: dict[str, Any]) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"Team work item {item.get('id', index)!r} has an unsupported or incomplete trackerRef"
                 )
+            if provider == "github_issues" and not re.fullmatch(
+                r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*", source_id
+            ):
+                raise ValueError(f"Invalid GitHub task source ID in Team item {item.get('id', index)!r}")
+            if provider in {"todo_local_mcp", "todo_remote_mcp"} and not re.fullmatch(
+                r"[1-9][0-9]*(?:@[0-9a-f]{16})?", source_id
+            ):
+                raise ValueError(f"Invalid Todo task source ID in Team item {item.get('id', index)!r}")
         result.append(item)
     return result
 
@@ -127,13 +136,25 @@ def park(args: argparse.Namespace) -> int:
 
 
 def task_execution(db: sqlite3.Connection, provider: str, source_id: str) -> dict[str, Any]:
-    row = db.execute(
-        """SELECT commentId,repository,issueNumber,status,attempts,prNumber,prUrl,taskSourceUrl
-           FROM processed_comments
-           WHERE taskSourceType=? AND taskSourceId=?
-           ORDER BY createdAt DESC, rowid DESC LIMIT 1""",
-        (provider, source_id),
-    ).fetchone()
+    if provider in {"todo_local_mcp", "todo_remote_mcp"} and source_id.isdecimal():
+        # Todo's task-source adapter appends a structural fingerprint to its
+        # source ID. The MCP create API returns the numeric root ID, not that
+        # Manul-specific fingerprint; resolve the latest polled version safely.
+        row = db.execute(
+            """SELECT commentId,repository,issueNumber,status,attempts,prNumber,prUrl,taskSourceUrl,taskSourceId
+               FROM processed_comments
+               WHERE taskSourceType=? AND (taskSourceId=? OR taskSourceId LIKE ?)
+               ORDER BY createdAt DESC, rowid DESC LIMIT 1""",
+            (provider, source_id, source_id + "@%"),
+        ).fetchone()
+    else:
+        row = db.execute(
+            """SELECT commentId,repository,issueNumber,status,attempts,prNumber,prUrl,taskSourceUrl,taskSourceId
+               FROM processed_comments
+               WHERE taskSourceType=? AND taskSourceId=?
+               ORDER BY createdAt DESC, rowid DESC LIMIT 1""",
+            (provider, source_id),
+        ).fetchone()
     if row is None:
         return {"status": "pending"}
     status = row["status"]
@@ -148,6 +169,7 @@ def task_execution(db: sqlite3.Connection, provider: str, source_id: str) -> dic
     result: dict[str, Any] = {
         "status": normalized,
         "taskId": row["commentId"],
+        "sourceId": row["taskSourceId"],
         "repository": row["repository"],
         "issueNumber": row["issueNumber"],
         "attempts": row["attempts"],

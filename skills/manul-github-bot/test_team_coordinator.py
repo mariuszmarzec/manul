@@ -103,6 +103,19 @@ class TeamCoordinatorTests(unittest.TestCase):
         self.db.commit()
         self.assertEqual(self.run_park(), 2)
 
+    def test_todo_numeric_id_resolves_latest_fingerprinted_source(self):
+        self.db.execute(
+            """INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,
+                 prNumber,prUrl,taskSourceType,taskSourceId,action)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            ("todo-child", "owner/repo", 991, "queued", 0, None, None,
+             "todo_local_mcp", "991@0123456789abcdef", "IMPLEMENT")
+        )
+        self.db.commit()
+        execution = module.task_execution(self.db, "todo_local_mcp", "991")
+        self.assertEqual(execution["status"], "queued")
+        self.assertEqual(execution["sourceId"], "991@0123456789abcdef")
+
     def test_reconcile_waits_while_child_is_queued(self):
         self.db.execute(
             """INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,
