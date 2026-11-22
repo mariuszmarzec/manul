@@ -5910,7 +5910,7 @@ TEAM_CHECKPOINT_PROTOCOL
 
      # Call production completion evaluation function
           local delivery_mode="implementation"
-     if [[ "$TASK_ACTION" == "VERIFY" || "$TASK_ACTION" == "TEAM" ]]; then delivery_mode="comment_only"; fi
+     if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
      evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE" "$TASK_EXECUTION_KIND"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
