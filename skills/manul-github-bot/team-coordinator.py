@@ -158,7 +158,7 @@ def task_execution(db: sqlite3.Connection, provider: str, source_id: str) -> dic
     if row is None:
         return {"status": "pending"}
     status = row["status"]
-    if status not in {"completed", "failed", "stale", "blocked_user", "queued", "running", "waiting_children"}:
+    if status not in {"completed", "failed", "stale", "blocked_user", "queued", "running", "waiting_children", "skipped", "cancelled"}:
         normalized = "pending"
     elif status == "waiting_children":
         normalized = "waiting"
