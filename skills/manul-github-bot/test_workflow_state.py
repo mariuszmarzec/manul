@@ -89,7 +89,7 @@ class WorkflowStateTests(unittest.TestCase):
             "event-key-a",
         )
 
-    def test_parent_can_acknowledge_pending_events_without_losing_deduplication(self):
+    def test_empty_pending_list_without_ack_does_not_drop_events(self):
         checkpoint = {
             **self.base,
             "phase": "waiting_children",
@@ -108,12 +108,37 @@ class WorkflowStateTests(unittest.TestCase):
         }
         self.assertTrue(self.persist(checkpoint))
         stored = self.stored_state()
+        self.assertEqual(
+            stored["data"]["coordinator"]["pendingChildEvents"][0]["eventId"],
+            "event-a",
+        )
+
+    def test_parent_can_acknowledge_exact_pending_event_without_losing_deduplication(self):
+        checkpoint = {
+            **self.base,
+            "phase": "waiting_children",
+            "status": "waiting_children",
+            "data": {
+                "items": [{
+                    "id": "work-a",
+                    "status": "completed",
+                    "trackerRefs": [{
+                        "provider": "github_issues",
+                        "sourceId": "owner/repo#11"
+                    }],
+                }],
+                "coordinator": {"acknowledgedChildEventIds": ["event-a"]},
+            },
+        }
+        self.assertTrue(self.persist(checkpoint))
+        stored = self.stored_state()
         self.assertEqual(stored["data"]["coordinator"]["pendingChildEvents"], [])
         self.assertEqual(stored["data"]["coordinator"]["wakeSequence"], 3)
         self.assertEqual(
             stored["data"]["items"][0]["lastDispatchedEventKey"],
             "event-key-a",
         )
+
 
 
 if __name__ == "__main__":
