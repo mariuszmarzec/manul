@@ -56,19 +56,72 @@ def validate(raw,repo):
         raise ValueError("workflow data must be an object")
     return {"workflowId":wid,"workflowType":wtype,"repository":repo,"phase":phase,"status":status,"data":redact(data)}
 
+def preserve_team_coordinator_state(db,event):
+    if event.get("workflowType") != "team":
+        return
+    row=db.execute(
+        "SELECT stateJson FROM workflow_instances WHERE workflowId=?",
+        (event["workflowId"],)
+    ).fetchone()
+    if row is None:
+        return
+    try:
+        previous=json.loads(row["stateJson"])
+    except (TypeError,json.JSONDecodeError) as exc:
+        raise ValueError("existing Team checkpoint is invalid; refusing to discard coordinator state") from exc
+
+    previous_data=previous.get("data",{})
+    new_data=event.get("data",{})
+    if not isinstance(previous_data,dict) or not isinstance(new_data,dict):
+        raise ValueError("Team checkpoint data must remain an object")
+
+    previous_coordinator=previous_data.get("coordinator")
+    new_coordinator=new_data.get("coordinator")
+    if isinstance(previous_coordinator,dict):
+        submitted=new_coordinator if isinstance(new_coordinator,dict) else {}
+        merged=dict(submitted)
+        # These fields are coordinator-owned. Only the parent may explicitly
+        # acknowledge pending events by submitting pendingChildEvents: [].
+        for key,value in previous_coordinator.items():
+            if key != "pendingChildEvents" or "pendingChildEvents" not in submitted:
+                merged[key]=value
+        new_data["coordinator"]=merged
+
+    previous_items=previous_data.get("items",[])
+    new_items=new_data.get("items",[])
+    if isinstance(previous_items,list) and isinstance(new_items,list):
+        dispatched_keys={
+            item.get("id"):item.get("lastDispatchedEventKey")
+            for item in previous_items
+            if isinstance(item,dict)
+            and isinstance(item.get("id"),str)
+            and isinstance(item.get("lastDispatchedEventKey"),str)
+        }
+        for item in new_items:
+            if isinstance(item,dict) and item.get("id") in dispatched_keys:
+                item["lastDispatchedEventKey"]=dispatched_keys[item["id"]]
+
+
 def persist(db,event,repo,task,conversation):
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-    canonical=json.dumps(event,ensure_ascii=False,sort_keys=True,separators=(",",":"))
-    event_key=hashlib.sha256(f"{event['workflowId']}|{task}|{canonical}".encode()).hexdigest()
-    with db:
-        existing=db.execute("SELECT workflowType,repository FROM workflow_instances WHERE workflowId=?",(event["workflowId"],)).fetchone()
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        existing=db.execute(
+            "SELECT workflowType,repository FROM workflow_instances WHERE workflowId=?",
+            (event["workflowId"],)
+        ).fetchone()
         if existing and (existing["workflowType"]!=event["workflowType"] or existing["repository"]!=repo):
             raise ValueError("workflow ID is bound to another type or repository")
+
+        preserve_team_coordinator_state(db,event)
+        canonical=json.dumps(event,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+        event_key=hashlib.sha256(f"{event['workflowId']}|{task}|{canonical}".encode()).hexdigest()
         inserted=db.execute("""INSERT OR IGNORE INTO workflow_events
         (workflowId,eventKey,workflowType,repository,taskId,conversationId,phase,status,payloadJson,createdAt)
         VALUES (?,?,?,?,?,?,?,?,?,?)""",(event["workflowId"],event_key,event["workflowType"],repo,task or None,
         conversation or None,event["phase"],event["status"],canonical,now)).rowcount
         if not inserted:
+            db.commit()
             return False
         db.execute("""INSERT INTO workflow_instances
         (workflowId,workflowType,repository,sourceTaskId,conversationId,phase,status,stateJson,version,createdAt,updatedAt)
@@ -79,7 +132,12 @@ def persist(db,event,repo,task,conversation):
         version=workflow_instances.version+1,updatedAt=excluded.updatedAt""",
         (event["workflowId"],event["workflowType"],repo,task or None,conversation or None,
         event["phase"],event["status"],canonical,now,now))
-    return True
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
+
 
 def record_output(args):
     content=Path(args.output).read_text(encoding="utf-8",errors="replace")
