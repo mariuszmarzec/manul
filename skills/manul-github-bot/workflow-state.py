@@ -110,16 +110,30 @@ def preserve_team_coordinator_state(db,event):
     previous_items=previous_data.get("items",[])
     new_items=new_data.get("items",[])
     if isinstance(previous_items,list) and isinstance(new_items,list):
-        dispatched_keys={
-            item.get("id"):item.get("lastDispatchedEventKey")
-            for item in previous_items
-            if isinstance(item,dict)
-            and isinstance(item.get("id"),str)
-            and isinstance(item.get("lastDispatchedEventKey"),str)
+        new_by_id={
+            item.get("id"):item for item in new_items
+            if isinstance(item,dict) and isinstance(item.get("id"),str)
         }
-        for item in new_items:
-            if isinstance(item,dict) and item.get("id") in dispatched_keys:
-                item["lastDispatchedEventKey"]=dispatched_keys[item["id"]]
+        for previous_item in previous_items:
+            if not isinstance(previous_item,dict) or not isinstance(previous_item.get("id"),str):
+                continue
+            item=new_by_id.get(previous_item["id"])
+            if item is None:
+                # Existing child work must not disappear from the durable graph
+                # because a resumed model omitted it from a later checkpoint.
+                copied=json.loads(json.dumps(previous_item))
+                new_items.append(copied)
+                new_by_id[previous_item["id"]]=copied
+                continue
+            # Stable tracker references and dependency edges are durable
+            # identity, not optional prompt context. Preserve them on omission.
+            for key in ("trackerRefs","dependsOn","parentId"):
+                if key not in item or (key == "trackerRefs" and not item[key]):
+                    if key in previous_item:
+                        item[key]=previous_item[key]
+            if isinstance(previous_item.get("lastDispatchedEventKey"),str):
+                item["lastDispatchedEventKey"]=previous_item["lastDispatchedEventKey"]
+        new_data["items"]=new_items
 
 
 def persist(db,event,repo,task,conversation):
