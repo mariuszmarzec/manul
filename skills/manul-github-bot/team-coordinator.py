@@ -112,7 +112,8 @@ def park(args: argparse.Namespace) -> int:
             """UPDATE processed_comments
                SET status='waiting_children',processedAt=?,heartbeatAt=NULL,
                    leaseExpiresAt=NULL,workerPid=NULL,claimToken=NULL,
-                   nextAttemptAt=NULL,session_id=NULL,agentStartedAt=NULL
+                   nextAttemptAt=NULL,session_id=NULL,agentStartedAt=NULL,
+                   attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END
                WHERE commentId=? AND status='running' AND claimToken=?""",
             (now(), args.task_id, args.claim_token),
         ).rowcount
