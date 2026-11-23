@@ -56,19 +56,110 @@ def validate(raw,repo):
         raise ValueError("workflow data must be an object")
     return {"workflowId":wid,"workflowType":wtype,"repository":repo,"phase":phase,"status":status,"data":redact(data)}
 
+def preserve_team_coordinator_state(db,event):
+    if event.get("workflowType") != "team":
+        return
+    row=db.execute(
+        "SELECT stateJson FROM workflow_instances WHERE workflowId=?",
+        (event["workflowId"],)
+    ).fetchone()
+    if row is None:
+        return
+    try:
+        previous=json.loads(row["stateJson"])
+    except (TypeError,json.JSONDecodeError) as exc:
+        raise ValueError("existing Team checkpoint is invalid; refusing to discard coordinator state") from exc
+
+    previous_data=previous.get("data",{})
+    new_data=event.get("data",{})
+    if not isinstance(previous_data,dict) or not isinstance(new_data,dict):
+        raise ValueError("Team checkpoint data must remain an object")
+
+    previous_coordinator=previous_data.get("coordinator")
+    new_coordinator=new_data.get("coordinator")
+    if isinstance(previous_coordinator,dict):
+        submitted=new_coordinator if isinstance(new_coordinator,dict) else {}
+        merged=dict(submitted)
+
+        previous_pending=previous_coordinator.get("pendingChildEvents",[])
+        if not isinstance(previous_pending,list):
+            raise ValueError("stored Team pendingChildEvents must be an array")
+        acknowledged=submitted.get("acknowledgedChildEventIds",[])
+        if not isinstance(acknowledged,list) or any(
+            not isinstance(event_id,str) or not event_id for event_id in acknowledged
+        ):
+            raise ValueError("acknowledgedChildEventIds must be an array of non-empty strings")
+        acknowledged_ids=set(acknowledged)
+
+        # Pending events are coordinator-owned. A model checkpoint cannot
+        # discard them by omission or by submitting pendingChildEvents: [].
+        # It must explicitly acknowledge each exact event ID it has handled.
+        merged["pendingChildEvents"]=[
+            pending for pending in previous_pending
+            if not isinstance(pending,dict) or pending.get("eventId") not in acknowledged_ids
+        ]
+        merged.pop("acknowledgedChildEventIds",None)
+
+        # Wake metadata and sequence are also coordinator-owned; only the
+        # coordinator itself may advance them.
+        for key,value in previous_coordinator.items():
+            if key != "pendingChildEvents":
+                merged[key]=value
+        new_data["coordinator"]=merged
+
+    previous_items=previous_data.get("items",[])
+    new_items=new_data.get("items",[])
+    if isinstance(previous_items,list) and isinstance(new_items,list):
+        new_by_id={
+            item.get("id"):item for item in new_items
+            if isinstance(item,dict) and isinstance(item.get("id"),str)
+        }
+        for previous_item in previous_items:
+            if not isinstance(previous_item,dict) or not isinstance(previous_item.get("id"),str):
+                continue
+            item=new_by_id.get(previous_item["id"])
+            if item is None:
+                # Existing child work must not disappear from the durable graph
+                # because a resumed model omitted it from a later checkpoint.
+                copied=json.loads(json.dumps(previous_item))
+                new_items.append(copied)
+                new_by_id[previous_item["id"]]=copied
+                continue
+            # Existing item data is durable. Preserve omitted fields so a
+            # resumed model cannot silently reset a terminal local item or
+            # discard dependency/ownership metadata.
+            for key,value in previous_item.items():
+                if key not in item:
+                    item[key]=value
+            # An empty tracker list is not a request to orphan an existing
+            # tracker-backed child task.
+            if not item.get("trackerRefs") and previous_item.get("trackerRefs"):
+                item["trackerRefs"]=previous_item["trackerRefs"]
+            if isinstance(previous_item.get("lastDispatchedEventKey"),str):
+                item["lastDispatchedEventKey"]=previous_item["lastDispatchedEventKey"]
+        new_data["items"]=new_items
+
+
 def persist(db,event,repo,task,conversation):
     now=datetime.now(timezone.utc).isoformat(timespec="seconds")
-    canonical=json.dumps(event,ensure_ascii=False,sort_keys=True,separators=(",",":"))
-    event_key=hashlib.sha256(f"{event['workflowId']}|{task}|{canonical}".encode()).hexdigest()
-    with db:
-        existing=db.execute("SELECT workflowType,repository FROM workflow_instances WHERE workflowId=?",(event["workflowId"],)).fetchone()
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        existing=db.execute(
+            "SELECT workflowType,repository FROM workflow_instances WHERE workflowId=?",
+            (event["workflowId"],)
+        ).fetchone()
         if existing and (existing["workflowType"]!=event["workflowType"] or existing["repository"]!=repo):
             raise ValueError("workflow ID is bound to another type or repository")
+
+        preserve_team_coordinator_state(db,event)
+        canonical=json.dumps(event,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+        event_key=hashlib.sha256(f"{event['workflowId']}|{task}|{canonical}".encode()).hexdigest()
         inserted=db.execute("""INSERT OR IGNORE INTO workflow_events
         (workflowId,eventKey,workflowType,repository,taskId,conversationId,phase,status,payloadJson,createdAt)
         VALUES (?,?,?,?,?,?,?,?,?,?)""",(event["workflowId"],event_key,event["workflowType"],repo,task or None,
         conversation or None,event["phase"],event["status"],canonical,now)).rowcount
         if not inserted:
+            db.commit()
             return False
         db.execute("""INSERT INTO workflow_instances
         (workflowId,workflowType,repository,sourceTaskId,conversationId,phase,status,stateJson,version,createdAt,updatedAt)
@@ -79,7 +170,12 @@ def persist(db,event,repo,task,conversation):
         version=workflow_instances.version+1,updatedAt=excluded.updatedAt""",
         (event["workflowId"],event["workflowType"],repo,task or None,conversation or None,
         event["phase"],event["status"],canonical,now,now))
-    return True
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
+
 
 def record_output(args):
     content=Path(args.output).read_text(encoding="utf-8",errors="replace")
