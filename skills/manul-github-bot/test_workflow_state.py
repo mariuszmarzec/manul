@@ -30,6 +30,14 @@ class WorkflowStateTests(unittest.TestCase):
                         "provider": "github_issues",
                         "sourceId": "owner/repo#11"
                     }],
+                }, {
+                    "id": "work-b",
+                    "status": "running",
+                    "dependsOn": ["work-a"],
+                    "trackerRefs": [{
+                        "provider": "github_issues",
+                        "sourceId": "owner/repo#12"
+                    }],
                 }],
                 "coordinator": {
                     "pendingChildEvents": [{
@@ -88,6 +96,9 @@ class WorkflowStateTests(unittest.TestCase):
             stored["data"]["items"][0]["lastDispatchedEventKey"],
             "event-key-a",
         )
+        work_b = next(item for item in stored["data"]["items"] if item["id"] == "work-b")
+        self.assertEqual(work_b["trackerRefs"][0]["sourceId"], "owner/repo#12")
+        self.assertEqual(work_b["dependsOn"], ["work-a"])
 
     def test_empty_pending_list_without_ack_does_not_drop_events(self):
         checkpoint = {
