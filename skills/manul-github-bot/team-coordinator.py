@@ -253,7 +253,6 @@ def reconcile(args: argparse.Namespace) -> int:
 
             all_terminal = True
             new_events: list[dict[str, Any]] = []
-            new_failure = False
 
             for index, item in enumerate(items):
                 tracker_refs = item.get("trackerRefs", [])
@@ -314,8 +313,6 @@ def reconcile(args: argparse.Namespace) -> int:
                 if item.get("lastDispatchedEventKey") != event_id:
                     item["lastDispatchedEventKey"] = event_id
                     new_events.append({"eventId": event_id, **event_payload})
-                    if item_status in {"failed", "cancelled"}:
-                        new_failure = True
 
             state["data"]["items"] = items
             coordinator = state["data"].setdefault("coordinator", {})
@@ -339,12 +336,16 @@ def reconcile(args: argparse.Namespace) -> int:
                 # children remain active. Multiple completions in one poll are
                 # batched into a single parent run.
                 state["status"] = "active"
-                phase = "replanning" if new_failure else "integration"
+                pending_failure = any(
+                    isinstance(event, dict) and event.get("status") in {"failed", "cancelled"}
+                    for event in pending_events
+                )
+                phase = "replanning" if pending_failure else "integration"
                 state["phase"] = phase
                 coordinator["lastWakeAt"] = now()
                 coordinator["wakeSequence"] = int(coordinator.get("wakeSequence", 0)) + 1
                 coordinator["lastWakeReason"] = (
-                    "child_failure" if new_failure else
+                    "child_failure" if pending_failure else
                     "all_children_terminal" if all_terminal else
                     "child_progress"
                 )
