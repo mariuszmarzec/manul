@@ -81,6 +81,32 @@ class TeamCoordinatorTests(unittest.TestCase):
         import argparse
         return module.reconcile(argparse.Namespace(db=self.db_path))
 
+    def set_waiting_items(self, items):
+        state = json.loads(json.dumps(self.state))
+        state["status"] = "waiting_children"
+        state["phase"] = "waiting_children"
+        state["data"]["items"] = items
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=?,status='waiting_children',phase='waiting_children' WHERE workflowId=?",
+            (json.dumps(state), self.workflow_id)
+        )
+        self.db.execute(
+            "UPDATE processed_comments SET status='waiting_children',claimToken=NULL WHERE commentId=?",
+            (self.parent_id,)
+        )
+        self.db.commit()
+
+    def insert_child(self, number, status, attempts=1, pr_number=None, pr_url=None):
+        comment_id = f"source:github_issues:owner/repo#{number}"
+        source_id = f"owner/repo#{number}"
+        self.db.execute(
+            """INSERT INTO processed_comments(commentId,repository,issueNumber,status,attempts,
+                 prNumber,prUrl,taskSourceType,taskSourceId,action)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (comment_id, "owner/repo", number, status, attempts, pr_number, pr_url,
+             "github_issues", source_id, "IMPLEMENT")
+        )
+
     def test_park_transitions_only_current_claim_to_waiting_children(self):
         self.assertEqual(self.run_park(), 0)
         row = self.db.execute(
@@ -260,6 +286,147 @@ class TeamCoordinatorTests(unittest.TestCase):
             "SELECT phase FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
         ).fetchone()[0]
         self.assertEqual(phase, "replanning")
+
+    def test_reconcile_wakes_parent_after_one_child_completes_and_deduplicates(self):
+        self.set_waiting_items([
+            {"id": "work-a", "status": "created",
+             "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]},
+            {"id": "work-b", "status": "created",
+             "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]},
+        ])
+        self.insert_child(11, "completed", pr_number=21,
+                          pr_url="https://github.com/owner/repo/pull/21")
+        self.insert_child(12, "queued", attempts=0)
+        self.db.commit()
+
+        self.assertEqual(self.run_reconcile(), 0)
+        parent_status = self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0]
+        self.assertEqual(parent_status, "queued")
+
+        stored = self.db.execute(
+            "SELECT phase,stateJson FROM workflow_instances WHERE workflowId=?",
+            (self.workflow_id,)
+        ).fetchone()
+        self.assertEqual(stored[0], "integration")
+        state = json.loads(stored[1])
+        items = {item["id"]: item for item in state["data"]["items"]}
+        self.assertEqual(items["work-a"]["status"], "completed")
+        self.assertEqual(items["work-b"]["status"], "running")
+        pending = state["data"]["coordinator"]["pendingChildEvents"]
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["itemId"], "work-a")
+        self.assertEqual(pending[0]["status"], "completed")
+        self.assertEqual(pending[0]["trackerRefs"][0]["execution"]["prNumber"], 21)
+
+        # A queued parent is not woken repeatedly by the same child snapshot.
+        self.assertEqual(self.run_reconcile(), 0)
+        self.assertEqual(self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0], "queued")
+
+        # Simulate the parent consuming A's event and parking again while B runs.
+        state["status"] = "waiting_children"
+        state["phase"] = "dispatching"
+        state["data"]["coordinator"]["pendingChildEvents"] = []
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=?,status='waiting_children',phase='dispatching' WHERE workflowId=?",
+            (json.dumps(state), self.workflow_id)
+        )
+        self.db.execute(
+            "UPDATE processed_comments SET status='running',claimToken='claim-2' WHERE commentId=?",
+            (self.parent_id,)
+        )
+        self.db.commit()
+        self.assertEqual(self.run_park("claim-2"), 0)
+
+        # The same completed A result is already delivered; B is still active.
+        self.assertEqual(self.run_reconcile(), 0)
+        self.assertEqual(self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0], "waiting_children")
+
+        # B's later completion creates a second, distinct parent wake.
+        self.db.execute(
+            "UPDATE processed_comments SET status='completed',attempts=1,prNumber=22,"
+            "prUrl='https://github.com/owner/repo/pull/22' "
+            "WHERE taskSourceType='github_issues' AND taskSourceId='owner/repo#12'"
+        )
+        self.db.commit()
+        self.assertEqual(self.run_reconcile(), 0)
+        self.assertEqual(self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0], "queued")
+        final_state = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        pending = final_state["data"]["coordinator"]["pendingChildEvents"]
+        self.assertEqual([event["itemId"] for event in pending], ["work-b"])
+
+    def test_reconcile_batches_child_completions_seen_in_same_cycle(self):
+        self.set_waiting_items([
+            {"id": "work-a", "status": "created",
+             "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]},
+            {"id": "work-b", "status": "created",
+             "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]},
+        ])
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "completed", pr_number=22)
+        self.db.commit()
+
+        self.assertEqual(self.run_reconcile(), 0)
+        self.assertEqual(self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0], "queued")
+        state = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        pending = state["data"]["coordinator"]["pendingChildEvents"]
+        self.assertEqual({event["itemId"] for event in pending}, {"work-a", "work-b"})
+        self.assertEqual(state["data"]["coordinator"]["wakeSequence"], 1)
+
+    def test_reconcile_wakes_for_failure_while_another_child_is_running(self):
+        self.set_waiting_items([
+            {"id": "work-a", "status": "created",
+             "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]},
+            {"id": "work-b", "status": "created",
+             "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]},
+        ])
+        self.insert_child(11, "failed", attempts=3)
+        self.insert_child(12, "queued", attempts=0)
+        self.db.commit()
+
+        self.assertEqual(self.run_reconcile(), 0)
+        self.assertEqual(self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0], "queued")
+        state = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        self.assertEqual(state["phase"], "replanning")
+        items = {item["id"]: item for item in state["data"]["items"]}
+        self.assertEqual(items["work-a"]["status"], "failed")
+        self.assertEqual(items["work-b"]["status"], "running")
+        self.assertEqual(
+            [event["status"] for event in state["data"]["coordinator"]["pendingChildEvents"]],
+            ["failed"]
+        )
+
+    def test_child_completed_before_parent_parks_is_detected_after_park(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.db.commit()
+
+        # The child can finish while the parent is still executing its plan.
+        self.assertEqual(self.run_park(), 0)
+        self.assertEqual(self.run_reconcile(), 0)
+        self.assertEqual(self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0], "queued")
+        state = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        self.assertEqual(len(state["data"]["coordinator"]["pendingChildEvents"]), 1)
 
     def test_blocked_child_does_not_wake_parent(self):
         self.db.execute(
