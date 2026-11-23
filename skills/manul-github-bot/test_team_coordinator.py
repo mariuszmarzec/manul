@@ -110,10 +110,10 @@ class TeamCoordinatorTests(unittest.TestCase):
     def test_park_transitions_only_current_claim_to_waiting_children(self):
         self.assertEqual(self.run_park(), 0)
         row = self.db.execute(
-            "SELECT status,claimToken,heartbeatAt,workerPid FROM processed_comments WHERE commentId=?",
+            "SELECT status,claimToken,heartbeatAt,workerPid,attempts FROM processed_comments WHERE commentId=?",
             (self.parent_id,)
         ).fetchone()
-        self.assertEqual(row, ("waiting_children", None, None, None))
+        self.assertEqual(row, ("waiting_children", None, None, None, 0))
 
     def test_park_rejects_stale_claim(self):
         self.assertEqual(self.run_park("old-claim"), 2)
@@ -335,11 +335,14 @@ class TeamCoordinatorTests(unittest.TestCase):
             (json.dumps(state), self.workflow_id)
         )
         self.db.execute(
-            "UPDATE processed_comments SET status='running',claimToken='claim-2' WHERE commentId=?",
+            "UPDATE processed_comments SET status='running',claimToken='claim-2',attempts=attempts+1 WHERE commentId=?",
             (self.parent_id,)
         )
         self.db.commit()
         self.assertEqual(self.run_park("claim-2"), 0)
+        self.assertEqual(self.db.execute(
+            "SELECT attempts FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0], 0)
 
         # The same completed A result is already delivered; B is still active.
         self.assertEqual(self.run_reconcile(), 0)
