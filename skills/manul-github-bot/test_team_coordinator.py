@@ -91,7 +91,8 @@ class TeamCoordinatorTests(unittest.TestCase):
             (json.dumps(state), self.workflow_id)
         )
         self.db.execute(
-            "UPDATE processed_comments SET status='waiting_children',claimToken=NULL WHERE commentId=?",
+            "UPDATE processed_comments SET status='waiting_children',claimToken=NULL,"
+            "attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END WHERE commentId=?",
             (self.parent_id,)
         )
         self.db.commit()
