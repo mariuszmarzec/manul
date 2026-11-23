@@ -253,6 +253,15 @@ Manul execution workspaces. Every independently executable work item must be
 a separate root task to receive its own Manul workspace. Nested Todo subtasks
 remain ordered steps within one task and do not create separate executions.
 
+The parent is event-driven, not a barrier over the full child set. When one
+logical work item reaches a terminal state across its tracker references, the
+coordinator wakes the parent even if sibling tasks are still running. Multiple
+new completions are batched into one wake; later completions can wake it again.
+Stable event signatures prevent duplicate delivery when polling or re-parking.
+The parent processes pending child events, can dispatch newly unblocked work,
+then parks again while other items remain active. A child that completes while
+the parent is running is picked up after its next park.
+
 A Team request in an SDD-enabled repository is routed to the SDD lifecycle
 owner. SDD specification and human approval gates remain mandatory even when
 `prApprovedByMan: false`.
