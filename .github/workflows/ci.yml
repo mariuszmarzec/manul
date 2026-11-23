@@ -26,6 +26,7 @@ jobs:
       - name: Test Team workflow coordinator and policy
         run: |
           python3 skills/manul-github-bot/test_team_coordinator.py
+          python3 skills/manul-github-bot/test_workflow_state.py
           python3 skills/manul-github-bot/test_team_policy.py
       - name: Test standalone Todo MCP client
         run: python3 skills/manul-github-bot/test_todo_mcp_client.py
