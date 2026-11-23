@@ -125,12 +125,16 @@ def preserve_team_coordinator_state(db,event):
                 new_items.append(copied)
                 new_by_id[previous_item["id"]]=copied
                 continue
-            # Stable tracker references and dependency edges are durable
-            # identity, not optional prompt context. Preserve them on omission.
-            for key in ("trackerRefs","dependsOn","parentId"):
-                if key not in item or (key == "trackerRefs" and not item[key]):
-                    if key in previous_item:
-                        item[key]=previous_item[key]
+            # Existing item data is durable. Preserve omitted fields so a
+            # resumed model cannot silently reset a terminal local item or
+            # discard dependency/ownership metadata.
+            for key,value in previous_item.items():
+                if key not in item:
+                    item[key]=value
+            # An empty tracker list is not a request to orphan an existing
+            # tracker-backed child task.
+            if not item.get("trackerRefs") and previous_item.get("trackerRefs"):
+                item["trackerRefs"]=previous_item["trackerRefs"]
             if isinstance(previous_item.get("lastDispatchedEventKey"),str):
                 item["lastDispatchedEventKey"]=previous_item["lastDispatchedEventKey"]
         new_data["items"]=new_items
