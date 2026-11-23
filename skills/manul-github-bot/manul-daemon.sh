@@ -5791,10 +5791,10 @@ TEAM_CHECKPOINT_PROTOCOL
          log "WARN: workflow checkpoint persistence failed for task $COMMENT_ID"
        fi
      fi
-     # A TEAM parent parks instead of completing when its plan has dispatched
-     # independent child tasks. Child completion is reconciled by every worker
-     # loop; the parent is re-queued only after all referenced children are
-     # terminal. A malformed/conflicting wait marker fails closed.
+     # A TEAM parent parks instead of completing while independent child
+     # tasks remain active. The coordinator wakes it for each newly terminal
+     # work item, even when sibling tasks are still running. A malformed or
+     # conflicting wait marker fails closed.
      if [ "$TASK_ACTION" = "TEAM" ] && [ -s "$STDOUT_FILE" ] &&
         grep -q '^TASK_WAITING_FOR_TEAM$' "$STDOUT_FILE"; then
        local team_wait_count
