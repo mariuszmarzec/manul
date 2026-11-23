@@ -25,6 +25,7 @@ class WorkflowStateTests(unittest.TestCase):
                 "items": [{
                     "id": "work-a",
                     "status": "completed",
+                    "lastDispatchedEventKey": "event-key-a",
                     "trackerRefs": [{
                         "provider": "github_issues",
                         "sourceId": "owner/repo#11"
@@ -85,7 +86,7 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertEqual(stored["data"]["coordinator"]["wakeSequence"], 3)
         self.assertEqual(
             stored["data"]["items"][0]["lastDispatchedEventKey"],
-            self.stored_state()["data"]["items"][0]["lastDispatchedEventKey"],
+            "event-key-a",
         )
 
     def test_parent_can_acknowledge_pending_events_without_losing_deduplication(self):
@@ -111,7 +112,7 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertEqual(stored["data"]["coordinator"]["wakeSequence"], 3)
         self.assertEqual(
             stored["data"]["items"][0]["lastDispatchedEventKey"],
-            self.base["data"]["items"][0]["lastDispatchedEventKey"],
+            "event-key-a",
         )
 
 
