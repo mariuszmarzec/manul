@@ -250,94 +250,154 @@ def reconcile(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 continue
+
             all_terminal = True
-            has_failure = False
-            for item in items:
-                if item.get("status") in TERMINAL and not item.get("trackerRefs"):
-                    if item.get("status") in {"failed", "cancelled"}:
-                        has_failure = True
-                    continue
-                refs = item["trackerRefs"]
-                executions = []
-                for ref in refs:
-                    execution = task_execution(db, ref["provider"], ref["sourceId"])
-                    ref["execution"] = execution
-                    executions.append(execution["status"])
-                if all(status == "completed" for status in executions):
-                    item["status"] = "completed"
-                elif any(status == "failed" for status in executions) and all(
-                    status in TERMINAL for status in executions
-                ):
-                    item["status"] = "failed"
-                    has_failure = True
-                elif any(status == "blocked_user" for status in executions):
-                    item["status"] = "waiting_user"
-                    all_terminal = False
-                elif all(status in TERMINAL for status in executions):
-                    if all(status == "skipped" for status in executions):
-                        item["status"] = "skipped"
-                    else:
-                        item["status"] = "failed"
-                        has_failure = True
+            new_events: list[dict[str, Any]] = []
+            new_failure = False
+
+            for index, item in enumerate(items):
+                tracker_refs = item.get("trackerRefs", [])
+                execution_snapshot: list[dict[str, Any]] = []
+
+                if item.get("status") in TERMINAL and not tracker_refs:
+                    item_status = item["status"]
                 else:
-                    item["status"] = "running" if any(
-                        status in {"queued", "running", "waiting"} for status in executions
-                    ) else "planned"
+                    executions = []
+                    for ref in tracker_refs:
+                        execution = task_execution(db, ref["provider"], ref["sourceId"])
+                        ref["execution"] = execution
+                        executions.append(execution["status"])
+                        execution_snapshot.append({
+                            "provider": ref["provider"],
+                            "sourceId": ref["sourceId"],
+                            "execution": execution,
+                        })
+
+                    if all(status == "completed" for status in executions):
+                        item_status = "completed"
+                    elif any(status == "failed" for status in executions) and all(
+                        status in TERMINAL for status in executions
+                    ):
+                        item_status = "failed"
+                    elif any(status == "blocked_user" for status in executions):
+                        item_status = "waiting_user"
+                    elif all(status in TERMINAL for status in executions):
+                        item_status = "skipped" if all(
+                            status == "skipped" for status in executions
+                        ) else "failed"
+                    else:
+                        item_status = "running" if any(
+                            status in {"queued", "running", "waiting"} for status in executions
+                        ) else "planned"
+
+                item["status"] = item_status
+                if item_status not in TERMINAL:
                     all_terminal = False
+                    continue
+
+                # Each logical work item emits one durable notification when
+                # its complete tracker-reference set first becomes terminal.
+                # The signature changes if the same task is retried and later
+                # reaches a different terminal execution.
+                item_id = str(item.get("id", index))
+                event_payload = {
+                    "itemId": item_id,
+                    "status": item_status,
+                    "trackerRefs": execution_snapshot,
+                }
+                event_canonical = json.dumps(
+                    event_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+                event_id = hashlib.sha256(
+                    f"{workflow['workflowId']}|{event_canonical}".encode()
+                ).hexdigest()
+                if item.get("lastDispatchedEventKey") != event_id:
+                    item["lastDispatchedEventKey"] = event_id
+                    new_events.append({"eventId": event_id, **event_payload})
+                    if item_status in {"failed", "cancelled"}:
+                        new_failure = True
+
             state["data"]["items"] = items
+            coordinator = state["data"].setdefault("coordinator", {})
+            if not isinstance(coordinator, dict):
+                raise ValueError("Team workflow coordinator checkpoint must be an object")
+            pending_events = coordinator.setdefault("pendingChildEvents", [])
+            if not isinstance(pending_events, list):
+                raise ValueError("Team pendingChildEvents checkpoint must be an array")
+
+            if new_events:
+                known_event_ids = {
+                    event.get("eventId") for event in pending_events
+                    if isinstance(event, dict)
+                }
+                for event in new_events:
+                    if event["eventId"] not in known_event_ids:
+                        pending_events.append(event)
+                        known_event_ids.add(event["eventId"])
+
+                # Wake on each newly terminal work item, even while unrelated
+                # children remain active. Multiple completions in one poll are
+                # batched into a single parent run.
+                state["status"] = "active"
+                phase = "replanning" if new_failure else "integration"
+                state["phase"] = phase
+                coordinator["lastWakeAt"] = now()
+                coordinator["wakeSequence"] = int(coordinator.get("wakeSequence", 0)) + 1
+                coordinator["lastWakeReason"] = (
+                    "child_failure" if new_failure else
+                    "all_children_terminal" if all_terminal else
+                    "child_progress"
+                )
+                timestamp = now()
+                canonical = json.dumps(
+                    state, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+                changed = db.execute(
+                    """UPDATE processed_comments
+                       SET status='queued',processedAt=?,heartbeatAt=NULL,
+                           leaseExpiresAt=NULL,workerPid=NULL,claimToken=NULL,
+                           nextAttemptAt=NULL,session_id=NULL,agentStartedAt=NULL
+                       WHERE commentId=? AND status='waiting_children' AND action='TEAM'""",
+                    (timestamp, parent_task_id),
+                ).rowcount
+                if changed != 1:
+                    continue
+
+                event_key = hashlib.sha256(
+                    f"{workflow['workflowId']}|{parent_task_id}|{canonical}".encode()
+                ).hexdigest()
+                db.execute(
+                    """INSERT OR IGNORE INTO workflow_events
+                       (workflowId,eventKey,workflowType,repository,taskId,conversationId,
+                        phase,status,payloadJson,createdAt)
+                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        workflow["workflowId"], event_key, "team", workflow["repository"],
+                        parent_task_id, workflow["conversationId"], phase, "active",
+                        canonical, timestamp,
+                    ),
+                )
+                updated = db.execute(
+                    """UPDATE workflow_instances
+                       SET phase=?,status='active',stateJson=?,version=version+1,updatedAt=?
+                       WHERE workflowId=? AND workflowType='team' AND status='waiting_children'""",
+                    (phase, canonical, timestamp, workflow["workflowId"]),
+                ).rowcount
+                if updated != 1:
+                    raise ValueError(
+                        f"Team workflow {workflow['workflowId']} changed during parent wake"
+                    )
+                resumed.append(parent_task_id)
+                continue
+
             if not all_terminal:
-                # Persist partial child progress as an idempotent workflow event.
-                # A worker retry with an unchanged snapshot creates no duplicate;
-                # later child transitions update the same durable workflow.
+                # Persist partial child progress even without a new terminal
+                # event. The event key makes unchanged polling idempotent.
                 state["status"] = "waiting_children"
                 state["phase"] = "waiting_children"
                 add_event(db, workflow, state, parent_task_id, "waiting_children")
                 waiting += 1
-                continue
 
-            # A terminal child set wakes the parent exactly once. The parent
-            # checkpoint is updated in the same SQLite transaction as the
-            # conditional waiting_children -> queued transition.
-            state["status"] = "active"
-            phase = "replanning" if has_failure else "integration"
-            state["phase"] = phase
-            state["data"]["coordinator"] = {
-                "lastWakeAt": now(),
-                "reason": "child_failure" if has_failure else "all_children_completed",
-            }
-            timestamp = now()
-            canonical = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            changed = db.execute(
-                """UPDATE processed_comments
-                   SET status='queued',processedAt=?,heartbeatAt=NULL,
-                       leaseExpiresAt=NULL,workerPid=NULL,claimToken=NULL,
-                       nextAttemptAt=NULL,session_id=NULL,agentStartedAt=NULL
-                   WHERE commentId=? AND status='waiting_children' AND action='TEAM'""",
-                (timestamp, parent_task_id),
-            ).rowcount
-            if changed != 1:
-                continue
-            event_key = hashlib.sha256(
-                f"{workflow['workflowId']}|{parent_task_id}|{canonical}".encode()
-            ).hexdigest()
-            db.execute(
-                """INSERT OR IGNORE INTO workflow_events
-                   (workflowId,eventKey,workflowType,repository,taskId,conversationId,
-                    phase,status,payloadJson,createdAt)
-                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    workflow["workflowId"], event_key, "team", workflow["repository"],
-                    parent_task_id, workflow["conversationId"], phase, "active",
-                    canonical, timestamp,
-                ),
-            )
-            db.execute(
-                """UPDATE workflow_instances
-                   SET phase=?,status='active',stateJson=?,version=version+1,updatedAt=?
-                   WHERE workflowId=? AND workflowType='team' AND status='waiting_children'""",
-                (phase, canonical, timestamp, workflow["workflowId"]),
-            )
-            resumed.append(parent_task_id)
         db.execute("COMMIT")
         print(json.dumps({"resumed": resumed, "waiting": waiting}, ensure_ascii=False))
         return 0
