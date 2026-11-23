@@ -80,10 +80,30 @@ def preserve_team_coordinator_state(db,event):
     if isinstance(previous_coordinator,dict):
         submitted=new_coordinator if isinstance(new_coordinator,dict) else {}
         merged=dict(submitted)
-        # These fields are coordinator-owned. Only the parent may explicitly
-        # acknowledge pending events by submitting pendingChildEvents: [].
+
+        previous_pending=previous_coordinator.get("pendingChildEvents",[])
+        if not isinstance(previous_pending,list):
+            raise ValueError("stored Team pendingChildEvents must be an array")
+        acknowledged=submitted.get("acknowledgedChildEventIds",[])
+        if not isinstance(acknowledged,list) or any(
+            not isinstance(event_id,str) or not event_id for event_id in acknowledged
+        ):
+            raise ValueError("acknowledgedChildEventIds must be an array of non-empty strings")
+        acknowledged_ids=set(acknowledged)
+
+        # Pending events are coordinator-owned. A model checkpoint cannot
+        # discard them by omission or by submitting pendingChildEvents: [].
+        # It must explicitly acknowledge each exact event ID it has handled.
+        merged["pendingChildEvents"]=[
+            pending for pending in previous_pending
+            if not isinstance(pending,dict) or pending.get("eventId") not in acknowledged_ids
+        ]
+        merged.pop("acknowledgedChildEventIds",None)
+
+        # Wake metadata and sequence are also coordinator-owned; only the
+        # coordinator itself may advance them.
         for key,value in previous_coordinator.items():
-            if key != "pendingChildEvents" or "pendingChildEvents" not in submitted:
+            if key != "pendingChildEvents":
                 merged[key]=value
         new_data["coordinator"]=merged
 
