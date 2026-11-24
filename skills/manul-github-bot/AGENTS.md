@@ -103,7 +103,7 @@ Never put secrets, local credentials, or machine-specific state into the reposit
 A task-scoped OpenCode permission exception must use a temporary invocation-local config for the exact canonical active workspace only; do not weaken the global sibling-workspace deny or persist per-task permissions globally. Add regression coverage for global config immutability and sibling isolation.
 
 Manul model selection is configured explicitly by `automation.opencodeModel`
-(default `litellm/free-cloud`) and passed to `opencode run --model`. The model
+(default `litellm/freeLLMAPI`) and passed to `opencode run --model`. The model
 must not be selected implicitly by OpenCode's catalog default. Provider
 configuration and credentials remain in the operator's effective OpenCode
 JSON/JSONC file selected by `OPENCODE_CONFIG`; preserve that file and never add
@@ -136,3 +136,6 @@ Monitor-specific persistent files or databases belong under that monitor's
 `workspace/`; they must not be added to the global registry. Update
 `MONITORS.md`, `SKILL.md`, `README.md`, and `CONTRACTS.md` whenever the
 monitor CLI, source, output or lifecycle contract changes.
+
+
+For LiteLLM configurations that expose a friendly OpenCode catalog key, use that key in `automation.opencodeModel`. For example, if `providers.litellm.models.freeLLMAPI.modelID` is `free-cloud`, select `litellm/freeLLMAPI`; `free-cloud` is the upstream LiteLLM alias, not the OpenCode catalog key.

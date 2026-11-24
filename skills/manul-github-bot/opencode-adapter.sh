@@ -159,7 +159,7 @@ fi
 # Model selection belongs to Manul's runtime config. Provider definitions and
 # credentials remain in the effective OpenCode JSON/JSONC config selected by
 # OPENCODE_CONFIG. Never let OpenCode silently choose its built-in default.
-OPENCODE_MODEL="${MANUL_OPENCODE_MODEL:-$(jq -r '.automation.opencodeModel // "litellm/free-cloud"' "$MANUL_CONFIG" 2>/dev/null || printf 'litellm/free-cloud')}"
+OPENCODE_MODEL="${MANUL_OPENCODE_MODEL:-$(jq -r '.automation.opencodeModel // "litellm/freeLLMAPI"' "$MANUL_CONFIG" 2>/dev/null || printf 'litellm/freeLLMAPI')}"
 if [ -z "$OPENCODE_MODEL" ] || [[ "$OPENCODE_MODEL" =~ [[:space:][:cntrl:]] ]] || [[ "$OPENCODE_MODEL" != */* ]]; then
     printf '{"status":"FAILED","task_id":"%s","exit_code":2,"summary":"Invalid automation.opencodeModel; expected provider/model","session_id":"","duration_s":0}\\n' "$OPT_TASK_ID"
     exit 2

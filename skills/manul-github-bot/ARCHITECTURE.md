@@ -128,7 +128,7 @@ operator config. Manul does not install Node/npm packages or the retired Fiteo
 task-creation plugin. OpenCode task settings are delivered via a temporary
 OPENCODE_CONFIG_CONTENT overlay while operator JSON/JSONC files remain
 untouched. Manul selects the requested model explicitly from
-`automation.opencodeModel` (default `litellm/free-cloud`) and passes it through
+`automation.opencodeModel` (default `litellm/freeLLMAPI`) and passes it through
 `opencode run --model`, preventing an implicit OpenCode catalog default from
 switching providers. The provider definition, endpoint and credentials remain
 operator-owned in the effective OpenCode JSON/JSONC file selected by

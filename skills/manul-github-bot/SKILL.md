@@ -843,7 +843,7 @@ from the operator's ~/.zshrc; they are not copied into ~/.manul/.env.
 Daemon/watchdog and installer all inherit the same initialized shell
 environment. OpenCode task invocations reuse the shared OpenCode service (without
 --standalone). Manul selects the run model from
-`automation.opencodeModel` (default `litellm/free-cloud`) and passes it
+`automation.opencodeModel` (default `litellm/freeLLMAPI`) and passes it
 explicitly with `--model`; the provider definition, endpoint and credentials
 come from the JSON/JSONC file selected by `OPENCODE_CONFIG`. The explicit
 config path may come from the Zsh environment or the non-secret Manul .env
