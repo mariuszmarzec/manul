@@ -715,6 +715,11 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   printf '%s\n' '[{"id":"build"}]'
   exit 0
 fi
+printf '%s' "${OPENCODE_CONFIG_CONTENT:-}" |
+  jq -e '.model == "litellm/free-cloud"' >/dev/null || {
+    echo "Manul did not pin the OpenCode model to litellm/free-cloud" >&2
+    exit 93
+  }
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
 printf '%s\n' "$PWD" > "$MOCK_CWD_FILE"
 if [ -n "${MOCK_STDIN_FILE:-}" ]; then cat > "$MOCK_STDIN_FILE"; else cat >/dev/null; fi
@@ -960,7 +965,7 @@ case "${1:-}" in
       "$OPENCODE_CONFIG" >/dev/null
     jq -e '
       .agent["manul-operator-query"].tools["*"] == false
-      and .model == null
+      and .model == "litellm/free-cloud"
       and .provider == null
     ' <<<"${OPENCODE_CONFIG_CONTENT:-}" >/dev/null
     cat >/dev/null
