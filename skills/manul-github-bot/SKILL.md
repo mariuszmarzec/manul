@@ -100,7 +100,7 @@ Current runtime:
 ```
 ~/.manul/
 ├── config.json
-├── .env                # operator/provider environment for unattended runs
+├── .env                # Manul-specific integration fallbacks (mode 600)
 ├── state/
 │   ├── manul.db
 │   ├── locks/
@@ -110,13 +110,17 @@ Current runtime:
 ```
 
 The runtime contains Manul configuration, SQLite state, logs, locks, task
-artifacts, workspace state, runtime script links, and the operator environment
-file `.env`. OpenClaw configuration/state remains outside that ownership
-boundary. Provider-specific environment such as `OPENCLAW_STATE_DIR` or
-`OPENCLAW_CONFIG_PATH` is persisted in `~/.manul/.env` when present during
-installation/repair. Existing `.env` entries are preserved; arbitrary
-environment variables are never copied. Unattended daemon/watchdog processes
-load this file because cron/systemd does not load `~/.zshrc`.
+artifacts, workspace state, runtime script links, and an optional Manul-specific
+integration fallback file .env. OpenClaw and other provider configuration
+remain outside that ownership boundary. The operator's existing ~/.zshrc is
+the single source of truth for exported environment, including PATH, provider
+configuration and tool locations. Interactive commands inherit it from the
+shell; unattended/direct entrypoints use manul-zsh-bootstrap.sh to run zsh -ic
+and then exec the existing Bash scripts. The cron watchdog bootstraps itself
+before starting/recovering the daemon. No second PATH is maintained in Manul.
+Existing .env values are only legacy/Manul-specific fallbacks: exported Zsh
+values win, and installer bootstrap does not duplicate the active shell
+environment there.
 
 The daemon removes regular files under `~/.manul/logs` and the legacy startup
 wrapper log `~/.manul/daemon.log` when they have not been modified for more than
@@ -826,22 +830,25 @@ The installer currently:
 - creates the runtime directory;
 - deploys runtime symlinks, including `agent-session-state.sh`;
 - initializes configuration when absent;
-- prepares the operator `.env` for unattended processes;
+- prepares the Manul-specific integration fallback file;
 - configures required provider-owned OpenCode permissions when OpenCode is installed;
 - prepares/validates the DB;
 - installs the watchdog cron;
 - installs the zsh shell integration.
 
 For OpenCode, the installer/repair path updates the effective provider config
-selected by `OPENCODE_CONFIG` (when configured) and preserves unrelated settings.
-The supported unattended environment persists `OPENCODE_CONFIG` in
-`~/.manul/.env`, so the daemon/watchdog and installer use the same file. Rules
-include `/tmp/**` for task scratch space, the dedicated
-`/tmp/manul-diagnostics/**` directory for local diagnostic artifacts,
-read/search-only access to `~/.manul/logs/**`, and the narrowly scoped Gradle
+selected by the operator's OPENCODE_CONFIG environment (when configured) and
+preserves unrelated settings. That variable and provider authentication come
+from the operator's ~/.zshrc; they are not copied into ~/.manul/.env.
+Daemon/watchdog and installer all inherit the same initialized shell
+environment. OpenCode task invocations use opencode run --standalone so a
+stale shared background service cannot override task-local environment.
+Rules include /tmp/** for task scratch space, the dedicated
+/tmp/manul-diagnostics/** directory for local diagnostic artifacts,
+read/search-only access to ~/.manul/logs/**, and the narrowly scoped Gradle
 module cache. File editing of the log directory is explicitly denied. No broad
-permission bypass such as `--auto` is enabled, and the provider config remains
-outside `~/.manul`.
+permission bypass such as --auto is enabled, and the provider config remains
+outside ~/.manul.
 
 The log-read permission is for explicitly authorized **local operator diagnostics**.
 It does not authorize ordinary Manul worker tasks to inspect runtime state: the
@@ -849,15 +856,17 @@ generated task boundary in `CONTRACTS.md` continues to prohibit that. Keep
 diagnostic archives under `/tmp/manul-diagnostics`, ensure that directory is
 user-owned and mode `700`, and redact credentials before sharing artifacts.
 
-The operator `.env` is runtime-owned and mode 600. It carries only explicitly
-supported provider variables, including custom backend paths and
-`OPENCODE_CONFIG`, plus credentials explicitly named by enabled task sources.
-Caracal remains operator-owned; its URL and token are never copied into
-`~/.manul/.env` or task artifacts. When the operator's static effective
-OpenCode configuration enables `mcp.servers.caracal-rag`, the OpenCode adapter
-loads the current provider environment from `~/.caracal/env.sh` for that task
-(with `CARACAL_RESOLVE_LIVE=1`), passes the values only to the OpenCode process,
-and verifies `caracal-rag` through that same binary/configuration before agent
+The optional Manul .env is runtime-owned and mode 600. It is not the
+operator's general environment file and must not contain a second PATH,
+provider binary/config selection, or copies of currently exported Zsh values.
+It is retained only for Manul-specific integration credentials/fallbacks that
+the operator deliberately keeps there. Caracal remains operator-owned; its URL
+and token are never copied into ~/.manul/.env or task artifacts. When the
+operator's static effective OpenCode configuration enables
+mcp.servers.caracal-rag, the OpenCode adapter loads the current provider
+environment from ~/.caracal/env.sh for that task (with
+CARACAL_RESOLVE_LIVE=1), passes the values only to the OpenCode process,
+and verifies caracal-rag through that same binary/configuration before agent
 startup. A missing provider or disconnected configured Caracal server is a
 pre-execution infrastructure failure. Manul does not inject or rewrite the
 Caracal MCP entry or modify operator JSON/JSONC files. If Caracal is absent or

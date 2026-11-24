@@ -35,15 +35,21 @@ echo
 # 0. Integration wiring.
 # ---------------------------------------------------------------------------
 grep -q 'manul-env.sh' "$SCRIPT_DIR/install-manul-symlinks.sh"   && ok "Symlink installer deploys manul-env.sh"   || fail "Symlink installer does not deploy manul-env.sh"
+grep -q '"manul-zsh-bootstrap.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys Zsh bootstrap" || fail "Symlink installer does not deploy Zsh bootstrap"
+grep -q 'MANUL_ZSH_ENV_READY=1' "$SCRIPT_DIR/manul-shell.zsh" && ok "Interactive shell marks its initialized Zsh environment" || fail "Shell integration does not export the Zsh environment marker"
+grep -q 'manul-zsh-bootstrap.sh' "$SCRIPT_DIR/watchdog.sh" && ok "Watchdog bootstraps ~/.zshrc from cron" || fail "Watchdog bypasses Zsh bootstrap"
+grep -Fq '"$OPENCODE_BIN" mcp list --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "Caracal MCP preflight uses the task-local OpenCode server" || fail "Caracal MCP preflight can reuse the shared OpenCode server"
+grep -Fq '"$OPENCODE_BIN" debug agents --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode agent discovery uses the task-local server" || fail "OpenCode agent discovery can reuse the shared OpenCode server"
+grep -Fq '"$OPENCODE_BIN" run --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode task runs use the task-local server" || fail "OpenCode task run can reuse the shared OpenCode server"
 grep -q '"manul-failure-utils.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys failure sanitization helper" || fail "Symlink installer does not deploy failure sanitization helper"
 
 grep -q 'manul-env.sh" --bootstrap' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer bootstraps the operator environment"   || fail "Installer does not bootstrap the operator environment"
 
-grep -q 'manul_env_load' "$SCRIPT_DIR/manul-daemon.sh"   && ok "Daemon loads the runtime operator environment"   || fail "Daemon does not load the runtime operator environment"
+grep -q 'manul_env_load' "$SCRIPT_DIR/manul-daemon.sh"   && ok "Daemon loads Manul-specific integration fallbacks"   || fail "Daemon does not load Manul-specific integration fallbacks"
 
-grep -q 'manul_env_load' "$SCRIPT_DIR/watchdog.sh"   && ok "Watchdog loads the runtime operator environment"   || fail "Watchdog does not load the runtime operator environment"
+grep -q 'manul_env_load' "$SCRIPT_DIR/watchdog.sh"   && ok "Watchdog loads Manul-specific integration fallbacks"   || fail "Watchdog does not load Manul-specific integration fallbacks"
 
-grep -q 'manul_env_load' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer reloads persisted provider environment before configuring OpenCode"   || fail "Installer skips persisted provider environment"
+grep -q 'manul_env_load' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer loads Manul-specific integration fallbacks"   || fail "Installer skips Manul integration fallbacks"
 grep -q 'manul_env_load' "$SCRIPT_DIR/repair-manul-runtime.sh"   && ok "Repair reloads persisted provider environment before configuring OpenCode"   || fail "Repair skips persisted provider environment"
 
 TMP="$(mktemp -d)"
@@ -82,25 +88,16 @@ ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCR
 [ -f "$ENV_FILE" ] && ok "Bootstrap creates ~/.manul/.env equivalent" || fail "Bootstrap did not create environment file"
 assert_file_mode_600 "$ENV_FILE"
 
-if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
-   ! grep -q '^OPENCLAW_CONFIG_PATH=' "$ENV_FILE" ||
-   ! grep -q '^OPENCLAW_BIN=' "$ENV_FILE" ||
-   ! grep -q '^OPENCODE_BIN=' "$ENV_FILE" ||
-   ! grep -q '^OPENCODE_CONFIG=' "$ENV_FILE" ||
-   ! grep -q '^CODEX_HOME=' "$ENV_FILE" ||
-   ! grep -q '^CODEX_BIN=' "$ENV_FILE" ||
-   ! grep -q '^CODEX_MODEL=' "$ENV_FILE" ||
-   ! grep -q '^CLAUDE_CONFIG_DIR=' "$ENV_FILE" ||
-   ! grep -q '^CLAUDE_BIN=' "$ENV_FILE" ||
-   ! grep -q '^CLAUDE_MODEL=' "$ENV_FILE" ||
-   ! grep -q '^FITEO_BASE_URL=' "$ENV_FILE" ||
-    ! grep -q '^FITEO_MANUL_PAT=' "$ENV_FILE" ||
-    ! grep -q '^FITEO_MANUL_SHARE_USER_ID=1$' "$ENV_FILE" ||
-   ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
-   ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
-  fail "Bootstrap did not persist all supported provider variables"
+if grep -qE '^(OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_CONFIG|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|MANUL_CANONICAL_DIR|MANUL_CANONICAL_ROOT|MANUL_CANONICAL_BRANCH)=' "$ENV_FILE"; then
+  fail "Bootstrap duplicated shell-owned provider/path configuration in ~/.manul/.env"
 else
-  ok "Bootstrap persists supported provider variables"
+  ok "Bootstrap leaves provider binaries/configuration and source paths to ~/.zshrc"
+fi
+
+if grep -qE '^(FITEO_BASE_URL|FITEO_MANUL_PAT|FITEO_MANUL_SHARE_USER_ID|CUSTOM_JIRA_USER|CUSTOM_JIRA_PASSWORD)=' "$ENV_FILE"; then
+  fail "Bootstrap duplicated environment variables already supplied by the operator's Zsh"
+else
+  ok "Bootstrap does not duplicate Zsh-owned integration credentials"
 fi
 
 if grep -q 'UNSAFE_SECRET' "$ENV_FILE"; then
@@ -116,53 +113,91 @@ else
 fi
 
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT
-  source "$ENV_FILE"
-  [ "$OPENCLAW_STATE_DIR" = "$TMP/openclaw state" ] &&
-  [ "$OPENCLAW_CONFIG_PATH" = "$TMP/openclaw/config with spaces.json" ] &&
-  [ "$OPENCLAW_BIN" = "$TMP/bin/openclaw-custom" ] &&
-  [ "$OPENCODE_BIN" = "$TMP/bin/opencode-custom" ] &&
-  [ "$OPENCODE_CONFIG" = "$TMP/custom opencode config.json" ] &&
-  [ "$CODEX_HOME" = "$TMP/codex home" ] &&
-  [ "$CODEX_BIN" = "$TMP/bin/codex-custom" ] &&
-  [ "$CODEX_MODEL" = "codex-test-model" ] &&
-  [ "$CLAUDE_CONFIG_DIR" = "$TMP/claude config" ] &&
-  [ "$CLAUDE_BIN" = "$TMP/bin/claude-custom" ] &&
-  [ "$CLAUDE_MODEL" = "claude-test-model" ] &&
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$RUNTIME"
   [ "$FITEO_BASE_URL" = "https://fiteo-test.example" ] &&
   [ "$FITEO_MANUL_PAT" = "fiteo-test-pat" ] &&
   [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
-  [ -z "${FITEO_PAT:-}" ] &&
   [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
   [ "$CUSTOM_JIRA_PASSWORD" = "custom-jira-password" ]
 ); then
-  ok "Bootstrap shell-quotes provider values correctly"
+  ok "Zsh-exported integration credentials remain available after Manul environment loading"
 else
-  fail "Bootstrap did not preserve provider values when reloaded"
+  fail "Manul environment loading lost exported integration credentials"
 fi
 
-# The recipient ID is persisted independently and refreshed even when the
-# remote Fiteo source does not need a separate endpoint/PAT pair.
+# Zsh exports win over legacy values in ~/.manul/.env, and PATH is never
+# sourced from the runtime file.
+PRECEDENCE="$TMP/precedence"
+mkdir -p "$PRECEDENCE"
+cat > "$PRECEDENCE/.env" <<'EOF'
+PATH=/legacy/manul/path
+OPENCODE_CONFIG=/legacy/opencode.json
+OPENCODE_BIN=/legacy/bin/opencode
+OPENCODE_API_KEY=legacy-console-key
+LITELLM_MASTER_KEY=legacy-litellm-key
+FITEO_BASE_URL=https://legacy-fiteo.example
+EOF
+chmod 600 "$PRECEDENCE/.env"
+if (
+  export PATH="$TMP/operator-zsh-bin:/usr/bin:/bin"
+  export OPENCODE_CONFIG="$TMP/operator-opencode.json"
+  export OPENCODE_BIN="$TMP/operator-bin/opencode"
+  export OPENCODE_API_KEY="operator-console-key"
+  export LITELLM_MASTER_KEY="operator-litellm-key"
+  export FITEO_BASE_URL="https://operator-zsh.example"
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$PRECEDENCE"
+  [ "$PATH" = "$TMP/operator-zsh-bin:/usr/bin:/bin" ] &&
+  [ "$OPENCODE_CONFIG" = "$TMP/operator-opencode.json" ] &&
+  [ "$OPENCODE_BIN" = "$TMP/operator-bin/opencode" ] &&
+  [ "$OPENCODE_API_KEY" = "operator-console-key" ] &&
+  [ "$LITELLM_MASTER_KEY" = "operator-litellm-key" ] &&
+  [ "$FITEO_BASE_URL" = "https://operator-zsh.example" ]
+); then
+  ok "Exported ~/.zshrc environment takes precedence over legacy Manul values"
+else
+  fail "Manul environment loader overrode the operator's exported Zsh settings"
+fi
+
+if (
+  unset OPENCODE_API_KEY LITELLM_MASTER_KEY
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$PRECEDENCE"
+  [ -z "${OPENCODE_API_KEY:-}" ] &&
+  [ -z "${LITELLM_MASTER_KEY:-}" ]
+); then
+  ok "Legacy OpenCode Console/LiteLLM keys are not loaded from ~/.manul/.env"
+else
+  fail "Legacy provider API keys leaked from ~/.manul/.env"
+fi
+
+# Legacy Manul-owned values remain as fallbacks, but a current Zsh export wins.
 SHARE_ONLY="$TMP/share-only"
 mkdir -p "$SHARE_ONLY"
-cat > "$SHARE_ONLY/.env" <<MANUL_SHARE_ENV
+cat > "$SHARE_ONLY/.env" <<'MANUL_SHARE_ENV'
 EXISTING_OPERATOR_SETTING=preserve-me
 FITEO_PAT=old-operator-pat
 FITEO_MANUL_SHARE_USER_ID=99
 MANUL_SHARE_ENV
 chmod 600 "$SHARE_ONLY/.env"
-cat > "$SHARE_ONLY/config.json" <<MANUL_SHARE_CONFIG
-{"taskSources":[{"type":"todo_remote_mcp","enabled":true,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}]}
-MANUL_SHARE_CONFIG
-SHARE_ONLY_ENV_FILE="$(FITEO_MANUL_SHARE_USER_ID=1 env -u FITEO_BASE_URL -u FITEO_MANUL_PAT -u FITEO_PAT bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
-if grep -qx 'FITEO_MANUL_SHARE_USER_ID=1' "$SHARE_ONLY_ENV_FILE" &&
+SHARE_ONLY_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
+if grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
    grep -qx 'EXISTING_OPERATOR_SETTING=preserve-me' "$SHARE_ONLY_ENV_FILE" &&
-   ! grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
-   ! grep -q '^FITEO_PAT=' "$SHARE_ONLY_ENV_FILE" &&
-    ! grep -q '^FITEO_PAT=old-operator-pat$' "$SHARE_ONLY_ENV_FILE"; then
-  ok "Bootstrap refreshes the share recipient independently of Fiteo credentials"
+   ! grep -q '^FITEO_PAT=' "$SHARE_ONLY_ENV_FILE"; then
+  ok "Bootstrap preserves Manul-owned fallbacks and removes retired operator credentials"
 else
-  fail "Bootstrap did not refresh the share recipient independently"
+  fail "Bootstrap changed existing Manul fallbacks unexpectedly"
+fi
+if (
+  export FITEO_MANUL_SHARE_USER_ID=1
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$SHARE_ONLY"
+  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ]
+); then
+  ok "Current Zsh recipient ID overrides the stored Manul fallback"
+else
+  fail "Stored recipient ID overrode the current Zsh environment"
 fi
 
 PRESERVE="$TMP/preserve"
@@ -170,6 +205,10 @@ mkdir -p "$PRESERVE"
 cat > "$PRESERVE/.env" <<'EOF'
 OPENCLAW_STATE_DIR=/operator/chosen/state
 OPENCODE_CONFIG=/operator/chosen/opencode.json
+OPENCODE_API_KEY=legacy-console-key
+LITELLM_MASTER_KEY=legacy-litellm-key
+FITEO_MANUL_PAT=legacy-manul-token
+FITEO_BASE_URL=https://legacy-fiteo.example
 EOF
 chmod 600 "$PRESERVE/.env"
 
@@ -180,15 +219,38 @@ export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
 ENV_FILE2="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE")"
 
 if (
+  ! grep -qE '^(OPENCLAW_STATE_DIR|OPENCODE_CONFIG|OPENCODE_API_KEY|LITELLM_MASTER_KEY)=' "$ENV_FILE2" &&
+  grep -qx 'FITEO_MANUL_PAT=legacy-manul-token' "$ENV_FILE2" &&
+  grep -qx 'FITEO_BASE_URL=https://legacy-fiteo.example' "$ENV_FILE2"
+); then
+  ok "Bootstrap removes legacy provider settings but preserves Manul-specific credential fallbacks"
+else
+  fail "Bootstrap retained provider settings or removed Manul integration fallbacks"
+fi
+if (
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$PRESERVE"
+  [ "$OPENCLAW_STATE_DIR" = "/installer/current/state" ] &&
+  [ "$OPENCLAW_CONFIG_PATH" = "/installer/current/config.json" ] &&
+  [ "$OPENCODE_CONFIG" = "/installer/current/opencode.json" ] &&
+  [ "$FITEO_MANUL_PAT" = "legacy-manul-token" ] &&
+  [ "$FITEO_BASE_URL" = "https://legacy-fiteo.example" ]
+); then
+  ok "Zsh provider exports win while Manul-specific fallback credentials remain available"
+else
+  fail "Provider exports or Manul integration fallbacks were not loaded correctly"
+fi
+if (
   unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
   source "$ENV_FILE2"
-  [ "$OPENCLAW_STATE_DIR" = "/operator/chosen/state" ] &&
-  [ "$OPENCLAW_CONFIG_PATH" = "/installer/current/config.json" ] &&
-  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
+  [ -z "${OPENCLAW_STATE_DIR:-}" ] &&
+  [ -z "${OPENCODE_CONFIG:-}" ] &&
+  [ "$FITEO_MANUL_PAT" = "legacy-manul-token" ] &&
+  [ "$FITEO_BASE_URL" = "https://legacy-fiteo.example" ]
 ); then
-  ok "Existing operator provider configuration is preserved"
+  ok "Legacy provider config is not used as fallback; Manul integration fallback remains usable"
 else
-  fail "Bootstrap overwrote or failed to append provider configuration"
+  fail "Legacy provider configuration leaked from the Manul environment file"
 fi
 
 # Legacy Caracal variables are neither loaded nor retained by Manul.
@@ -218,9 +280,8 @@ else
 fi
 
 
-# Fiteo MCP credentials are refreshed as one pair even when no Todo remote
-# task source is configured, preventing a long-lived daemon from keeping a
-# previously issued PAT after the operator updates opencode.env.
+# Existing Manul Fiteo fallback credentials are preserved; the live Zsh
+# environment supersedes them for this invocation without writing duplicates.
 PRESERVE_FITEO="$TMP/preserve-fiteo"
 mkdir -p "$PRESERVE_FITEO"
 cat > "$PRESERVE_FITEO/.env" <<'EOF'
@@ -235,21 +296,30 @@ FITEO_MANUL_SHARE_USER_ID="1"
 export FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID
 FITEO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE_FITEO")"
 if (
-  unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT
-  source "$FITEO_ENV_FILE"
+  grep -qx 'FITEO_BASE_URL=https://old-fiteo.example' "$FITEO_ENV_FILE" &&
+  grep -qx 'FITEO_MANUL_PAT=old-manul-pat' "$FITEO_ENV_FILE" &&
+  ! grep -q '^FITEO_PAT=' "$FITEO_ENV_FILE" &&
+  ! grep -q 'new-fiteo.example' "$FITEO_ENV_FILE"
+); then
+  ok "Bootstrap retains only the manually-managed Fiteo fallback"
+else
+  fail "Bootstrap duplicated Zsh Fiteo values or retained the operator PAT"
+fi
+if (
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$PRESERVE_FITEO"
   [ "$FITEO_BASE_URL" = "https://new-fiteo.example" ] &&
   [ "$FITEO_MANUL_PAT" = "new-manul-fiteo-pat" ] &&
-  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
-  [ -z "${FITEO_PAT:-}" ]
+  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ]
 ); then
-  ok "Bootstrap refreshes Manul Fiteo credentials without persisting the operator PAT"
+  ok "Current Zsh Fiteo credentials supersede Manul fallback values"
 else
-  fail "Bootstrap did not refresh Manul Fiteo credentials correctly"
+  fail "Manul fallback credentials overrode the operator's Zsh environment"
 fi
 assert_file_mode_600 "$FITEO_ENV_FILE"
 
-# Legacy Todo credentials are discarded without being loaded; unrelated
-# operator settings remain intact.
+# Legacy Todo credentials and obsolete host/provider settings are discarded
+# without being loaded; Manul-specific integration fallbacks remain intact.
 TODO_RUNTIME="$TMP/todo-legacy-credential-runtime"
 mkdir -p "$TODO_RUNTIME"
 cat > "$TODO_RUNTIME/.env" <<'EOF'
@@ -260,11 +330,11 @@ chmod 600 "$TODO_RUNTIME/.env"
 TODO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$TODO_RUNTIME")"
 if (
   ! grep -q 'TODO_LOCAL_MCP_TOKEN' "$TODO_ENV_FILE" &&
-  grep -q '^OPENCODE_CONFIG=/operator/chosen/opencode.json$' "$TODO_ENV_FILE"
+  ! grep -q '^OPENCODE_CONFIG=' "$TODO_ENV_FILE"
 ); then
-  ok "Bootstrap discards legacy Todo credentials while preserving unrelated operator settings"
+  ok "Bootstrap discards retired Todo credentials and legacy host/provider configuration"
 else
-  fail "Bootstrap retained a legacy Todo credential or changed unrelated settings"
+  fail "Bootstrap retained retired credentials or host/provider configuration"
 fi
 assert_file_mode_600 "$TODO_ENV_FILE"
 
@@ -374,7 +444,7 @@ export MANUL_FAKE_PID_FILE="$START_RUNTIME/fake.pid"
 export MANUL_FAKE_CRONTAB_FILE="$CRONTAB_FILE"
 
 set +e
-PATH="$FAKE_BIN:$PATH" MANUL_DIR="$START_RUNTIME" \
+MANUL_ZSH_ENV_READY=1 PATH="$FAKE_BIN:$PATH" MANUL_DIR="$START_RUNTIME" \
   MANUL_CANONICAL_ROOT="$CANONICAL_RUNTIME" MANUL_CANONICAL_DIR="$CANONICAL_RUNTIME" \
   "$SCRIPT_DIR/start-manul-automation.sh" start >/dev/null 2>&1
 START_RC=$?
@@ -393,7 +463,7 @@ else
 fi
 
 set +e
-PATH="$FAKE_BIN:$PATH" MANUL_DIR="$START_RUNTIME" \
+MANUL_ZSH_ENV_READY=1 PATH="$FAKE_BIN:$PATH" MANUL_DIR="$START_RUNTIME" \
   "$SCRIPT_DIR/start-manul-automation.sh" stop >/dev/null 2>&1
 STOP_RC=$?
 set -e

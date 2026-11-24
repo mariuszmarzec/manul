@@ -16,7 +16,8 @@ launcher integrations remain in their respective host repositories.
 - Task database: `~/.manul/state/manul.db`
 - Monitor registry: `~/.manul/state/monitors.db`
 - Monitor definitions/workspaces: `~/.manul/monitors/<id>/`
-- Operator/provider environment: `~/.manul/.env` (mode 600)
+- Operator shell environment: exported values from `~/.zshrc`
+- Manul-specific integration fallbacks: `~/.manul/.env` (mode 600)
 - Workspaces and shared repository caches: `~/.manul/workspace/`
 - Recovery snapshots: `~/.manul/state/recovery/workspaces/`
 
@@ -35,7 +36,7 @@ locks, or workspaces.
 
 ## Install
 
-Requirements: Bash 4+, Git, GitHub CLI (`gh`), `jq`, `sqlite3`, Python 3,
+Requirements: Bash 4+, Zsh, Git, GitHub CLI (`gh`), `jq`, `sqlite3`, Python 3,
 and the GNU process/filesystem utilities documented in
 [macOS prerequisites](skills/manul-github-bot/SKILL.md) when using macOS.
 
@@ -54,8 +55,11 @@ fi
 
 The installer prepares `~/.manul`, restores `config.json` from the example
 when needed, deploys runtime symlinks, preserves an existing database and
-environment, and adds the interactive zsh entrypoints. It does not start
-automation automatically.
+Manul-specific integration fallbacks, and adds the interactive Zsh entrypoints.
+The operator's existing `~/.zshrc` remains the single source of truth for
+exported PATH, provider configuration and tool locations. Unattended/direct
+Manul entrypoints use the shared Zsh bootstrap to load that same file before
+starting the Bash runtime. It does not start automation automatically.
 
 To start or inspect Manul:
 
@@ -84,9 +88,10 @@ context.
 The installer initializes `~/.manul/config.json` from
 [config.json.example](skills/manul-github-bot/config.json.example) when no
 runtime configuration exists. Edit the runtime copy, not a repository-local
-operator configuration. Put credentials only in `~/.manul/.env` or the
-documented environment variables; never commit credentials or a real
-operator-specific `config.json`.
+operator configuration. Export the operator's tool/provider configuration and
+credentials from `~/.zshrc`; `~/.manul/.env` is reserved for Manul-specific
+integration fallbacks. Never commit credentials or a real operator-specific
+`config.json`.
 
 ## Generic monitors
 

@@ -5,7 +5,7 @@
 #   1. Self-detect and validate canonical source
 #   2. Ensure runtime directory
 #   3. Deploy symlinks via install-manul-symlinks.sh
-#   4. Restore config.json from example if missing and prepare operator .env
+#   4. Restore config.json from example if missing and prepare Manul fallbacks
 #   5. Validate/migrate manul.db. Existing task state is preserved. A fresh DB
 #      is created only with explicit --init-state on a first-time installation.
 #   6. Install the dormant watchdog cron and canonical zsh shell integration
@@ -69,7 +69,7 @@ fi
 CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 export MANUL_CANONICAL_DIR="$CANONICAL_DIR"
 
-for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh migrate-sdd-agent-config.sh sdd-policy.py opencode_agent_list.py team-policy.py team-coordinator.py workflow-state.py manul-env.sh \
+for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh migrate-sdd-agent-config.sh sdd-policy.py opencode_agent_list.py team-policy.py team-coordinator.py workflow-state.py manul-env.sh manul-zsh-bootstrap.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
              manul-shell.zsh update-manul.sh normalize-script-line-endings.py opencode-permissions.sh manul-daemon.sh task-process-control.sh manul-status.sh manul-query.sh manul-slack-intake.sh manul-operator-context.py; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then
@@ -91,9 +91,10 @@ echo
 #   sqlite3   - manul.db (native ext4 I/O, concurrent access)
 #   curl      - HTTP used by manul-comments-remove.sh
 #   python3   - lifecycle SQLite/JSON helpers and OpenCode stderr redaction
+#   zsh       - loads the operator's ~/.zshrc for unattended Manul entrypoints
 # The configured automation.agentRuntime selects the one required agent binary.
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl crontab python3; do
+for cmd in bash zsh git gh jq sqlite3 curl crontab python3; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -103,7 +104,7 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-echo "Prerequisites OK: bash git gh jq sqlite3 curl crontab python3"
+echo "Prerequisites OK: bash zsh git gh jq sqlite3 curl crontab python3"
 echo
 
 # 2. Ensure runtime directory
@@ -196,22 +197,23 @@ fi
 
 # Validate only the backend selected by the operator. An unrelated installed
 # backend must not make an incomplete installation look ready.
-# 4b. Persist provider-specific environment needed by unattended processes.
-#     Only an explicit allowlist is copied from the installer environment.
-#     Existing ~/.manul/.env content is preserved.
+# 4b. Prepare the optional Manul-specific integration fallback file.
+#     Operator PATH, provider config and exported credentials come from ~/.zshrc;
+#     this file is never a second provider/PATH configuration source.
 echo
-echo "  Preparing operator environment..."
+echo "  Preparing Manul-specific integration fallbacks..."
 if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
     fail "Could not prepare $RUNTIME_DIR/.env"
 fi
 echo "  Environment file: $RUNTIME_DIR/.env"
 
-# Use the exact persisted provider config that the daemon/watchdog will load.
-# In particular, do not silently drop OPENCODE_CONFIG between install and run.
+# Load optional Manul-specific integration fallbacks. The installer is normally
+# launched from the operator's initialized Zsh session, whose exports take
+# precedence over any legacy values retained in ~/.manul/.env.
 # shellcheck source=manul-env.sh
 source "$CANONICAL_DIR/manul-env.sh"
 if ! manul_env_load "$RUNTIME_DIR"; then
-    fail "Could not load $RUNTIME_DIR/.env for provider configuration"
+    fail "Could not load $RUNTIME_DIR/.env for Manul integration fallbacks"
 fi
 
 # 4c. Configure provider-owned OpenCode permissions required by unattended Manul execution.

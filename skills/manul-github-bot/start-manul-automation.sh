@@ -19,6 +19,18 @@ set -uo pipefail
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
+# Direct invocations and unattended recovery must use the operator's existing
+# Zsh environment. Interactive Manul functions set the marker in manul-shell.zsh
+# and therefore do not start a nested shell.
+if [ "${MANUL_ZSH_ENV_READY:-}" != "1" ]; then
+    BOOTSTRAP="$SCRIPT_DIR/manul-zsh-bootstrap.sh"
+    if [ ! -f "$BOOTSTRAP" ]; then
+        echo "ERROR: Manul Zsh bootstrap is missing: $BOOTSTRAP" >&2
+        exit 127
+    fi
+    exec bash "$BOOTSTRAP" "$SCRIPT_DIR/start-manul-automation.sh" "$@"
+fi
+
 # A shell function may still be loaded from an older manul-shell.zsh in the
 # current interactive Zsh. Therefore startup/stop must repair line endings
 # itself before directly executing runtime scripts such as manul-daemon.sh.

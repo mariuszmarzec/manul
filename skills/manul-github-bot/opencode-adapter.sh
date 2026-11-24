@@ -1116,7 +1116,7 @@ if [ "$CARACAL_CONFIGURED" = "1" ]; then
     _caracal_probe_stderr="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
     ProcessRunner_TmpStdout="$_caracal_probe_stdout"
     ProcessRunner_TmpStderr="$_caracal_probe_stderr"
-    _caracal_probe_result="$(ProcessRunner.run --timeout "$_caracal_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" mcp list)"
+    _caracal_probe_result="$(ProcessRunner.run --timeout "$_caracal_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" mcp list --standalone)"
     _caracal_probe_header="$(printf '%s\n' "$_caracal_probe_result" | head -n 1)"
     _caracal_probe_rc="${_caracal_probe_header%%|*}"
     ProcessRunner_TmpStdout=""
@@ -1201,7 +1201,7 @@ opencode_agent_discovery() {
         : >"$stderr_file"
         ProcessRunner_TmpStdout="$stdout_file"
         ProcessRunner_TmpStderr="$stderr_file"
-        result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents)"
+        result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents --standalone)"
         header="$(printf '%s\n' "$result" | head -n 1)"
         rc="${header%%|*}"
         duration="$(printf '%s\n' "$result" | head -n 1 | cut -d'|' -f2)"
@@ -1416,7 +1416,7 @@ while true; do
         --idle-tool-timeout "$AGENT_TOOL_IDLE_TIMEOUT" \
         --idle-step-timeout "$AGENT_STEP_IDLE_TIMEOUT" \
         --cwd "$OPT_WORKSPACE" \
-        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
+        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run --standalone \
             "${AUTO_ARGS[@]}" \
             "${SESSION_ARGS[@]}" \
             "${AGENT_ARGS[@]}" \

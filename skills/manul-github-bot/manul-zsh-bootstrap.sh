@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# manul-zsh-bootstrap.sh — initialize Manul from the operator's Zsh environment.
+#
+# Manul's runtime scripts remain Bash. This wrapper only makes sure that an
+# unattended entrypoint (notably the cron watchdog) first loads ~/.zshrc so its
+# exported PATH/provider/tool settings are inherited by the Bash process tree.
+#
+# Interactive Manul commands already enter through manul-shell.zsh, which sets
+# MANUL_ZSH_ENV_READY=1; those commands do not start a second Zsh process.
+
+set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+    echo "Usage: manul-zsh-bootstrap.sh <command> [args...]" >&2
+    exit 2
+fi
+
+if [ "${MANUL_ZSH_ENV_READY:-}" = "1" ]; then
+    exec "$@"
+fi
+
+ZSH_EXECUTABLE=""
+if [ -n "${ZSH_BIN:-}" ]; then
+    case "$ZSH_BIN" in
+        */*)
+            [ -x "$ZSH_BIN" ] && ZSH_EXECUTABLE="$ZSH_BIN"
+            ;;
+        *)
+            ZSH_EXECUTABLE="$(command -v -- "$ZSH_BIN" 2>/dev/null || true)"
+            ;;
+    esac
+fi
+if [ -z "$ZSH_EXECUTABLE" ]; then
+    ZSH_EXECUTABLE="$(command -v zsh 2>/dev/null || true)"
+fi
+if [ -z "$ZSH_EXECUTABLE" ]; then
+    for candidate in /usr/bin/zsh /bin/zsh /usr/local/bin/zsh /opt/homebrew/bin/zsh; do
+        if [ -x "$candidate" ]; then
+            ZSH_EXECUTABLE="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$ZSH_EXECUTABLE" ] || [ ! -x "$ZSH_EXECUTABLE" ]; then
+    echo "ERROR: zsh is required to load the operator's ~/.zshrc for unattended Manul execution" >&2
+    exit 127
+fi
+
+# -i loads ~/.zshrc (the operator's source of truth); -c executes the target.
+# Do not use a login shell here: Manul needs the interactive rc environment,
+# without adding a second, separately maintained login-profile configuration.
+exec "$ZSH_EXECUTABLE" -ic '
+    export MANUL_ZSH_ENV_READY=1
+    exec "$@"
+' manul-zsh-bootstrap "$@"

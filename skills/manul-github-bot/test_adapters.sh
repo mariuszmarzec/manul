@@ -23,7 +23,7 @@ ISOLATED_ENV_VARS=(
   MANUL_CANONICAL_DIR MANUL_CANONICAL_ROOT MANUL_CANONICAL_BRANCH
   MANUL_JIRA_USER MANUL_JIRA_PASSWORD
   AGENT_RUNTIME ROLE_RUNTIME MANUL_ROLE_RUNTIME
-  OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT OPENCODE_CONFIG_DIR OPENCODE_BIN
+  OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT OPENCODE_CONFIG_DIR OPENCODE_BIN OPENCODE_API_KEY
   OPENCLAW_BIN CODEX_BIN CLAUDE_BIN CLAUDE_CODE_BIN
   TODO_LOCAL_MCP_TOKEN TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
   CARACAL_HOME CARACAL_ENV_FILE CARACAL_MCP_URL CARACAL_ACCESS_TOKEN CARACAL_RESOLVE_LIVE CARACAL_MCP_REQUIRED
@@ -712,6 +712,7 @@ test_opencode_success() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
+  printf '%s\n' "$*" > "$MOCK_DISCOVERY_ARGS_FILE"
   printf '%s\n' '[{"id":"build"}]'
   exit 0
 fi
@@ -725,6 +726,7 @@ printf '%s\n' "$PWD" > "$MOCK_CWD_FILE"
 if [ -n "${MOCK_STDIN_FILE:-}" ]; then cat > "$MOCK_STDIN_FILE"; else cat >/dev/null; fi
 printf 'PYTHONPATH=%s\n' "${PYTHONPATH-<unset>}" > "$MOCK_ENV_FILE"
 printf 'PYTHONHOME=%s\n' "${PYTHONHOME-<unset>}" >> "$MOCK_ENV_FILE"
+printf 'OPENCODE_API_KEY=%s\n' "${OPENCODE_API_KEY-<unset>}" >> "$MOCK_ENV_FILE"
 printf '%s\n' '{"type":"step_start","timestamp":1000,"sessionID":"ses_success","part":{"type":"step-start"}}'
 printf '%s\n' '{"type":"text","timestamp":1100,"sessionID":"ses_success","part":{"type":"text","text":"TASK_DONE opencode completed"}}'
 printf '%s\n' '{"type":"step_finish","timestamp":1200,"sessionID":"ses_success","part":{"type":"step-finish"}}'
@@ -738,7 +740,8 @@ MOCK
   local out
   mkdir -p "$tmp/home"
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCLAW_BIN=/does/not/exist \
-    MOCK_ARGS_FILE="$tmp/args" MOCK_CWD_FILE="$tmp/cwd" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" \
+    OPENCODE_API_KEY="opencode-console-fixture-key" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_DISCOVERY_ARGS_FILE="$tmp/discovery-args" MOCK_CWD_FILE="$tmp/cwd" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" \
     PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
       --task-id oc-1 --prompt "$tmp/prompt" --workspace "$tmp" \
@@ -756,6 +759,9 @@ MOCK
     && ok "OpenCodeAdapter keeps prompt contents out of argv" \
     || fail "OpenCodeAdapter still passes prompt contents as an argument"
   grep -q -- '--format json' "$tmp/args" && ok "OpenCodeAdapter requests JSON event format" || fail "OpenCodeAdapter did not request --format json"
+  grep -q -- '--standalone' "$tmp/args" && ok "OpenCodeAdapter bypasses shared OpenCode server for task runs" || fail "OpenCodeAdapter did not request standalone execution"
+  grep -q -- '--standalone' "$tmp/discovery-args" && ok "OpenCode agent discovery bypasses the shared background server" || fail "OpenCode agent discovery did not request standalone execution"
+  grep -qx 'OPENCODE_API_KEY=opencode-console-fixture-key' "$tmp/env" && ok "OpenCodeAdapter preserves operator OpenCode Console authentication" || fail "OpenCodeAdapter dropped OPENCODE_API_KEY"
   grep -Fxq "$tmp" "$tmp/cwd" && ok "OpenCodeAdapter launches OpenCode from the assigned workspace" || fail "OpenCodeAdapter did not set OpenCode working directory to the assigned workspace"
   ! grep -Eq '(^|[[:space:]])--dir([[:space:]]|$)' "$tmp/args" && ok "OpenCodeAdapter does not pass the unsupported --dir flag to OpenCode 2.x" || fail "OpenCodeAdapter still passes unsupported --dir to opencode run"
   grep -q -- '--agent build' "$tmp/args" && ok "OpenCodeAdapter passes agent selection" || fail "OpenCodeAdapter ignored --agent"
@@ -1127,6 +1133,7 @@ MOCK
   [ "$rc" -eq 0 ] && ok "Internal continuation returns success to the same Manul attempt" || fail "Internal continuation rc=$rc"
   [ "$(cat "$tmp/count")" = "2" ] && ok "Configured limit allows one internal continuation" || fail "Internal invocation count=$(cat "$tmp/count" 2>/dev/null || echo missing)"
   grep -Fq -- '--session ses_internal' "$tmp/args" && ok "Internal continuation resumes the original OpenCode session" || fail "Internal continuation did not pass the session ID"
+  [ "$(grep -c -- '--standalone' "$tmp/args")" -eq 2 ] && ok "Initial and resumed turns both use standalone OpenCode servers" || fail "A resumed OpenCode turn reused the shared background service"
   printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_internal' && ok "Final result retains the resumed OpenCode session identity" || fail "Final session identity missing"
   grep -Fq "TASK_DONE resumed after step limit" "$tmp/stdout" && ok "Final text/control marker is normalized from the resumed run" || fail "TASK_DONE marker missing from normalized output"
   [ -f "$tmp/runtime/logs/tasks/task-oc-internal-resume.attempt-1.opencode.jsonl" ] && ok "All inner invocations are retained in the same attempt log" || fail "Aggregated per-attempt runtime log missing"

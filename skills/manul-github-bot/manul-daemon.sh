@@ -16,29 +16,20 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # ERR trap: log any unhandled command failure with context
 trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "${LIFECYCLE_LOG:-/dev/null}" 2>/dev/null; fi' ERR
 
-# Ensure standard PATH is available when running via setsid/nohup.
-# ~/.local/bin is required: the OpenClaw CLI is installed there and the daemon
-# (often started by cron/watchdog) inherits a PATH that omits it, which made
-# `command -v openclaw` fail and every agent invocation die instantly.
-# The OpenClaw CLI itself is a wrapper that execs `npx`, so the nvm node bin
-# must also be reachable or the agent dies with "npx: not found".
-# NOTE: the nvm glob must be expanded BEFORE assignment (unquoted), otherwise
-# the literal string "*.bin" ends up on PATH and `npx` is still not found.
-#
-# The OpenCode CLI is installed at $HOME/.opencode/bin by its installer, which
-# only appends that directory to the interactive shell PATH (~/.zshrc). The
-# daemon worker inherits a non-interactive PATH that omits it, so
-# `command -v opencode` returned nothing and every opencode agent died with
-# exit 127 before logging a single line. Add the OpenCode bin dir here so the
-# OpenCode adapter (and any other tool installed there) is reachable.
-_NVM_NODE_BIN=""
-for _NVM_NODE_CANDIDATE in "$HOME"/.nvm/versions/node/*/bin; do
-  if [ -d "$_NVM_NODE_CANDIDATE" ]; then
-    _NVM_NODE_BIN="$_NVM_NODE_CANDIDATE"
-    break
+# Direct daemon invocations must get the same exported environment as the
+# official startup/watchdog paths. Interactive callers already carry the marker.
+EARLY_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]] && [ "${MANUL_ZSH_ENV_READY:-}" != "1" ]; then
+  BOOTSTRAP="$EARLY_SCRIPT_DIR/manul-zsh-bootstrap.sh"
+  if [ ! -f "$BOOTSTRAP" ]; then
+    echo "ERROR: Manul Zsh bootstrap is missing: $BOOTSTRAP" >&2
+    exit 127
   fi
-done
-export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
+  exec bash "$BOOTSTRAP" "$EARLY_SCRIPT_DIR/manul-daemon.sh" "$@"
+fi
+
+# The daemon inherits the operator's exact exported PATH/provider settings from
+# ~/.zshrc; no second PATH list is maintained in Manul.
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
@@ -62,9 +53,8 @@ manul_platform_prepare || exit 1
 manul_platform_reexec_if_needed "$DAEMON_SCRIPT_ABS" "$@"
 
 
-# Load operator/provider overrides from the runtime-owned environment file.
-# This is required for unattended cron/watchdog execution because ~/.zshrc is
-# not loaded there.
+# Load Manul-specific integration fallbacks after the operator's ~/.zshrc
+# environment. Already-exported shell values always take precedence.
 source "$DAEMON_SCRIPT_DIR/manul-env.sh"
 if ! manul_env_load "$MANUL_DIR"; then
   echo "ERROR: failed to load $MANUL_DIR/.env" >&2

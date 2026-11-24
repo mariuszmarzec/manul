@@ -87,6 +87,7 @@ SCRIPTS=(
     "manul-monitor.sh"
     "manul-monitor.py"
     "manul-query.sh"
+    "manul-zsh-bootstrap.sh"
     "manul-slack-intake.sh"
     "manul-operator-context.py"
     "manul-submit.sh"

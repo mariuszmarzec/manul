@@ -9,16 +9,29 @@
 #   2. Detect a stale lock file (age >= LOCK_TTL) and remove it (WITHOUT resetting tasks).
 #   3. Recover tasks based on stale heartbeat/lease ONLY, respecting worker ownership.
 
-export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
+# Cron starts with a minimal environment. Re-enter through the operator's
+# interactive Zsh configuration before the watchdog starts the daemon. Existing
+# crontab entries can still invoke watchdog.sh directly; this guard upgrades
+# them without requiring a manual crontab edit.
+if [ "${MANUL_ZSH_ENV_READY:-}" != "1" ]; then
+    BOOTSTRAP="$SCRIPT_DIR/manul-zsh-bootstrap.sh"
+    if [ ! -f "$BOOTSTRAP" ]; then
+        echo "ERROR: Manul Zsh bootstrap is missing: $BOOTSTRAP" >&2
+        exit 127
+    fi
+    exec bash "$BOOTSTRAP" "$SCRIPT_DIR/watchdog.sh" "$@"
+fi
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-# Cron does not inherit the interactive Homebrew PATH on macOS.
+# Platform preparation may add package-manager paths when required. The Zsh
+# bootstrap supplies the operator's PATH unchanged for normal WSL/Linux use.
 source "$SCRIPT_DIR/manul-platform.sh"
 manul_platform_prepare || exit 1
 manul_platform_reexec_if_needed "$SCRIPT_DIR/watchdog.sh" "$@"
-# Cron does not load ~/.zshrc, so load the runtime-owned environment before
-# resolving Manul paths or watchdog operator overrides.
+# Load Manul-specific integration fallbacks after the Zsh bootstrap. Exported
+# operator values from ~/.zshrc remain authoritative.
 source "$SCRIPT_DIR/manul-env.sh"
 if ! manul_env_load "$MANUL_DIR"; then
     echo "ERROR: failed to load $MANUL_DIR/.env" >&2

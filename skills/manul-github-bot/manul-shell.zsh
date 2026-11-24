@@ -30,6 +30,15 @@ MANUL_REPAIR="$MANUL_CANONICAL_DIR/repair-manul-runtime.sh"
 MANUL_AUTOMATION="$MANUL_CANONICAL_DIR/start-manul-automation.sh"
 MANUL_UPDATER="$MANUL_CANONICAL_DIR/update-manul.sh"
 
+# This file is sourced by the operator's existing ~/.zshrc. Export the
+# environment needed by Bash scripts and detached workers; do not maintain a
+# second PATH/provider configuration in Manul.
+MANUL_DIR="${MANUL_DIR:-$MANUL_RUNTIME_DIR}"
+export MANUL_ZSH_ENV_READY=1
+export MANUL_CANONICAL_DIR MANUL_RUNTIME_DIR MANUL_DIR
+[[ -n "${MANUL_CANONICAL_ROOT:-}" ]] && export MANUL_CANONICAL_ROOT
+[[ -n "${MANUL_CANONICAL_BRANCH:-}" ]] && export MANUL_CANONICAL_BRANCH
+
 # Git checkouts on Windows-backed filesystems can materialize CRLF even when
 # the canonical Manul source is executed from WSL. Normalize only Manul-owned
 # source scripts; runtime entries are symlinks to these canonical files.

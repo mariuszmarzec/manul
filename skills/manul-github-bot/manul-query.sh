@@ -3,7 +3,18 @@
 
 set -euo pipefail
 if [ -z "${MANUL_DIR:-}" ]; then MANUL_DIR="$HOME/.manul"; fi
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
+# A direct invocation gets the same ~/.zshrc exports as the manul --prompt
+# shell function. Calls from an initialized Zsh session avoid another shell.
+if [ "${MANUL_ZSH_ENV_READY:-}" != "1" ]; then
+  BOOTSTRAP="$SCRIPT_DIR/manul-zsh-bootstrap.sh"
+  if [ ! -f "$BOOTSTRAP" ]; then
+    echo "ERROR: Manul Zsh bootstrap is missing: $BOOTSTRAP" >&2
+    exit 127
+  fi
+  exec bash "$BOOTSTRAP" "$SCRIPT_DIR/manul-query.sh" "$@"
+fi
 
 # Keep the normal operator query tool-free. Slack intake is a separate,
 # narrowly-scoped action mode with a dedicated Todo Local-only OpenCode agent.
