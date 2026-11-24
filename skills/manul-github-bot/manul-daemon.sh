@@ -16,29 +16,9 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # ERR trap: log any unhandled command failure with context
 trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "${LIFECYCLE_LOG:-/dev/null}" 2>/dev/null; fi' ERR
 
-# Ensure standard PATH is available when running via setsid/nohup.
-# ~/.local/bin is required: the OpenClaw CLI is installed there and the daemon
-# (often started by cron/watchdog) inherits a PATH that omits it, which made
-# `command -v openclaw` fail and every agent invocation die instantly.
-# The OpenClaw CLI itself is a wrapper that execs `npx`, so the nvm node bin
-# must also be reachable or the agent dies with "npx: not found".
-# NOTE: the nvm glob must be expanded BEFORE assignment (unquoted), otherwise
-# the literal string "*.bin" ends up on PATH and `npx` is still not found.
-#
-# The OpenCode CLI is installed at $HOME/.opencode/bin by its installer, which
-# only appends that directory to the interactive shell PATH (~/.zshrc). The
-# daemon worker inherits a non-interactive PATH that omits it, so
-# `command -v opencode` returned nothing and every opencode agent died with
-# exit 127 before logging a single line. Add the OpenCode bin dir here so the
-# OpenCode adapter (and any other tool installed there) is reachable.
-_NVM_NODE_BIN=""
-for _NVM_NODE_CANDIDATE in "$HOME"/.nvm/versions/node/*/bin; do
-  if [ -d "$_NVM_NODE_CANDIDATE" ]; then
-    _NVM_NODE_BIN="$_NVM_NODE_CANDIDATE"
-    break
-  fi
-done
-export PATH="$HOME/.opencode/bin:$HOME/.local/bin:${_NVM_NODE_BIN:-$HOME/.nvm/versions/node/current/bin}:/usr/local/bin:/usr/bin:/bin:$PATH"
+# The daemon is started from the initialized operator Zsh environment, either
+# by the interactive shell integration or by the watchdog's Zsh bootstrap.
+# Keep PATH exactly as supplied by ~/.zshrc; do not synthesize a second copy.
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
