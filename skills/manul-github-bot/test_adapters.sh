@@ -940,10 +940,10 @@ CONFIG
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-case "\${1:-}" in
+case "${1:-}" in
   debug)
-    [ "\${2:-}" = "agents" ] || { echo "unexpected OpenCode debug invocation" >&2; exit 91; }
-    [ "\${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.json" ] || {
+    [ "${2:-}" = "agents" ] || { echo "unexpected OpenCode debug invocation" >&2; exit 91; }
+    [ "${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.json" ] || {
       echo "empty JSONC config was not recovered before agent discovery" >&2
       exit 65
     }
@@ -952,7 +952,7 @@ case "\${1:-}" in
     printf '%s\n' '[{"id":"manul-operator-query"}]'
     ;;
   run)
-    [ "\${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.json" ] || {
+    [ "${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.json" ] || {
       echo "OpenCode run did not receive the configured JSON file" >&2
       exit 65
     }
@@ -962,7 +962,7 @@ case "\${1:-}" in
       .agent["manul-operator-query"].tools["*"] == false
       and .model == null
       and .provider == null
-    ' <<<"\${OPENCODE_CONFIG_CONTENT:-}" >/dev/null
+    ' <<<"${OPENCODE_CONFIG_CONTENT:-}" >/dev/null
     cat >/dev/null
     printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-config-recovery","part":{"type":"text","text":"TASK_DONE recovered LiteLLM config"}}'
     ;;
