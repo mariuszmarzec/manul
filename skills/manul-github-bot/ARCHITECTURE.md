@@ -274,16 +274,32 @@ The runtime-isolation refactor makes Manul independent of the OpenClaw runtime l
 └── workspace/
 ```
 
-OpenClaw remains provider-owned, including its state/configuration paths.
-Those paths are supplied through provider environment such as
-`OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`; Manul may persist those
-values in `~/.manul/.env` for unattended execution.
+OpenClaw, OpenCode, Claude Code, Codex and other runtimes retain their native
+configuration/state locations. The operator's existing ~/.zshrc is the
+single source of truth for exported environment such as PATH,
+OPENCLAW_STATE_DIR, OPENCODE_CONFIG, provider credentials and tool paths.
 
-OpenCode, Claude Code, Tabnine and other runtimes retain their native
-configuration/state locations unless an adapter has a concrete reason to own
-additional Manul-specific data.
+Interactive Manul commands inherit the initialized Zsh process through
+manul-shell.zsh. Unattended/direct entrypoints use
+manul-zsh-bootstrap.sh to run zsh -ic, load the same ~/.zshrc, and then exec
+the existing Bash script. The cron watchdog bootstraps itself before
+restarting the daemon, so existing crontab entries do not need to be rewritten.
+The daemon and watchdog must not synthesize or prepend a separate PATH.
 
-For unattended Manul execution, the installer/repair path may apply the minimum required provider configuration without moving that configuration into `~/.manul`. `OPENCODE_CONFIG` is an explicitly supported variable in `~/.manul/.env`, so installer/repair and background daemon/watchdog use the same effective OpenCode config. The configuration keeps `/tmp/**` for scratch work, adds `/tmp/manul-diagnostics/**` for local diagnostic artifacts, grants read/search but denies edit for `~/.manul/logs/**` during explicitly authorized operator-side diagnosis, and keeps Gradle access limited to the dependency module cache. Ordinary Manul task prompts still prohibit inspection of Manul runtime state/logs. Manul does not own or persist `opencode.json` in its runtime state.
+~/.manul/.env remains only for Manul-specific integration fallbacks and
+backwards compatibility. Values already exported by Zsh take precedence;
+bootstrap does not duplicate provider paths/configuration or copy arbitrary
+shell variables. OpenCode task runs use opencode run --standalone to avoid
+inheriting stale environment from an existing background OpenCode service,
+while preserving the operator's OpenCode authentication and provider setup.
+
+The OpenCode permission configuration keeps /tmp/** for scratch work,
+adds /tmp/manul-diagnostics/** for local diagnostic artifacts, grants
+read/search but denies edit for ~/.manul/logs/** during explicitly authorized
+operator-side diagnosis, and keeps Gradle access limited to the dependency
+module cache. Ordinary Manul task prompts still prohibit inspection of Manul
+runtime state/logs. Manul does not own or persist opencode.json in its
+runtime state.
 
 The local operator-query CLI follows a separate one-shot path:
 `manul --prompt` creates a mode-0700 disposable scratch directory, builds a
