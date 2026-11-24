@@ -276,7 +276,7 @@ the pending list directly.
 
 After all child work is terminal, integrate the results and run final QA. In the
 same final checkpoint, add
-`data.coordinator.finalization = { "status": "passed", "qaPassed": true, "summary": "<non-empty QA summary>" }`.
+`data.coordinator.finalization = { "status": "passed", "qaPassed": true, "summary": "<non-empty QA summary>", "workItemIds": ["<every current item id, in checkpoint order>"] }`. The `workItemIds` list must exactly match the final checkpoint item list; any changed or newly added work item requires fresh final QA.
 Only then emit the single final `TASK_DONE` marker and publish the final result
 comment. If children remain active, emit `TASK_WAITING_FOR_TEAM`. If an event
 still needs processing or final QA is not complete, continue the parent work;

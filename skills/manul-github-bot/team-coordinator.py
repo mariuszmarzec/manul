@@ -280,6 +280,12 @@ def completion_guard(args: argparse.Namespace) -> int:
         if any(not isinstance(event, dict) or not isinstance(event.get("eventId"), str) or not event["eventId"] for event in pending):
             raise ValueError("Team pendingChildEvents contains an invalid event")
 
+        work_item_ids = [item.get("id") for item in items]
+        if any(not isinstance(item_id, str) or not item_id for item_id in work_item_ids):
+            raise ValueError("Every Team work item must have a non-empty string id")
+        if len(work_item_ids) != len(set(work_item_ids)):
+            raise ValueError("Team work item IDs must be unique")
+
         finalization = coordinator.get("finalization")
         final_qa_complete = (
             isinstance(finalization, dict)
@@ -287,6 +293,7 @@ def completion_guard(args: argparse.Namespace) -> int:
             and finalization.get("qaPassed") is True
             and isinstance(finalization.get("summary"), str)
             and bool(finalization["summary"].strip())
+            and finalization.get("workItemIds") == work_item_ids
         )
         checkpoint_complete = state.get("status") == "completed" and state.get("phase") == "completed"
         if all_terminal and not pending and checkpoint_complete and final_qa_complete:

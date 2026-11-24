@@ -5587,7 +5587,8 @@ and put the following finalization receipt under data.coordinator:
   "finalization": {
     "status": "passed",
     "qaPassed": true,
-    "summary": "<non-empty summary of final integration and QA>"
+    "summary": "<non-empty summary of final integration and QA>",
+    "workItemIds": ["<every current item id, in checkpoint order>"]
   }
 }
 A final completion is accepted only when all tracker references are terminal
@@ -5599,6 +5600,9 @@ TASK_DONE/TASK_COMPLETED while siblings are active, while pending events remain,
 or before final integration and QA. Emit TASK_WAITING_FOR_TEAM when waiting for
 active children; if all children are terminal but final integration/QA is not
 done, continue the parent task and provide the final checkpoint only afterward.
+The finalization workItemIds list must exactly equal the IDs of every current
+item in data.items, in the same order. Adding, removing or changing work items
+invalidates any previous QA receipt; submit a fresh finalization object.
 TEAM_CHECKPOINT_PROTOCOL
       } >> "$TASK_PROMPT_FILE" || {
         fail_team_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not load the required Team Workflow skill into task context." "${PR_NUM_FROM_URL:-}"

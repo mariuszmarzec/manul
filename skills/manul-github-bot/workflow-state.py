@@ -103,8 +103,12 @@ def preserve_team_coordinator_state(db,event):
         # Wake metadata and sequence are also coordinator-owned; only the
         # coordinator itself may advance them.
         for key,value in previous_coordinator.items():
-            if key != "pendingChildEvents":
+            if key not in {"pendingChildEvents", "finalization"}:
                 merged[key]=value
+
+        # Finalization is a model-owned receipt for the exact current work-item
+        # set. Never carry an old receipt into a later checkpoint: a new child,
+        # changed plan or new QA run must provide a fresh finalization object.
         new_data["coordinator"]=merged
 
     previous_items=previous_data.get("items",[])

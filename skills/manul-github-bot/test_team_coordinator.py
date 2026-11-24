@@ -463,6 +463,7 @@ class TeamCoordinatorTests(unittest.TestCase):
             coordinator["finalization"] = {
                 "status": "passed", "qaPassed": True,
                 "summary": "All child work integrated and final regression QA passed.",
+                "workItemIds": [item["id"] for item in items],
             }
         state["data"]["coordinator"] = coordinator
         self.db.execute(
@@ -590,6 +591,27 @@ class TeamCoordinatorTests(unittest.TestCase):
             "SELECT status,claimToken FROM processed_comments WHERE commentId=?",
             (self.parent_id,),
         ).fetchone(), ("running", "claim-1"))
+
+    def test_completion_guard_rejects_finalization_for_an_old_work_item_set(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "completed", pr_number=22)
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+        ], finalization=True)
+        stored = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        stored["data"]["items"].append(self.team_item("work-b", "owner/repo#12"))
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=? WHERE workflowId=?",
+            (json.dumps(stored), self.workflow_id),
+        )
+        self.db.commit()
+
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "queued")
+        self.assertFalse(result["finalQaComplete"])
 
     def test_completion_guard_rejects_stale_claim_without_transition(self):
         self.insert_child(11, "completed", pr_number=21)
