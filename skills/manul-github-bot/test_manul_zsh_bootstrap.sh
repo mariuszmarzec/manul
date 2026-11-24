@@ -66,6 +66,22 @@ OUTPUT="$(
   && ok "Bootstrap loads the operator .zshrc and preserves argument boundaries" \
   || fail "Bootstrap did not pass the Zsh environment/arguments correctly: $OUTPUT"
 
+# When Zsh is installed, also exercise the real interactive startup path. The
+# minimal temporary .zshrc proves exported PATH/auth values reach the target.
+if command -v zsh >/dev/null 2>&1; then
+  REAL_OUTPUT="$(
+    env -u ZDOTDIR HOME="$TEST_ROOT/home" \
+      MANUL_TEST_PATH_PREFIX="$TEST_ROOT/real-operator-bin" \
+      ZSH_BIN="$(command -v zsh)" \
+      bash "$BOOTSTRAP" "$TEST_ROOT/target.sh" "argument with spaces" second
+  )"
+  [ "$REAL_OUTPUT" = "TARGET_OK:from-user-zshrc:console-key-from-user-zshrc" ] \
+    && ok "Real Zsh -i startup sources ~/.zshrc and exports the operator environment" \
+    || fail "Real Zsh bootstrap failed: $REAL_OUTPUT"
+else
+  echo "SKIP: real Zsh integration (zsh is not installed in this test environment)"
+fi
+
 # The marker prevents nested shells for commands already launched from
 # manul-shell.zsh. Use a deliberately invalid ZSH_BIN to prove it is bypassed.
 BYPASS_OUTPUT="$(
