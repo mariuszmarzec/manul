@@ -67,7 +67,7 @@ cat >/dev/null
 CRONTAB
 chmod +x "$START_BIN/crontab"
 START_OUTPUT="$(
-    START_TEST_LOG="$START_LOG" MANUL_DIR="$START_RUNTIME" \
+    MANUL_ZSH_ENV_READY=1 START_TEST_LOG="$START_LOG" MANUL_DIR="$START_RUNTIME" \
     PATH="$START_BIN:$PATH" bash "$START_CANONICAL/start-manul-automation.sh" stop 2>&1
 )"
 if [ -f "$START_LOG" ] && grep -q "daemon-stop-ok" "$START_LOG"; then
