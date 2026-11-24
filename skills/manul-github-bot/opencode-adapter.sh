@@ -104,6 +104,11 @@ if [ -z "$OPENCODE_BIN" ]; then
     exit 127
 fi
 export OPENCODE_BIN
+# A task-scoped overlay and provider credentials must be consumed by this
+# invocation, not by an already-running OpenCode background service that may
+# have been started with a different model/config/environment. OpenCode 2.x
+# supports --standalone as a root flag; use it for every probe and model run.
+OPENCODE_SERVER_ARGS=(--standalone)
 # Surface the resolution path in diagnostics so a future failure is not a
 # silent empty-stderr death like the one this fix addresses.
 if [ -n "${OPENCODE_BIN_OVERRIDE:-}" ]; then
@@ -999,7 +1004,7 @@ if [ "$CARACAL_CONFIGURED" = "1" ]; then
     _caracal_probe_stderr="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
     ProcessRunner_TmpStdout="$_caracal_probe_stdout"
     ProcessRunner_TmpStderr="$_caracal_probe_stderr"
-    _caracal_probe_result="$(ProcessRunner.run --timeout "$_caracal_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" mcp list)"
+    _caracal_probe_result="$(ProcessRunner.run --timeout "$_caracal_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" "${OPENCODE_SERVER_ARGS[@]}" mcp list)"
     _caracal_probe_header="$(printf '%s\n' "$_caracal_probe_result" | head -n 1)"
     _caracal_probe_rc="${_caracal_probe_header%%|*}"
     ProcessRunner_TmpStdout=""
@@ -1084,7 +1089,7 @@ opencode_agent_discovery() {
         : >"$stderr_file"
         ProcessRunner_TmpStdout="$stdout_file"
         ProcessRunner_TmpStderr="$stderr_file"
-        result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents)"
+        result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" "${OPENCODE_SERVER_ARGS[@]}" debug agents)"
         header="$(printf '%s\n' "$result" | head -n 1)"
         rc="${header%%|*}"
         duration="$(printf '%s\n' "$result" | head -n 1 | cut -d'|' -f2)"
@@ -1126,7 +1131,7 @@ opencode_agent_discovery() {
                 ProcessRunner_TmpStderr=""
                 category="v1_unsupported"
                 log "agent-discovery role=$role attempt=$attempt exit_code=$rc duration=${duration}s stdout_bytes=$stdout_size stderr_bytes=$stderr_size category=$category"
-                result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agent "$role")"
+                result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" "${OPENCODE_SERVER_ARGS[@]}" debug agent "$role")"
                 header="$(printf '%s\n' "$result" | head -n 1)"
                 rc="${header%%|*}"
                 ProcessRunner_TmpStdout=""
@@ -1253,7 +1258,7 @@ permission_recovery_pending=false
 current_stderr_error_message=""
 execution_start_epoch="$(date +%s)"
 
-log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${session_id:-<new>} timeout=${AGENT_TIMEOUT}s no_progress_timeout=${AGENT_IDLE_TIMEOUT}s active_tool_timeout=${AGENT_TOOL_IDLE_TIMEOUT}s active_step_timeout=${AGENT_STEP_IDLE_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} workspace=$OPT_WORKSPACE internal_step_limit_continuations=$STEP_LIMIT_CONTINUATIONS_MAX"
+log "starting task=$OPT_TASK_ID attempt=$OPT_ATTEMPT role=${OPT_AGENT:-<automatic>} auto=$OPT_AUTO session=${session_id:-<new>} timeout=${AGENT_TIMEOUT}s no_progress_timeout=${AGENT_IDLE_TIMEOUT}s active_tool_timeout=${AGENT_TOOL_IDLE_TIMEOUT}s active_step_timeout=${AGENT_STEP_IDLE_TIMEOUT}s opencode=$OPENCODE_BIN source=${_OC_SOURCE:-unknown} server=standalone workspace=$OPT_WORKSPACE internal_step_limit_continuations=$STEP_LIMIT_CONTINUATIONS_MAX"
 
 # One timeout budget spans the first call and all internal continuations.
 # These resumes happen before the adapter returns, so they do not finish or
@@ -1299,7 +1304,7 @@ while true; do
         --idle-tool-timeout "$AGENT_TOOL_IDLE_TIMEOUT" \
         --idle-step-timeout "$AGENT_STEP_IDLE_TIMEOUT" \
         --cwd "$OPT_WORKSPACE" \
-        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
+        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" "${OPENCODE_SERVER_ARGS[@]}" run \
             "${AUTO_ARGS[@]}" \
             "${SESSION_ARGS[@]}" \
             "${AGENT_ARGS[@]}" \
