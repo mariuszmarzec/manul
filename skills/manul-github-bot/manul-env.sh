@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # manul-env.sh — Load and bootstrap Manul operator environment.
 #
-# The daemon and watchdog can run from cron/systemd without a login shell, so
-# provider-specific environment must not rely on ~/.zshrc.
+# Runtime environment is initialized from the operator's existing ~/.zshrc
+# before the daemon/watchdog starts. This file is reserved for Manul-specific
+# integration credentials and legacy fallbacks; exported values already
+# supplied by Zsh always take precedence. PATH is never loaded from this file.
 #
-# Runtime-owned environment file:
+# Runtime-owned integration environment file:
 #   ~/.manul/.env
 #
-# The bootstrap operation preserves existing operator settings and adds only
-# explicitly supported provider values. It never copies arbitrary environment variables.
+# The bootstrap operation persists only explicitly supported Manul integration
+# values. It never copies arbitrary environment variables.
 
 manul_env_file() {
   local runtime_dir="${1:-${MANUL_DIR:-$HOME/.manul}}"
@@ -28,11 +30,32 @@ manul_env_load() {
   fi
 
   set -a
+  # Treat ~/.zshrc as the source of truth for exported operator settings.
+  # The Manul file supplies only values absent from the inherited environment;
+  # it can never replace PATH, even if an old version wrote one here.
   # shellcheck disable=SC1090
   . <(awk '
-    $0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/ &&
-    $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/ &&
-    $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/
+    BEGIN {
+      while ("env" | getline entry) {
+        split(entry, pair, "=")
+        if (pair[1] != "") inherited[pair[1]] = 1
+      }
+      close("env")
+    }
+    {
+      candidate = $0
+      sub(/^[[:space:]]*/, "", candidate)
+      sub(/^export[[:space:]]+/, "", candidate)
+      name = ""
+      if (match(candidate, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+        name = substr(candidate, 1, index(candidate, "=") - 1)
+      }
+      if (name == "PATH" || (name != "" && name in inherited)) next
+      if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/) next
+      if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/) next
+      if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/) next
+      print
+    }
   ' "$env_file")
   set +a
 }
@@ -53,14 +76,13 @@ manul_env_bootstrap() {
     if ! cat > "$env_file" <<'EOF'
 # Manul operator environment.
 #
-# This file is loaded by unattended Manul processes (daemon/watchdog).
-# Keep provider-specific paths here when they are not available from cron,
-# for example OPENCLAW_STATE_DIR, OPENCODE_CONFIG, CODEX_HOME/CODEX_BIN/
-# CODEX_MODEL and CLAUDE_CONFIG_DIR/CLAUDE_BIN/CLAUDE_MODEL. Only supported
-# variables are persisted.
+# Manul-specific integration values used by unattended tasks live here.
+# Exported tool/provider configuration and PATH come from ~/.zshrc.
+# Legacy provider entries are retained as fallbacks but never override values
+# already exported by the operator's shell.
 #
-# The installer only copies a small allowlist of provider variables from the
-# current process environment. Existing entries are always preserved.
+# The installer only copies explicitly configured integration credentials.
+# Existing entries are always preserved.
 EOF
     then
       return 1
@@ -70,24 +92,8 @@ EOF
 
   local variable value refreshed_file
   for variable in \
-    OPENCLAW_STATE_DIR \
-    OPENCLAW_CONFIG_PATH \
-    OPENCLAW_HOME \
-    OPENCLAW_GATEWAY_PORT \
-    OPENCLAW_BIN \
-    OPENCODE_BIN \
-    OPENCODE_CONFIG \
-    CODEX_HOME \
-    CODEX_BIN \
-    CODEX_MODEL \
-    CLAUDE_CONFIG_DIR \
-    CLAUDE_BIN \
-    CLAUDE_MODEL \
     MANUL_JIRA_USER \
-    MANUL_JIRA_PASSWORD \
-    MANUL_CANONICAL_DIR \
-    MANUL_CANONICAL_ROOT \
-    MANUL_CANONICAL_BRANCH; do
+    MANUL_JIRA_PASSWORD; do
     value="${!variable:-}"
     [ -n "$value" ] || continue
 
@@ -111,32 +117,8 @@ EOF
     echo "  Removed legacy operator Fiteo PAT from Manul runtime environment" >&2
   fi
 
-  # Canonical source locations are migration-sensitive: refresh them on every
-  # installer bootstrap so obsolete source-path overrides cannot remain in the
-  # unattended daemon/watchdog environment after source extraction.
-  if [ -n "${MANUL_CANONICAL_DIR:-}" ]; then
-    local canonical_refresh_file
-    canonical_refresh_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
-    if ! awk '
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_DIR=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_ROOT=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_CANONICAL_BRANCH=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?MANUL_HOST_SKILLS_DIR=/
-    ' "$env_file" > "$canonical_refresh_file"; then
-      rm -f -- "$canonical_refresh_file"
-      return 1
-    fi
-    printf 'MANUL_CANONICAL_DIR=%q\n' "$MANUL_CANONICAL_DIR" >> "$canonical_refresh_file"
-    if [ -n "${MANUL_CANONICAL_ROOT:-}" ]; then
-      printf 'MANUL_CANONICAL_ROOT=%q\n' "$MANUL_CANONICAL_ROOT" >> "$canonical_refresh_file"
-    fi
-    if [ -n "${MANUL_CANONICAL_BRANCH:-}" ]; then
-      printf 'MANUL_CANONICAL_BRANCH=%q\n' "$MANUL_CANONICAL_BRANCH" >> "$canonical_refresh_file"
-    fi
-    chmod 600 "$canonical_refresh_file" || { rm -f -- "$canonical_refresh_file"; return 1; }
-    mv -- "$canonical_refresh_file" "$env_file" || { rm -f -- "$canonical_refresh_file"; return 1; }
-    echo "  Refreshed standalone Manul source paths" >&2
-  fi
+  # Canonical/runtime paths and provider binaries are inherited from
+  # ~/.zshrc, not copied into a second Manul-specific configuration file.
 
   if grep -qE '^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=' "$env_file"; then
     refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
