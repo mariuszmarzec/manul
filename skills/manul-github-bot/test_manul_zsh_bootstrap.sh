@@ -51,10 +51,10 @@ shift
 [ -r "$HOME/.zshrc" ] || exit 43
 # Simulate the routine messages emitted by ssh-agent and ssh-add from
 # the user's ~/.zshrc, plus unrelated startup output that must remain visible.
-printf 'Agent pid 12345\\n'
-printf 'ZSHRC_NOTICE\\n'
-printf 'Identity added: /tmp/test-key (fixture)\\n' >&2
-printf 'ZSHRC_WARNING\\n' >&2
+printf 'Agent pid 12345\n'
+printf 'ZSHRC_NOTICE\n'
+printf 'Identity added: /tmp/test-key (fixture)\n' >&2
+printf 'ZSHRC_WARNING\n' >&2
 # The fixture uses POSIX-compatible export statements, matching the relevant
 # environment behavior of Zsh's .zshrc.
 . "$HOME/.zshrc"
@@ -69,7 +69,7 @@ OUTPUT="$(
   ZSH_BIN="$TEST_ROOT/bin/fake-zsh" \
   bash "$BOOTSTRAP" "$TEST_ROOT/target.sh" "argument with spaces" second
 ) 2>"$STDERR_FILE"
-EXPECTED_OUTPUT="$(printf 'ZSHRC_NOTICE\\nTARGET_OK:from-user-zshrc:console-key-from-user-zshrc')"
+EXPECTED_OUTPUT="$(printf 'ZSHRC_NOTICE\nTARGET_OK:from-user-zshrc:console-key-from-user-zshrc')"
 [ "$OUTPUT" = "$EXPECTED_OUTPUT" ] \
   && ok "Bootstrap loads ~/.zshrc, filters SSH status chatter, and preserves other stdout" \
   || fail "Bootstrap output/environment mismatch: $OUTPUT"
