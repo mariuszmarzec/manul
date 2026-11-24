@@ -755,9 +755,11 @@ always win, and bootstrap must not copy the active shell environment into this
 file. Do not persist provider binary/config paths or arbitrary exported
 variables there.
 
-OpenCode task runs use opencode run --standalone so an already-running
-OpenCode background service cannot substitute its older process environment
-for the one initialized from the operator's ~/.zshrc. Preserve
+OpenCode task runs use the shared OpenCode service (no --standalone) so
+Manul and interactive sessions use the same server, selected model/provider,
+and process environment. The explicit OPENCODE_CONFIG path may be supplied
+from the operator's Zsh environment or retained in ~/.manul/.env as a
+non-secret path fallback; an exported Zsh value always wins. Preserve
 OPENCODE_API_KEY and the operator's configured provider credentials; that
 key is not an instruction to select OpenCode Go.
 
