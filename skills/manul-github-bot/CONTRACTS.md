@@ -193,6 +193,18 @@ The daemon may verify the final PR identity and repository cleanliness before ac
 Lifecycle events are machine-readable comments, not evidence that an agent completed
 work. They are keyed by the exact task ID and execution attempt.
 
+For the Team pause marker `TASK_WAITING_FOR_TEAM`:
+- the OpenCode adapter recognizes it only from a real JSONL text event, never
+  from tool input/output or arbitrary diagnostic payloads;
+- it is a control outcome only when exactly one standalone wait marker is
+  present, the runtime exits successfully, and no DONE, FAILED or user-decision
+  marker is mixed into the same output;
+- the dispatcher accepts the outcome only for `TASK_ACTION=TEAM`, validates
+  the marker and current claim, then atomically parks the parent as
+  `waiting_children`; a failed park remains a failure, not a successful pause;
+- a valid Team pause is not task completion, does not emit `TASK_FAILED`, and
+  does not consume an agent retry attempt.
+
 For `TASK_STARTED`:
 - the daemon publishes at most one signed start comment for a task/attempt;
 - before posting, it reads the correct issue-comment or PR-review-comment endpoint

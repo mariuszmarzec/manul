@@ -1215,7 +1215,10 @@ opencode_agent_discovery() {
             # sequences before its JSON payload. Share the same strict parser
             # as sdd-policy.py so routing and SDD policy cannot disagree.
             local normalized_agents=""
-            if normalized_agents="$(python3 "$MANUL_SCRIPT_DIR/opencode_agent_list.py" < "$stdout_file" 2>/dev/null)" &&
+            # The adapter must not let a caller's stale Python environment
+            # break its own protocol parser (the OpenCode child is separately
+            # launched with PYTHONHOME removed and task-scoped PYTHONPATH).
+            if normalized_agents="$(env -u PYTHONHOME -u PYTHONPATH python3 "$MANUL_SCRIPT_DIR/opencode_agent_list.py" < "$stdout_file" 2>/dev/null)" &&
                 jq -e 'type == "array" and all(.[]; type == "object" and (.id | type == "string" and length > 0))' <<<"$normalized_agents" >/dev/null 2>&1; then
                 ProcessRunner_TmpStdout=""
                 ProcessRunner_TmpStderr=""
@@ -1481,7 +1484,7 @@ while true; do
         current_text_events="$(jq -Rr 'try fromjson catch empty | select(.type == "text") | (.part.text // .text // empty)' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null || true)"
     fi
     current_has_control_marker="false"
-    if printf '%s\n' "$current_text_events" | grep -qE '^TASK_DONE([[:space:]:]|$)|^TASK_FAILED([[:space:]:]|$)|^TASK_NEEDS_USER_BEGIN([[:space:]]|$)|^TASK_NEEDS_USER_END([[:space:]]|$)'; then
+    if printf '%s\n' "$current_text_events" | grep -qE '^TASK_DONE([[:space:]:]|$)|^TASK_FAILED([[:space:]:]|$)|^TASK_WAITING_FOR_TEAM([[:space:]:]|$)|^TASK_NEEDS_USER_BEGIN([[:space:]]|$)|^TASK_NEEDS_USER_END([[:space:]]|$)'; then
         current_has_control_marker="true"
     fi
 
@@ -1548,7 +1551,7 @@ if [ -s "$RAW_STDOUT_FILE" ]; then
         | (.part.text // .text // empty)
     ' "$RAW_STDOUT_FILE" 2>/dev/null || true)"
 
-    for marker in TASK_DONE TASK_FAILED TASK_NEEDS_USER_BEGIN TASK_NEEDS_USER_END; do
+    for marker in TASK_DONE TASK_FAILED TASK_WAITING_FOR_TEAM TASK_NEEDS_USER_BEGIN TASK_NEEDS_USER_END; do
         if ! grep -qE "^${marker}($|[[:space:]:])" "$OPT_STDOUT_FILE" 2>/dev/null; then
             marker_line="$(printf '%s\n' "$normalized_text_events" |
                 grep -E "^${marker}($|[[:space:]:])" | head -n 1 || true)"
@@ -1714,6 +1717,24 @@ elif [ "$idle_timeout_detected" = "true" ]; then
 elif [ "$pr_rc" -eq 124 ]; then
     _status="TIMEOUT"
     _summary="OpenCode execution timed out after ${AGENT_TIMEOUT}s"
+elif grep -qE '^TASK_WAITING_FOR_TEAM([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
+    team_wait_marker_count="$(grep -cx 'TASK_WAITING_FOR_TEAM' "$OPT_STDOUT_FILE" 2>/dev/null || true)"
+    team_wait_marker_like_count="$(grep -cE '^TASK_WAITING_FOR_TEAM([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null || true)"
+    team_other_marker_count="$(grep -cE '^TASK_(DONE|COMPLETED|FAILED|NEEDS_USER_BEGIN|NEEDS_USER_END)([[:space:]:]|$)' "$OPT_STDOUT_FILE" 2>/dev/null || true)"
+    if [ "$pr_rc" -eq 0 ] &&
+       [ "$permission_blocked" -eq 0 ] &&
+       [ "$team_wait_marker_count" -eq 1 ] &&
+       [ "$team_wait_marker_like_count" -eq 1 ] &&
+       [ "$team_other_marker_count" -eq 0 ]; then
+        _status="WAITING_FOR_TEAM"
+        _exit_code=0
+        _summary="OpenCode agent requested a durable Team pause"
+    else
+        _status="FAILED"
+        _exit_code=1
+        _summary="OpenCode emitted a malformed or conflicting TASK_WAITING_FOR_TEAM marker"
+        error_type="RUNTIME_FAILURE"
+    fi
 elif grep -qE '^TASK_NEEDS_USER_BEGIN([[:space:]]|$)' "$OPT_STDOUT_FILE" 2>/dev/null; then
     _status="BLOCKED"
     _exit_code=0
@@ -1813,6 +1834,7 @@ case "$_status" in
         ;;
     BLOCKED)            failure_code="TASK_NEEDS_USER" ;;
     NEEDS_CONTINUATION) failure_code="NEEDS_CONTINUATION" ;;
+    WAITING_FOR_TEAM)   failure_code="" ;;
     COMPLETED)          failure_code="" ;;
 esac
 
