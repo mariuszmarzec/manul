@@ -712,6 +712,7 @@ test_opencode_success() {
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
+  printf '%s\n' "$*" > "$MOCK_DISCOVERY_ARGS_FILE"
   printf '%s\n' '[{"id":"build"}]'
   exit 0
 fi
@@ -740,7 +741,7 @@ MOCK
   mkdir -p "$tmp/home"
   out="$(HOME="$tmp/home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCLAW_BIN=/does/not/exist \
     OPENCODE_API_KEY="opencode-console-fixture-key" \
-    MOCK_ARGS_FILE="$tmp/args" MOCK_CWD_FILE="$tmp/cwd" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" \
+    MOCK_ARGS_FILE="$tmp/args" MOCK_DISCOVERY_ARGS_FILE="$tmp/discovery-args" MOCK_CWD_FILE="$tmp/cwd" MOCK_ENV_FILE="$tmp/env" MOCK_STDIN_FILE="$tmp/stdin" \
     PYTHONPATH="/old-workspace/src" PYTHONHOME="/old-workspace/python-home" AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
       --task-id oc-1 --prompt "$tmp/prompt" --workspace "$tmp" \
@@ -759,6 +760,7 @@ MOCK
     || fail "OpenCodeAdapter still passes prompt contents as an argument"
   grep -q -- '--format json' "$tmp/args" && ok "OpenCodeAdapter requests JSON event format" || fail "OpenCodeAdapter did not request --format json"
   grep -q -- '--standalone' "$tmp/args" && ok "OpenCodeAdapter bypasses shared OpenCode server for task runs" || fail "OpenCodeAdapter did not request standalone execution"
+  grep -q -- '--standalone' "$tmp/discovery-args" && ok "OpenCode agent discovery bypasses the shared background server" || fail "OpenCode agent discovery did not request standalone execution"
   grep -qx 'OPENCODE_API_KEY=opencode-console-fixture-key' "$tmp/env" && ok "OpenCodeAdapter preserves operator OpenCode Console authentication" || fail "OpenCodeAdapter dropped OPENCODE_API_KEY"
   grep -Fxq "$tmp" "$tmp/cwd" && ok "OpenCodeAdapter launches OpenCode from the assigned workspace" || fail "OpenCodeAdapter did not set OpenCode working directory to the assigned workspace"
   ! grep -Eq '(^|[[:space:]])--dir([[:space:]]|$)' "$tmp/args" && ok "OpenCodeAdapter does not pass the unsupported --dir flag to OpenCode 2.x" || fail "OpenCodeAdapter still passes unsupported --dir to opencode run"
