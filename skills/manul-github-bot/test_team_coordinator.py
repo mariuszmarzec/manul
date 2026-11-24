@@ -682,6 +682,7 @@ class TeamCoordinatorTests(unittest.TestCase):
     def test_daemon_checks_team_done_before_generic_completion(self):
         daemon = Path(__file__).with_name("manul-daemon.sh").read_text(encoding="utf-8")
         self.assertLess(daemon.index("completion-guard"), daemon.index('evaluate_task_completion "$REPO"'))
+        self.assertIn('if [ "$TASK_ACTION" = "TEAM" ] && [ "$SDD_POLICY_ACTIVE" != "true" ]', daemon)
         self.assertIn("grep -qE '^TASK_(DONE|COMPLETED)", daemon)
 
 

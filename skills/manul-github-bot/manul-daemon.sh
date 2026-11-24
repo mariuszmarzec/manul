@@ -5808,7 +5808,7 @@ TEAM_CHECKPOINT_PROTOCOL
      fi
       # Team completion needs durable proof; TASK_DONE alone cannot bypass
       # active children, unacknowledged events or the final QA checkpoint.
-      if [ "$TASK_ACTION" = "TEAM" ] && [ "$rc" -eq 0 ] && [ -s "$STDOUT_FILE" ] &&
+      if [ "$TASK_ACTION" = "TEAM" ] && [ "$SDD_POLICY_ACTIVE" != "true" ] && [ "$rc" -eq 0 ] && [ -s "$STDOUT_FILE" ] &&
          grep -qE '^TASK_(DONE|COMPLETED)([[:space:]:]|$)' "$STDOUT_FILE"; then
         local team_done_count team_guard_output team_guard_rc team_guard_action
         team_done_count="$(grep -cE '^TASK_(DONE|COMPLETED)([[:space:]:]|$)' "$STDOUT_FILE" || true)"
