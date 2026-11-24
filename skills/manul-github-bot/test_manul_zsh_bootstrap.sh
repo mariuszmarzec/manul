@@ -49,6 +49,12 @@ shift
 [ "${1:-}" = "manul-zsh-bootstrap" ] || exit 42
 shift
 [ -r "$HOME/.zshrc" ] || exit 43
+# Simulate the routine messages emitted by ssh-agent and ssh-add from
+# the user's ~/.zshrc, plus unrelated startup output that must remain visible.
+printf 'Agent pid 12345\\n'
+printf 'ZSHRC_NOTICE\\n'
+printf 'Identity added: /tmp/test-key (fixture)\\n' >&2
+printf 'ZSHRC_WARNING\\n' >&2
 # The fixture uses POSIX-compatible export statements, matching the relevant
 # environment behavior of Zsh's .zshrc.
 . "$HOME/.zshrc"
@@ -56,15 +62,23 @@ eval "$command_script"
 FAKE_ZSH
 chmod +x "$TEST_ROOT/bin/fake-zsh"
 
+STDERR_FILE="$TEST_ROOT/bootstrap.stderr"
 OUTPUT="$(
   HOME="$TEST_ROOT/home" \
   MANUL_TEST_PATH_PREFIX="$TEST_ROOT/operator-bin" \
   ZSH_BIN="$TEST_ROOT/bin/fake-zsh" \
   bash "$BOOTSTRAP" "$TEST_ROOT/target.sh" "argument with spaces" second
-)"
-[ "$OUTPUT" = "TARGET_OK:from-user-zshrc:console-key-from-user-zshrc" ] \
-  && ok "Bootstrap loads the operator .zshrc and preserves argument boundaries" \
-  || fail "Bootstrap did not pass the Zsh environment/arguments correctly: $OUTPUT"
+) 2>"$STDERR_FILE"
+EXPECTED_OUTPUT="$(printf 'ZSHRC_NOTICE\\nTARGET_OK:from-user-zshrc:console-key-from-user-zshrc')"
+[ "$OUTPUT" = "$EXPECTED_OUTPUT" ] \
+  && ok "Bootstrap loads ~/.zshrc, filters SSH status chatter, and preserves other stdout" \
+  || fail "Bootstrap output/environment mismatch: $OUTPUT"
+grep -Fxq "ZSHRC_WARNING" "$STDERR_FILE" \
+  && ok "Unrelated ~/.zshrc stderr remains visible" \
+  || fail "Bootstrap hid unrelated startup stderr: $(cat "$STDERR_FILE")"
+! grep -Eq '^(Agent pid [0-9]+|Identity added: )' "$STDERR_FILE" \
+  && ok "SSH agent/key-added status lines are hidden" \
+  || fail "SSH startup chatter remained visible: $(cat "$STDERR_FILE")"
 
 # When Zsh is installed, also exercise the real interactive startup path. The
 # minimal temporary .zshrc proves exported PATH/auth values reach the target.
