@@ -37,6 +37,10 @@ manul_env_load() {
   . <(awk '
     BEGIN {
       for (name in ENVIRON) inherited[name] = 1
+      # These are host/provider-owned settings. They must come from the
+      # operator shell, never from a legacy Manul fallback file.
+      split("OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_HOME OPENCLAW_GATEWAY_PORT OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG OPENCODE_CONFIG_DIR OPENCODE_API_KEY OPENCODE_CONSOLE_TOKEN CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL", names, " ")
+      for (i in names) shell_owned[names[i]] = 1
     }
     {
       candidate = $0
@@ -46,7 +50,8 @@ manul_env_load() {
       if (match(candidate, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
         name = substr(candidate, 1, index(candidate, "=") - 1)
       }
-      if (name == "PATH" || (name != "" && name in inherited)) next
+      if (name == "PATH" || (name != "" && name in shell_owned) ||
+          (name != "" && name in inherited)) next
       if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/) next
       if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/) next
       if ($0 ~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/) next
@@ -84,13 +89,14 @@ EOF
   # Remove credentials that must never be retained as Manul identity or local
   # transport state. Preserve all other pre-existing Manul-specific entries.
   local refreshed_file
-  if grep -qE '^[[:space:]]*(export[[:space:]]+)?(FITEO_PAT|TODO_LOCAL_MCP_TOKEN|CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN)=' "$env_file"; then
+  if grep -qE '^[[:space:]]*(export[[:space:]]+)?(FITEO_PAT|TODO_LOCAL_MCP_TOKEN|CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN|OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_CONFIG|OPENCODE_CONFIG_DIR|OPENCODE_API_KEY|OPENCODE_CONSOLE_TOKEN|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL)=' "$env_file"; then
     refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
     if ! awk '
       $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=/ &&
       $0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/ &&
       $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/ &&
+      $0 !~ /^[[:space:]]*(export[[:space:]]+)?(OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_CONFIG|OPENCODE_CONFIG_DIR|OPENCODE_API_KEY|OPENCODE_CONSOLE_TOKEN|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL)=/
     ' "$env_file" > "$refreshed_file"; then
       rm -f -- "$refreshed_file"
       return 1
