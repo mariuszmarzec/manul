@@ -286,12 +286,13 @@ the existing Bash script. The cron watchdog bootstraps itself before
 restarting the daemon, so existing crontab entries do not need to be rewritten.
 The daemon and watchdog must not synthesize or prepend a separate PATH.
 
-~/.manul/.env remains only for Manul-specific integration fallbacks and
-backwards compatibility. Values already exported by Zsh take precedence;
-bootstrap does not duplicate provider paths/configuration or copy arbitrary
-shell variables. OpenCode task runs use opencode run --standalone to avoid
-inheriting stale environment from an existing background OpenCode service,
-while preserving the operator's OpenCode authentication and provider setup.
+~/.manul/.env stores Manul-specific integration fallbacks and may retain the
+non-secret OPENCODE_CONFIG path for unattended runs. An OPENCODE_CONFIG value
+exported by ~/.zshrc takes precedence over that fallback. Provider credentials
+and model/provider selection remain in the effective OpenCode config and the
+operator shell. OpenCode task runs reuse the shared OpenCode service so the
+same selected model/provider and service environment are used by Manul and the
+interactive operator.
 
 The OpenCode permission configuration keeps /tmp/** for scratch work,
 adds /tmp/manul-diagnostics/** for local diagnostic artifacts, grants
