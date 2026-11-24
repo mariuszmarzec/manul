@@ -1093,20 +1093,27 @@ opencode_agent_discovery() {
         stderr_size="$(wc -c <"$stderr_file" 2>/dev/null || printf 0)"
 
         if [ "$rc" = "0" ]; then
-            if jq -e 'type == "array" and all(.[]; type == "object" and (.id | type == "string"))' "$stdout_file" >/dev/null 2>&1; then
+            # OpenCode may emit harmless startup/log text or ANSI control
+            # sequences before its JSON payload. Share the same strict parser
+            # as sdd-policy.py so routing and SDD policy cannot disagree.
+            local normalized_agents=""
+            if normalized_agents="$(python3 "$MANUL_SCRIPT_DIR/opencode_agent_list.py" < "$stdout_file" 2>/dev/null)" &&
+                jq -e 'type == "array" and all(.[]; type == "object" and (.id | type == "string" and length > 0))' <<<"$normalized_agents" >/dev/null 2>&1; then
                 ProcessRunner_TmpStdout=""
                 ProcessRunner_TmpStderr=""
                 category="valid"
                 log "agent-discovery role=$role attempt=$attempt exit_code=$rc duration=${duration}s stdout_bytes=$stdout_size stderr_bytes=$stderr_size category=$category"
-                if jq -e --arg role "$role" 'any(.[]; .id == $role)' "$stdout_file" >/dev/null 2>&1; then
+                if jq -e --arg role "$role" 'any(.[]; .id == $role)' <<<"$normalized_agents" >/dev/null 2>&1; then
                     printf '%s' "found"
                 else
                     # A successful response is authoritative: no retry here.
                     printf '%s' "missing"
                 fi
+                unset normalized_agents
                 return
             fi
-            # Exit 0 but empty/invalid JSON: transient discovery failure.
+            unset normalized_agents
+            # Exit 0 but output does not contain a valid agent list: transient failure.
             category="invalid_json"
         elif [ "$timed_out" = "true" ]; then
             category="timeout"
