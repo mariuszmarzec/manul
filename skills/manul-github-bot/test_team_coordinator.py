@@ -684,6 +684,9 @@ class TeamCoordinatorTests(unittest.TestCase):
         self.assertLess(daemon.index("completion-guard"), daemon.index('evaluate_task_completion "$REPO"'))
         self.assertIn('if [ "$TASK_ACTION" = "TEAM" ] && [ "$SDD_POLICY_ACTIVE" != "true" ]', daemon)
         self.assertIn("grep -qE '^TASK_(DONE|COMPLETED)", daemon)
+        self.assertIn('if [ "$exec_status" = "WAITING_FOR_TEAM" ] && [ "$rc" -eq 0 ]', daemon)
+        self.assertIn('WAITING_FOR_TEAM)', daemon)
+        self.assertIn('if [ "$TASK_ACTION" != "TEAM" ]; then', daemon)
 
 
 
