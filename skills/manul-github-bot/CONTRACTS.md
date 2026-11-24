@@ -722,19 +722,19 @@ startup.
 
 ### OpenCode model/provider ownership
 
-The effective OpenCode configuration is owned by the machine/operator and may
-select a different model/provider on each installation. Manul must use that
-selection without interpreting or changing it. The adapter must preserve
-`OPENCODE_CONFIG` and all operator JSON/JSONC configuration, and its temporary
+The model selector is owned by Manul runtime configuration at
+`automation.opencodeModel` (default `litellm/free-cloud`) and MUST be passed
+explicitly to every `opencode run` invocation using `--model`, including
+continuations. An unset field uses the documented default; a non-empty invalid
+value fails before model startup. Provider definitions, base URLs and provider
+credentials are owned by the effective OpenCode JSON/JSONC config selected by
+`OPENCODE_CONFIG`; Manul must preserve those files. The temporary
 `OPENCODE_CONFIG_CONTENT` overlay must not contain top-level `model` or
-`provider` fields. It must not pass a model-selection flag to `opencode run`,
-synthesize a provider, select a fallback, or assume LiteLLM/OpenCode Go/Ollama
-or any other backend. The overlay is limited to Manul-owned task permissions,
-MCP entries and purpose-specific synthetic agent definitions; synthetic agents
-must inherit the configured model and must not declare their own model. Tests
-must prove that an arbitrary operator-selected model/provider survives while
-the Manul overlay adds its own runtime controls. Any change to this boundary is
-a behavioural-contract change and requires explicit user direction.
+`provider` fields and must not synthesize or replace a provider. Synthetic
+agents inherit the selected model and must not declare their own. Tests must
+prove the configured Manul model is passed unchanged while provider config
+remains untouched. Any change to this boundary is a behavioural-contract
+change and requires explicit user direction.
 
 ### Operator Zsh environment
 
