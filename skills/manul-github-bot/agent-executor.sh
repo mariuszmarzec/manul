@@ -18,7 +18,7 @@
 #   timeout    — max wall-clock seconds for this execution
 #
 # ExecutionResult fields (JSON on stdout):
-#   status     — COMPLETED | FAILED | TIMEOUT | INTERRUPTED | BLOCKED | NEEDS_CONTINUATION | WAITING_FOR_TEAM | WAITING_FOR_TEAM
+#   status     — COMPLETED | FAILED | TIMEOUT | INTERRUPTED | BLOCKED | NEEDS_CONTINUATION | WAITING_FOR_TEAM
 #   task_id    — echoed back
 #   exit_code  — integer (0 if status=COMPLETED)
 #   summary    — human-readable summary
