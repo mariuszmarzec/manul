@@ -1,0 +1,33 @@
+name: Temporary Team completion guard verification
+
+on:
+  push:
+    branches:
+      - verify/team-parent-completion-guard-79
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact verification branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Python modules and tests
+        run: |
+          python -m py_compile \
+            skills/manul-github-bot/team-coordinator.py \
+            skills/manul-github-bot/workflow-state.py \
+            skills/manul-github-bot/test_team_coordinator.py \
+            skills/manul-github-bot/test_workflow_state.py
+      - name: Team coordinator regression suite
+        run: python skills/manul-github-bot/test_team_coordinator.py
+      - name: Workflow state regression suite
+        run: python skills/manul-github-bot/test_workflow_state.py
+      - name: Validate daemon shell syntax
+        run: bash -n skills/manul-github-bot/manul-daemon.sh
