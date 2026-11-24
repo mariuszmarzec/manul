@@ -718,6 +718,22 @@ injects Manul-owned MCP names only when they do not collide with known
 operator entries. Other optional MCP connectivity never blocks OpenCode task
 startup.
 
+### OpenCode model/provider ownership
+
+The effective OpenCode configuration is owned by the machine/operator and may
+select a different model/provider on each installation. Manul must use that
+selection without interpreting or changing it. The adapter must preserve
+`OPENCODE_CONFIG` and all operator JSON/JSONC configuration, and its temporary
+`OPENCODE_CONFIG_CONTENT` overlay must not contain top-level `model` or
+`provider` fields. It must not pass a model-selection flag to `opencode run`,
+synthesize a provider, select a fallback, or assume LiteLLM/OpenCode Go/Ollama
+or any other backend. The overlay is limited to Manul-owned task permissions,
+MCP entries and purpose-specific synthetic agent definitions; synthetic agents
+must inherit the configured model and must not declare their own model. Tests
+must prove that an arbitrary operator-selected model/provider survives while
+the Manul overlay adds its own runtime controls. Any change to this boundary is
+a behavioural-contract change and requires explicit user direction.
+
 A Todo root is queued once with its complete subtask tree. Descendants are ordered
 implementation steps, not separate queue entries. The adapter preserves the
 provider-returned order and traverses nested subtasks in pre-order. The source ID
