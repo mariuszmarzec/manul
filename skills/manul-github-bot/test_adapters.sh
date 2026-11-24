@@ -888,6 +888,116 @@ MOCK
   fi
 }
 
+# ---------------------------------------------------------------------------
+# 7d. An empty explicit JSONC template must not hide the configured JSON model
+# ---------------------------------------------------------------------------
+test_opencode_recovers_configured_model_from_empty_jsonc() {
+  local tmp home workspace json_config jsonc_config before_json before_jsonc output
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  home="$tmp/home"
+  workspace="$home/.manul/workspace/operator-query/oq-config-recovery"
+  json_config="$home/.config/opencode/opencode.json"
+  jsonc_config="$home/.config/opencode/opencode.jsonc"
+  mkdir -p "$tmp/bin" "$home/.config/opencode" "$workspace"
+  mkdir -p "$home/.manul"
+  cat >"$json_config" <<'JSON'
+{
+  "model": "litellm/free-cloud",
+  "provider": {
+    "litellm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LiteLLM",
+      "options": {
+        "baseURL": "http://127.0.0.1:4000/v1",
+        "apiKey": "test-only-key"
+      },
+      "models": {
+        "free-cloud": { "name": "free-cloud" }
+      }
+    }
+  }
+}
+JSON
+  cat >"$jsonc_config" <<'JSONC'
+{
+  "$schema": "https://opencode.ai/config.json"
+}
+JSONC
+  cat >"$home/.manul/config.json" <<'CONFIG'
+{
+  "automation": {
+    "agentRuntime": "opencode",
+    "agentTimeoutSeconds": 30,
+    "agentNoProgressTimeoutSeconds": 10,
+    "agentToolNoProgressTimeoutSeconds": 10,
+    "agentStepNoProgressTimeoutSeconds": 10
+  }
+}
+CONFIG
+  before_json="$(sha256sum "$json_config" | awk '{print $1}')"
+  before_jsonc="$(sha256sum "$jsonc_config" | awk '{print $1}')"
+  cat >"$tmp/bin/opencode" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  debug)
+    [ "${2:-}" = "agents" ] || { echo "unexpected OpenCode debug invocation" >&2; exit 91; }
+    [ "${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.json" ] || {
+      echo "empty JSONC config was not recovered before agent discovery" >&2
+      exit 65
+    }
+    jq -e '.model == "litellm/free-cloud" and (.provider.litellm | type == "object")' \
+      "$OPENCODE_CONFIG" >/dev/null
+    printf '%s\n' '[{"id":"manul-operator-query"}]'
+    ;;
+  run)
+    [ "${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.json" ] || {
+      echo "OpenCode run did not receive the configured JSON file" >&2
+      exit 65
+    }
+    jq -e '.model == "litellm/free-cloud" and (.provider.litellm | type == "object")' \
+      "$OPENCODE_CONFIG" >/dev/null
+    jq -e '
+      .agent["manul-operator-query"].tools["*"] == false
+      and .model == null
+      and .provider == null
+    ' <<<"${OPENCODE_CONFIG_CONTENT:-}" >/dev/null
+    cat >/dev/null
+    printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-config-recovery","part":{"type":"text","text":"TASK_DONE recovered LiteLLM config"}}'
+    ;;
+  *)
+    echo "unexpected OpenCode invocation: $*" >&2
+    exit 91
+    ;;
+esac
+MOCK
+  chmod 700 "$tmp/bin/opencode"
+  printf '%s\n' 'Answer from the supplied snapshot.' >"$tmp/prompt"
+  : >"$tmp/stdout"
+  : >"$tmp/stderr"
+  output="$(
+    HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
+      OPENCODE_CONFIG="$jsonc_config" \
+      MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" \
+      MANUL_TASK_WORKSPACE_ROOT="$workspace" MANUL_TASK_EXECUTION_KIND=operator_query \
+      AGENT_RUNTIME=opencode \
+      bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id config-recovery \
+        --prompt "$tmp/prompt" --workspace "$workspace" --attempt 1 --timeout 20 \
+        --session-id "" --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null
+  )"
+  assert_json_status "$output" "COMPLETED" "OpenCode recovers the configured model when explicit JSONC is only an empty template"
+  grep -Fq 'recovered configured OpenCode JSON from an explicit JSONC file with no model' "$tmp/stderr" \
+    && ok "OpenCode records the process-local config recovery" \
+    || fail "OpenCode did not record the config recovery"
+  [ "$(sha256sum "$json_config" | awk '{print $1}')" = "$before_json" ] \
+    && ok "recovered operator JSON remains byte-identical" \
+    || fail "recovered operator JSON was modified"
+  [ "$(sha256sum "$jsonc_config" | awk '{print $1}')" = "$before_jsonc" ] \
+    && ok "empty operator JSONC remains byte-identical" \
+    || fail "operator JSONC was modified during config recovery"
+}
+
 # 7b. Large OpenCode prompts must not exceed the per-argument OS limit
 # ---------------------------------------------------------------------------
 test_opencode_large_prompt_uses_stdin() {
@@ -1953,6 +2063,7 @@ test_opencode_active_step_jsonl_progress
 test_opencode_active_step_timeout
 test_opencode_active_tool_timeout
 test_opencode_task_scoped_config
+test_opencode_recovers_configured_model_from_empty_jsonc
 test_opencode_large_prompt_uses_stdin
 test_opencode_no_marker_continuation
 test_opencode_step_limit_resumes_inside_attempt
