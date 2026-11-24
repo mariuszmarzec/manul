@@ -36,11 +36,7 @@ manul_env_load() {
   # shellcheck disable=SC1090
   . <(awk '
     BEGIN {
-      while ("env" | getline entry) {
-        split(entry, pair, "=")
-        if (pair[1] != "") inherited[pair[1]] = 1
-      }
-      close("env")
+      for (name in ENVIRON) inherited[name] = 1
     }
     {
       candidate = $0
