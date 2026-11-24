@@ -69,7 +69,7 @@ fi
 CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 export MANUL_CANONICAL_DIR="$CANONICAL_DIR"
 
-for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh migrate-sdd-agent-config.sh sdd-policy.py opencode_agent_list.py team-policy.py team-coordinator.py workflow-state.py manul-env.sh \
+for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh migrate-sdd-agent-config.sh sdd-policy.py opencode_agent_list.py team-policy.py team-coordinator.py workflow-state.py manul-env.sh manul-zsh-bootstrap.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
              manul-shell.zsh update-manul.sh normalize-script-line-endings.py opencode-permissions.sh manul-daemon.sh task-process-control.sh manul-status.sh manul-query.sh manul-slack-intake.sh manul-operator-context.py; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then
@@ -91,9 +91,10 @@ echo
 #   sqlite3   - manul.db (native ext4 I/O, concurrent access)
 #   curl      - HTTP used by manul-comments-remove.sh
 #   python3   - lifecycle SQLite/JSON helpers and OpenCode stderr redaction
+#   zsh       - loads the operator's ~/.zshrc for unattended Manul entrypoints
 # The configured automation.agentRuntime selects the one required agent binary.
 MISSING_DEPS=()
-for cmd in bash git gh jq sqlite3 curl crontab python3; do
+for cmd in bash zsh git gh jq sqlite3 curl crontab python3; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -103,7 +104,7 @@ if [ "${#MISSING_DEPS[@]}" -gt 0 ]; then
     echo "Install them before running this installer." >&2
     exit 1
 fi
-echo "Prerequisites OK: bash git gh jq sqlite3 curl crontab python3"
+echo "Prerequisites OK: bash zsh git gh jq sqlite3 curl crontab python3"
 echo
 
 # 2. Ensure runtime directory
