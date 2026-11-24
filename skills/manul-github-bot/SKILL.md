@@ -842,12 +842,9 @@ preserves unrelated settings. That variable and provider authentication come
 from the operator's ~/.zshrc; they are not copied into ~/.manul/.env.
 Daemon/watchdog and installer all inherit the same initialized shell
 environment. OpenCode task invocations reuse the shared OpenCode service (without
---standalone). Manul selects the run model from
-`automation.opencodeModel` (default `litellm/freeLLMAPI`) and passes it
-explicitly with `--model`; the provider definition, endpoint and credentials
-come from the JSON/JSONC file selected by `OPENCODE_CONFIG`. The explicit
-config path may come from the Zsh environment or the non-secret Manul .env
-fallback.
+--standalone) so the model/provider selection and authentication match the
+operator's interactive OpenCode session. The explicit OPENCODE_CONFIG path
+may come from the Zsh environment or the non-secret Manul .env fallback.
 Rules include /tmp/** for task scratch space, the dedicated
 /tmp/manul-diagnostics/** directory for local diagnostic artifacts,
 read/search-only access to ~/.manul/logs/**, and the narrowly scoped Gradle
@@ -878,10 +875,9 @@ Caracal MCP entry or modify operator JSON/JSONC files. If Caracal is absent or
 disabled in the operator's static config, the adapter does not load its
 provider or require Caracal.
 
-OpenCode loads provider configuration from the JSON/JSONC file selected by
-`OPENCODE_CONFIG`. Manul selects the model via `automation.opencodeModel`
-and leaves operator config files untouched, then supplies a temporary
- task-scoped `OPENCODE_CONFIG_CONTENT` overlay. The overlay adds only
+OpenCode loads the operator's JSON or JSONC configuration itself. Manul leaves
+`OPENCODE_CONFIG` and all operator config files untouched, then supplies a
+temporary task-scoped `OPENCODE_CONFIG_CONTENT` overlay. The overlay adds only
 the Manul-owned Fiteo MCP and adds `manul-todo-local` only when no
 configured MCP server already uses the resolved Todo Local URL. It scans every
 known config layer by normalized URL, reuses one unambiguous, enabled remote
