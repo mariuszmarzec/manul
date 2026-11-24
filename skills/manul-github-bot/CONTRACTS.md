@@ -504,7 +504,14 @@ Adapters are independent backends behind a single ProcessRunner.run() process bo
 
 For OpenCode 2.x, the adapter must set the exact task workspace as the child
 process working directory through `ProcessRunner.run --cwd`; it must not pass
-`--dir` to `opencode run`, which does not accept that option.
+`--dir` to `opencode run`, which does not accept that option. Every OpenCode
+CLI operation for a Manul task (native-agent discovery, configured MCP
+preflight, the model run, and same-session continuations) must pass the root
+`--standalone` flag. The managed background server may have been started with
+an older config or environment and does not inherit the task's
+`OPENCODE_CONFIG_CONTENT` overlay or process-scoped provider credentials.
+Using one private server per CLI operation ensures that each probe and run
+resolves the same operator config plus the current task overlay/environment.
 
 The adapter owns runtime session invocation/resume mechanics. Manul owns the
 persisted `processed_comments.session_id` pointer: retain it only when the
