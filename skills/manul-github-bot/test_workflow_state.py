@@ -124,6 +124,123 @@ class WorkflowStateTests(unittest.TestCase):
             "event-a",
         )
 
+    def test_finalization_receipt_is_not_carried_forward_when_omitted(self):
+        first = {
+            **self.base,
+            "phase": "completed",
+            "status": "completed",
+            "data": {
+                "items": [{
+                    "id": "work-a",
+                    "status": "completed",
+                    "trackerRefs": [{
+                        "provider": "github_issues",
+                        "sourceId": "owner/repo#11"
+                    }],
+                }],
+                "coordinator": {
+                    "finalization": {
+                        "status": "passed",
+                        "qaPassed": True,
+                        "summary": "Initial QA passed",
+                        "workItems": [{"id": "work-a", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}],
+                    },
+                },
+            },
+        }
+        self.assertTrue(self.persist(first))
+
+        next_checkpoint = {
+            **self.base,
+            "phase": "dispatching",
+            "status": "active",
+            "data": {
+                "items": [{
+                    "id": "work-a",
+                    "status": "completed",
+                    "trackerRefs": [{
+                        "provider": "github_issues",
+                        "sourceId": "owner/repo#11"
+                    }],
+                }, {
+                    "id": "work-b",
+                    "status": "running",
+                    "trackerRefs": [{
+                        "provider": "github_issues",
+                        "sourceId": "owner/repo#12"
+                    }],
+                }],
+                "coordinator": {},
+            },
+        }
+        self.assertTrue(self.persist(next_checkpoint))
+        self.assertNotIn("finalization", self.stored_state()["data"]["coordinator"])
+
+    def test_finalization_receipt_can_be_refreshed_for_new_work_item_set(self):
+        first = {
+            **self.base,
+            "phase": "completed",
+            "status": "completed",
+            "data": {
+                "items": [{
+                    "id": "work-a",
+                    "status": "completed",
+                    "trackerRefs": [{
+                        "provider": "github_issues",
+                        "sourceId": "owner/repo#11"
+                    }],
+                }],
+                "coordinator": {
+                    "finalization": {
+                        "status": "passed",
+                        "qaPassed": True,
+                        "summary": "Initial QA passed",
+                        "workItems": [{"id": "work-a", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}],
+                    },
+                },
+            },
+        }
+        self.assertTrue(self.persist(first))
+
+        refreshed = {
+            **self.base,
+            "phase": "completed",
+            "status": "completed",
+            "data": {
+                "items": [{
+                    "id": "work-a",
+                    "status": "completed",
+                    "trackerRefs": [{
+                        "provider": "github_issues",
+                        "sourceId": "owner/repo#11"
+                    }],
+                }, {
+                    "id": "work-b",
+                    "status": "completed",
+                    "trackerRefs": [{
+                        "provider": "github_issues",
+                        "sourceId": "owner/repo#12"
+                    }],
+                }],
+                "coordinator": {
+                    "finalization": {
+                        "status": "passed",
+                        "qaPassed": True,
+                        "summary": "QA rerun after adding work-b",
+                        "workItems": [{"id": "work-a", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}, {"id": "work-b", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]}],
+                    },
+                },
+            },
+        }
+        self.assertTrue(self.persist(refreshed))
+        self.assertEqual(
+            self.stored_state()["data"]["coordinator"]["finalization"]["workItems"],
+            [
+                {"id": "work-a", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]},
+                {"id": "work-b", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]},
+            ],
+        )
+
     def test_parent_can_acknowledge_exact_pending_event_without_losing_deduplication(self):
         checkpoint = {
             **self.base,

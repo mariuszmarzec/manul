@@ -1,4 +1,6 @@
 import importlib.util
+import io
+from contextlib import redirect_stderr, redirect_stdout
 import json
 import sqlite3
 import tempfile
@@ -449,6 +451,240 @@ class TeamCoordinatorTests(unittest.TestCase):
             "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
         ).fetchone()[0]
         self.assertEqual(status, "waiting_children")
+
+
+    def configure_completion_guard(self, items, pending=None, finalization=False):
+        state = json.loads(json.dumps(self.state))
+        state["status"], state["phase"] = "active", "integration"
+        state["data"]["items"] = items
+        coordinator = {"pendingChildEvents": list(pending or [])}
+        if finalization:
+            state["status"], state["phase"] = "completed", "completed"
+            coordinator["finalization"] = {
+                "status": "passed", "qaPassed": True,
+                "summary": "All child work integrated and final regression QA passed.",
+                "workItems": [
+                    {
+                        "id": item["id"],
+                        "status": "completed",
+                        "trackerRefs": [
+                            {"provider": ref["provider"], "sourceId": ref["sourceId"]}
+                            for ref in item.get("trackerRefs", [])
+                        ],
+                    }
+                    for item in items
+                ],
+            }
+        state["data"]["coordinator"] = coordinator
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=?,status=?,phase=? WHERE workflowId=?",
+            (json.dumps(state), state["status"], state["phase"], self.workflow_id),
+        )
+        self.db.execute(
+            "UPDATE processed_comments SET status='running',claimToken='claim-1',attempts=1 WHERE commentId=?",
+            (self.parent_id,),
+        )
+        self.db.commit()
+
+    def run_completion_guard(self, claim_token="claim-1"):
+        import argparse
+        output = io.StringIO()
+        with redirect_stdout(output):
+            rc = module.completion_guard(argparse.Namespace(
+                db=self.db_path, repo="owner/repo", conversation_id="conversation-1",
+                task_id=self.parent_id, claim_token=claim_token
+            ))
+        return rc, json.loads(output.getvalue()) if output.getvalue().strip() else {}
+
+    @staticmethod
+    def team_item(item_id, *source_ids):
+        return {
+            "id": item_id, "status": "created",
+            "trackerRefs": [
+                {"provider": "github_issues", "sourceId": source_id}
+                for source_id in source_ids
+            ],
+        }
+
+    def test_completion_guard_parks_while_any_child_is_active(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "queued", attempts=0)
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+            self.team_item("work-b", "owner/repo#12"),
+        ])
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "parked")
+        self.assertEqual(result["nonTerminalItems"], 1)
+        parent = self.db.execute(
+            "SELECT status,claimToken,attempts FROM processed_comments WHERE commentId=?",
+            (self.parent_id,),
+        ).fetchone()
+        self.assertEqual(parent, ("waiting_children", None, 0))
+        workflow = self.db.execute(
+            "SELECT status,phase,stateJson FROM workflow_instances WHERE workflowId=?",
+            (self.workflow_id,),
+        ).fetchone()
+        self.assertEqual(workflow[0:2], ("waiting_children", "waiting_children"))
+        stored = json.loads(workflow[2])
+        self.assertEqual(
+            {item["id"]: item["status"] for item in stored["data"]["items"]},
+            {"work-a": "completed", "work-b": "running"},
+        )
+
+    def test_completion_guard_requeues_when_child_event_is_pending(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "queued", attempts=0)
+        pending = [{"eventId": "event-a", "itemId": "work-a", "status": "completed"}]
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+            self.team_item("work-b", "owner/repo#12"),
+        ], pending=pending)
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "queued")
+        self.assertEqual(self.db.execute(
+            "SELECT status FROM processed_comments WHERE commentId=?", (self.parent_id,)
+        ).fetchone()[0], "queued")
+        stored = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        self.assertEqual(stored["data"]["coordinator"]["pendingChildEvents"][0]["eventId"], "event-a")
+
+    def test_completion_guard_checks_every_tracker_reference(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "running", attempts=1)
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11", "owner/repo#12"),
+        ])
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "parked")
+        stored = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        self.assertEqual(stored["data"]["items"][0]["status"], "running")
+
+    def test_completion_guard_blocks_all_terminal_items_with_pending_event(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "completed", pr_number=22)
+        pending = [{"eventId": "event-b", "itemId": "work-b", "status": "completed"}]
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+            self.team_item("work-b", "owner/repo#12"),
+        ], pending=pending, finalization=True)
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "queued")
+        self.assertEqual(result["pendingEvents"], 1)
+
+    def test_completion_guard_requires_explicit_final_qa_checkpoint(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.configure_completion_guard([self.team_item("work-a", "owner/repo#11")])
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "queued")
+        self.assertFalse(result["finalQaComplete"])
+
+    def test_completion_guard_allows_only_terminal_acknowledged_finalized_workflow(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "completed", pr_number=22)
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+            self.team_item("work-b", "owner/repo#12"),
+        ], finalization=True)
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "allow")
+        self.assertEqual(self.db.execute(
+            "SELECT status,claimToken FROM processed_comments WHERE commentId=?",
+            (self.parent_id,),
+        ).fetchone(), ("running", "claim-1"))
+
+    def test_completion_guard_rejects_finalization_for_an_old_work_item_snapshot(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "completed", pr_number=22)
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+        ], finalization=True)
+        stored = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        stored["data"]["items"].append(self.team_item("work-b", "owner/repo#12"))
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=? WHERE workflowId=?",
+            (json.dumps(stored), self.workflow_id),
+        )
+        self.db.commit()
+
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "queued")
+        self.assertFalse(result["finalQaComplete"])
+
+    def test_completion_guard_rejects_finalization_when_tracker_refs_change(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.insert_child(12, "completed", pr_number=22)
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+        ], finalization=True)
+        stored = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        stored["data"]["items"][0]["trackerRefs"].append({
+            "provider": "github_issues",
+            "sourceId": "owner/repo#12",
+        })
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=? WHERE workflowId=?",
+            (json.dumps(stored), self.workflow_id),
+        )
+        self.db.commit()
+
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "queued")
+        self.assertFalse(result["finalQaComplete"])
+
+    def test_completion_guard_rejects_qa_receipt_created_before_child_finished(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+        ], finalization=True)
+        stored = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        stored["data"]["coordinator"]["finalization"]["workItems"][0]["status"] = "running"
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=? WHERE workflowId=?",
+            (json.dumps(stored), self.workflow_id),
+        )
+        self.db.commit()
+
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "queued")
+        self.assertFalse(result["finalQaComplete"])
+
+    def test_completion_guard_rejects_stale_claim_without_transition(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.configure_completion_guard([self.team_item("work-a", "owner/repo#11")], finalization=True)
+        error = io.StringIO()
+        with redirect_stderr(error):
+            rc, result = self.run_completion_guard(claim_token="stale-claim")
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.db.execute(
+            "SELECT status,claimToken FROM processed_comments WHERE commentId=?",
+            (self.parent_id,),
+        ).fetchone(), ("running", "claim-1"))
+
+    def test_daemon_checks_team_done_before_generic_completion(self):
+        daemon = Path(__file__).with_name("manul-daemon.sh").read_text(encoding="utf-8")
+        self.assertLess(daemon.index("completion-guard"), daemon.index('evaluate_task_completion "$REPO"'))
+        self.assertIn('if [ "$TASK_ACTION" = "TEAM" ] && [ "$SDD_POLICY_ACTIVE" != "true" ]', daemon)
+        self.assertIn("grep -qE '^TASK_(DONE|COMPLETED)", daemon)
+
 
 
 if __name__ == "__main__":

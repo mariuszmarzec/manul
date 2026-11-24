@@ -266,6 +266,23 @@ The parent processes pending child events, can dispatch newly unblocked work,
 then parks again while other items remain active. A child that completes while
 the parent is running is picked up after its next park.
 
+The daemon independently enforces the final completion contract; a parent cannot
+finish merely by emitting `TASK_DONE` or `TASK_COMPLETED`. The final durable
+checkpoint must use `status: "completed"` and `phase: "completed"`, contain
+only terminal logical work items, and have no entries left in
+`data.coordinator.pendingChildEvents`. Consume each child event by acknowledging
+its exact `eventId` in `data.coordinator.acknowledgedChildEventIds`; never clear
+the pending list directly.
+
+After all child work is terminal, integrate the results and run final QA. In the
+same final checkpoint, add
+`data.coordinator.finalization = { "status": "passed", "qaPassed": true, "summary": "<non-empty QA summary>", "workItems": [{ "id": "<item id>", "status": "completed", "trackerRefs": [{ "provider": "github_issues", "sourceId": "owner/repo#123" }] }] }`. The `workItems` snapshot must exactly match every current item ID, its live terminal status and tracker references, in checkpoint order; any changed item, status or tracker reference requires fresh final QA.
+Only then emit the single final `TASK_DONE` marker and publish the final result
+comment. If children remain active, emit `TASK_WAITING_FOR_TEAM`. If an event
+still needs processing or final QA is not complete, continue the parent work;
+the daemon will safely requeue an early completion claim rather than count it
+as a failed attempt.
+
 A Team request in an SDD-enabled repository is routed to the SDD lifecycle
 owner. SDD specification and human approval gates remain mandatory even when
 `prApprovedByMan: false`.

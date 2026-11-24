@@ -5579,6 +5579,31 @@ MANUL_WORKFLOW_STATE_END
 
 Only non-secret metadata is allowed. Manul validates and persists checkpoints;
 do not access Manul databases or runtime state directly.
+
+For a final Team completion, emit one final checkpoint with status="completed"
+and phase="completed". It must retain every work item, mark every item terminal,
+and put the following finalization receipt under data.coordinator:
+{
+  "finalization": {
+    "status": "passed",
+    "qaPassed": true,
+    "summary": "<non-empty summary of final integration and QA>",
+    "workItems": [{"id": "<item id>", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#123"}]}]
+  }
+}
+A final completion is accepted only when all tracker references are terminal
+according to Manul's current task-source records and no unacknowledged child
+events remain. For each event actually processed, acknowledge its exact eventId
+using data.coordinator.acknowledgedChildEventIds in the next checkpoint. Never
+clear or replace data.coordinator.pendingChildEvents directly. Do not emit
+TASK_DONE/TASK_COMPLETED while siblings are active, while pending events remain,
+or before final integration and QA. Emit TASK_WAITING_FOR_TEAM when waiting for
+active children; if all children are terminal but final integration/QA is not
+done, continue the parent task and provide the final checkpoint only afterward.
+The finalization workItems list must exactly match every current item ID,
+its live terminal status and trackerRefs in data.items, in the same order.
+Adding, removing or changing an item, status or tracker reference invalidates
+any previous QA receipt; submit a fresh finalization object.
 TEAM_CHECKPOINT_PROTOCOL
       } >> "$TASK_PROMPT_FILE" || {
         fail_team_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not load the required Team Workflow skill into task context." "${PR_NUM_FROM_URL:-}"
@@ -5781,6 +5806,52 @@ TEAM_CHECKPOINT_PROTOCOL
          log "WARN: workflow checkpoint persistence failed for task $COMMENT_ID"
        fi
      fi
+      # Team completion needs durable proof; TASK_DONE alone cannot bypass
+      # active children, unacknowledged events or the final QA checkpoint.
+      if [ "$TASK_ACTION" = "TEAM" ] && [ "$SDD_POLICY_ACTIVE" != "true" ] && [ "$rc" -eq 0 ] && [ -s "$STDOUT_FILE" ] &&
+         grep -qE '^TASK_(DONE|COMPLETED)([[:space:]:]|$)' "$STDOUT_FILE"; then
+        local team_done_count team_guard_output team_guard_rc team_guard_action
+        team_done_count="$(grep -cE '^TASK_(DONE|COMPLETED)([[:space:]:]|$)' "$STDOUT_FILE" || true)"
+        if [ "$team_done_count" -ne 1 ] ||
+           grep -qE '^TASK_(FAILED|WAITING_FOR_TEAM|NEEDS_USER_BEGIN|NEEDS_USER_END)([[:space:]:]|$)' "$STDOUT_FILE"; then
+          log "ERROR: Team parent $COMMENT_ID emitted conflicting completion markers"
+          rc=1
+        else
+          team_guard_rc=0
+          team_guard_output="$(python3 "$DAEMON_SCRIPT_DIR/team-coordinator.py" --db "$DB" completion-guard \
+            --repo "$REPO" --conversation-id "$CONVERSATION_ID" --task-id "$COMMENT_ID" \
+            --claim-token "$CLAIM_TOKEN" 2>>"$LOG")" || team_guard_rc=$?
+          team_guard_action="$(printf '%s' "$team_guard_output" | jq -r '.action // "error"' 2>/dev/null || echo error)"
+          if [ "$team_guard_rc" -ne 0 ] || [ "$team_guard_action" = "error" ]; then
+            log "ERROR: Team completion guard rejected parent $COMMENT_ID: ${team_guard_output:-no response}"
+            rc=1
+          elif [ "$team_guard_action" = "allow" ]; then
+            log "dispatch: Team parent $COMMENT_ID passed durable child/event/final-QA completion guard"
+            lc_log "TEAM_COMPLETION_GUARD_PASSED" "task=$COMMENT_ID repo=$REPO"
+          elif [ "$team_guard_action" = "parked" ] || [ "$team_guard_action" = "queued" ]; then
+            log "dispatch: Team parent $COMMENT_ID emitted early completion; coordinator transitioned it to $team_guard_action"
+            lc_log "TEAM_EARLY_COMPLETION_DEFERRED" "task=$COMMENT_ID repo=$REPO action=$team_guard_action"
+            archive_task_artifacts "$COMMENT_ID" "$STDOUT_FILE" "$STDERR_FILE" "$TASK_PROMPT_FILE" || true
+            rm -f "$TASK_PROMPT_FILE" "$STDOUT_FILE" "$STDERR_FILE"
+            stop_heartbeat "$COMMENT_ID"
+            if task_has_workspace; then
+              workspace_release "$WORKSPACE_ID" "$COMMENT_ID" || log "WARN: workspace release after Team completion deferral did not match task $COMMENT_ID"
+            fi
+            if [ "$TASK_EXECUTION_KIND" = "repository" ]; then release_task_repo_lock "$REPO"; fi
+            release_task_lock
+            if [ "$team_guard_action" = "parked" ]; then
+              set_activity "$COMMENT_ID" "waiting_children"
+            else
+              set_activity "$COMMENT_ID" "queued"
+            fi
+            return 0
+          else
+            log "ERROR: Team completion guard returned unknown action for parent $COMMENT_ID: $team_guard_action"
+            rc=1
+          fi
+        fi
+      fi
+
      # A TEAM parent parks instead of completing while independent child
      # tasks remain active. The coordinator wakes it for each newly terminal
      # work item, even when sibling tasks are still running. A malformed or
