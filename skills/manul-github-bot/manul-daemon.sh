@@ -5860,7 +5860,8 @@ TEAM_CHECKPOINT_PROTOCOL
         grep -q '^TASK_WAITING_FOR_TEAM$' "$STDOUT_FILE"; then
        local team_wait_count
        team_wait_count="$(grep -c '^TASK_WAITING_FOR_TEAM$' "$STDOUT_FILE" || true)"
-       if [ "$team_wait_count" -eq 1 ] &&
+       if [ "$exec_status" = "WAITING_FOR_TEAM" ] && [ "$rc" -eq 0 ] &&
+          [ "$team_wait_count" -eq 1 ] &&
           ! grep -qE '^TASK_(DONE|COMPLETED|FAILED|NEEDS_USER_BEGIN|NEEDS_USER_END)([[:space:]:]|$)' "$STDOUT_FILE"; then
          local team_park_output="" team_park_rc=0
          team_park_output="$(python3 "$DAEMON_SCRIPT_DIR/team-coordinator.py" --db "$DB" park \
@@ -5884,7 +5885,7 @@ TEAM_CHECKPOINT_PROTOCOL
          log "ERROR: Team parent $COMMENT_ID could not be parked: $team_park_output"
          rc=1
        else
-         log "ERROR: Team parent $COMMENT_ID emitted a malformed or conflicting TASK_WAITING_FOR_TEAM marker"
+         log "ERROR: Team parent $COMMENT_ID emitted a malformed, conflicting, or unclassified TASK_WAITING_FOR_TEAM marker (adapter_status=$exec_status rc=$rc)"
          rc=1
        fi
      fi
@@ -5933,6 +5934,17 @@ TEAM_CHECKPOINT_PROTOCOL
          ;;
        COMPLETED)
          rc=0
+         ;;
+       WAITING_FOR_TEAM)
+         # A valid Team wait marker is consumed by the claim-protected park
+         # branch above. Preserve any park failure; never accept this status
+         # for a non-Team task or as generic task completion.
+         if [ "$TASK_ACTION" != "TEAM" ]; then
+           log "ERROR: non-TEAM task $COMMENT_ID returned WAITING_FOR_TEAM"
+           rc=1
+         elif [ "$rc" -eq 0 ]; then
+           rc=1
+         fi
          ;;
        *)
          rc="${rc:-1}"
