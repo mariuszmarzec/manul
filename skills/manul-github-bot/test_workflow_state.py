@@ -143,7 +143,7 @@ class WorkflowStateTests(unittest.TestCase):
                         "status": "passed",
                         "qaPassed": True,
                         "summary": "Initial QA passed",
-                        "workItemIds": ["work-a"],
+                        "workItems": [{"id": "work-a", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}],
                     },
                 },
             },
@@ -195,7 +195,7 @@ class WorkflowStateTests(unittest.TestCase):
                         "status": "passed",
                         "qaPassed": True,
                         "summary": "Initial QA passed",
-                        "workItemIds": ["work-a"],
+                        "workItems": [{"id": "work-a", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}],
                     },
                 },
             },
@@ -227,15 +227,18 @@ class WorkflowStateTests(unittest.TestCase):
                         "status": "passed",
                         "qaPassed": True,
                         "summary": "QA rerun after adding work-b",
-                        "workItemIds": ["work-a", "work-b"],
+                        "workItems": [{"id": "work-a", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}, {"id": "work-b", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]}],
                     },
                 },
             },
         }
         self.assertTrue(self.persist(refreshed))
         self.assertEqual(
-            self.stored_state()["data"]["coordinator"]["finalization"]["workItemIds"],
-            ["work-a", "work-b"],
+            self.stored_state()["data"]["coordinator"]["finalization"]["workItems"],
+            [
+                {"id": "work-a", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]},
+                {"id": "work-b", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]},
+            ],
         )
 
     def test_parent_can_acknowledge_exact_pending_event_without_losing_deduplication(self):

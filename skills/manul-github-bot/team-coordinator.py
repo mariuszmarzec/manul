@@ -285,6 +285,16 @@ def completion_guard(args: argparse.Namespace) -> int:
             raise ValueError("Every Team work item must have a non-empty string id")
         if len(work_item_ids) != len(set(work_item_ids)):
             raise ValueError("Team work item IDs must be unique")
+        work_item_snapshot = [
+            {
+                "id": item["id"],
+                "trackerRefs": [
+                    {"provider": ref["provider"], "sourceId": ref["sourceId"]}
+                    for ref in item.get("trackerRefs", [])
+                ],
+            }
+            for item in items
+        ]
 
         finalization = coordinator.get("finalization")
         final_qa_complete = (
@@ -293,7 +303,7 @@ def completion_guard(args: argparse.Namespace) -> int:
             and finalization.get("qaPassed") is True
             and isinstance(finalization.get("summary"), str)
             and bool(finalization["summary"].strip())
-            and finalization.get("workItemIds") == work_item_ids
+            and finalization.get("workItems") == work_item_snapshot
         )
         checkpoint_complete = state.get("status") == "completed" and state.get("phase") == "completed"
         if all_terminal and not pending and checkpoint_complete and final_qa_complete:
