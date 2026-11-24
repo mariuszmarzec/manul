@@ -82,25 +82,20 @@ ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCR
 [ -f "$ENV_FILE" ] && ok "Bootstrap creates ~/.manul/.env equivalent" || fail "Bootstrap did not create environment file"
 assert_file_mode_600 "$ENV_FILE"
 
-if ! grep -q '^OPENCLAW_STATE_DIR=' "$ENV_FILE" ||
-   ! grep -q '^OPENCLAW_CONFIG_PATH=' "$ENV_FILE" ||
-   ! grep -q '^OPENCLAW_BIN=' "$ENV_FILE" ||
-   ! grep -q '^OPENCODE_BIN=' "$ENV_FILE" ||
-   ! grep -q '^OPENCODE_CONFIG=' "$ENV_FILE" ||
-   ! grep -q '^CODEX_HOME=' "$ENV_FILE" ||
-   ! grep -q '^CODEX_BIN=' "$ENV_FILE" ||
-   ! grep -q '^CODEX_MODEL=' "$ENV_FILE" ||
-   ! grep -q '^CLAUDE_CONFIG_DIR=' "$ENV_FILE" ||
-   ! grep -q '^CLAUDE_BIN=' "$ENV_FILE" ||
-   ! grep -q '^CLAUDE_MODEL=' "$ENV_FILE" ||
-   ! grep -q '^FITEO_BASE_URL=' "$ENV_FILE" ||
-    ! grep -q '^FITEO_MANUL_PAT=' "$ENV_FILE" ||
-    ! grep -q '^FITEO_MANUL_SHARE_USER_ID=1$' "$ENV_FILE" ||
+if grep -qE '^(OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_CONFIG|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|MANUL_CANONICAL_DIR|MANUL_CANONICAL_ROOT|MANUL_CANONICAL_BRANCH)=' "$ENV_FILE"; then
+  fail "Bootstrap duplicated shell-owned provider/path configuration in ~/.manul/.env"
+else
+  ok "Bootstrap leaves provider binaries/configuration and source paths to ~/.zshrc"
+fi
+
+if ! grep -q '^FITEO_BASE_URL=' "$ENV_FILE" ||
+   ! grep -q '^FITEO_MANUL_PAT=' "$ENV_FILE" ||
+   ! grep -q '^FITEO_MANUL_SHARE_USER_ID=1$' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
    ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
-  fail "Bootstrap did not persist all supported provider variables"
+  fail "Bootstrap did not persist configured Manul integration credentials"
 else
-  ok "Bootstrap persists supported provider variables"
+  ok "Bootstrap persists only Manul integration credentials"
 fi
 
 if grep -q 'UNSAFE_SECRET' "$ENV_FILE"; then
@@ -116,19 +111,8 @@ else
 fi
 
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_BIN OPENCODE_BIN OPENCODE_CONFIG CODEX_HOME CODEX_BIN CODEX_MODEL CLAUDE_CONFIG_DIR CLAUDE_BIN CLAUDE_MODEL FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT
+  unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
   source "$ENV_FILE"
-  [ "$OPENCLAW_STATE_DIR" = "$TMP/openclaw state" ] &&
-  [ "$OPENCLAW_CONFIG_PATH" = "$TMP/openclaw/config with spaces.json" ] &&
-  [ "$OPENCLAW_BIN" = "$TMP/bin/openclaw-custom" ] &&
-  [ "$OPENCODE_BIN" = "$TMP/bin/opencode-custom" ] &&
-  [ "$OPENCODE_CONFIG" = "$TMP/custom opencode config.json" ] &&
-  [ "$CODEX_HOME" = "$TMP/codex home" ] &&
-  [ "$CODEX_BIN" = "$TMP/bin/codex-custom" ] &&
-  [ "$CODEX_MODEL" = "codex-test-model" ] &&
-  [ "$CLAUDE_CONFIG_DIR" = "$TMP/claude config" ] &&
-  [ "$CLAUDE_BIN" = "$TMP/bin/claude-custom" ] &&
-  [ "$CLAUDE_MODEL" = "claude-test-model" ] &&
   [ "$FITEO_BASE_URL" = "https://fiteo-test.example" ] &&
   [ "$FITEO_MANUL_PAT" = "fiteo-test-pat" ] &&
   [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
@@ -136,9 +120,37 @@ if (
   [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
   [ "$CUSTOM_JIRA_PASSWORD" = "custom-jira-password" ]
 ); then
-  ok "Bootstrap shell-quotes provider values correctly"
+  ok "Bootstrap shell-quotes Manul integration credentials correctly"
 else
-  fail "Bootstrap did not preserve provider values when reloaded"
+  fail "Bootstrap did not preserve Manul integration credentials when reloaded"
+fi
+
+# Zsh exports win over legacy values in ~/.manul/.env, and PATH is never
+# sourced from the runtime file.
+PRECEDENCE="$TMP/precedence"
+mkdir -p "$PRECEDENCE"
+cat > "$PRECEDENCE/.env" <<'EOF'
+PATH=/legacy/manul/path
+OPENCODE_CONFIG=/legacy/opencode.json
+OPENCODE_BIN=/legacy/bin/opencode
+FITEO_BASE_URL=https://legacy-fiteo.example
+EOF
+chmod 600 "$PRECEDENCE/.env"
+if (
+  export PATH="$TMP/operator-zsh-bin:/usr/bin:/bin"
+  export OPENCODE_CONFIG="$TMP/operator-opencode.json"
+  export OPENCODE_BIN="$TMP/operator-bin/opencode"
+  export FITEO_BASE_URL="https://operator-zsh.example"
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$PRECEDENCE"
+  [ "$PATH" = "$TMP/operator-zsh-bin:/usr/bin:/bin" ] &&
+  [ "$OPENCODE_CONFIG" = "$TMP/operator-opencode.json" ] &&
+  [ "$OPENCODE_BIN" = "$TMP/operator-bin/opencode" ] &&
+  [ "$FITEO_BASE_URL" = "https://operator-zsh.example" ]
+); then
+  ok "Exported ~/.zshrc environment takes precedence over legacy Manul values"
+else
+  fail "Manul environment loader overrode the operator's exported Zsh settings"
 fi
 
 # The recipient ID is persisted independently and refreshed even when the
@@ -374,7 +386,7 @@ export MANUL_FAKE_PID_FILE="$START_RUNTIME/fake.pid"
 export MANUL_FAKE_CRONTAB_FILE="$CRONTAB_FILE"
 
 set +e
-PATH="$FAKE_BIN:$PATH" MANUL_DIR="$START_RUNTIME" \
+MANUL_ZSH_ENV_READY=1 PATH="$FAKE_BIN:$PATH" MANUL_DIR="$START_RUNTIME" \
   MANUL_CANONICAL_ROOT="$CANONICAL_RUNTIME" MANUL_CANONICAL_DIR="$CANONICAL_RUNTIME" \
   "$SCRIPT_DIR/start-manul-automation.sh" start >/dev/null 2>&1
 START_RC=$?
@@ -393,7 +405,7 @@ else
 fi
 
 set +e
-PATH="$FAKE_BIN:$PATH" MANUL_DIR="$START_RUNTIME" \
+MANUL_ZSH_ENV_READY=1 PATH="$FAKE_BIN:$PATH" MANUL_DIR="$START_RUNTIME" \
   "$SCRIPT_DIR/start-manul-automation.sh" stop >/dev/null 2>&1
 STOP_RC=$?
 set -e
