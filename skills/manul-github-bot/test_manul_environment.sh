@@ -110,18 +110,17 @@ else
 fi
 
 if (
-  unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT CUSTOM_JIRA_USER CUSTOM_JIRA_PASSWORD
-  source "$ENV_FILE"
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$RUNTIME"
   [ "$FITEO_BASE_URL" = "https://fiteo-test.example" ] &&
   [ "$FITEO_MANUL_PAT" = "fiteo-test-pat" ] &&
   [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
-  [ -z "${FITEO_PAT:-}" ] &&
   [ "$CUSTOM_JIRA_USER" = "custom-jira-user" ] &&
   [ "$CUSTOM_JIRA_PASSWORD" = "custom-jira-password" ]
 ); then
-  ok "Bootstrap shell-quotes Manul integration credentials correctly"
+  ok "Zsh-exported integration credentials remain available after Manul environment loading"
 else
-  fail "Bootstrap did not preserve Manul integration credentials when reloaded"
+  fail "Manul environment loading lost exported integration credentials"
 fi
 
 # Zsh exports win over legacy values in ~/.manul/.env, and PATH is never
