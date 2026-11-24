@@ -195,15 +195,35 @@ export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
 ENV_FILE2="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE")"
 
 if (
+  grep -qx 'OPENCLAW_STATE_DIR=/operator/chosen/state' "$ENV_FILE2" &&
+  grep -qx 'OPENCODE_CONFIG=/operator/chosen/opencode.json' "$ENV_FILE2" &&
+  ! grep -q '^OPENCLAW_CONFIG_PATH=' "$ENV_FILE2"
+); then
+  ok "Manul bootstrap preserves legacy fallbacks without copying current shell settings"
+else
+  fail "Bootstrap duplicated active shell configuration or damaged fallbacks"
+fi
+if (
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$PRESERVE"
+  [ "$OPENCLAW_STATE_DIR" = "/installer/current/state" ] &&
+  [ "$OPENCLAW_CONFIG_PATH" = "/installer/current/config.json" ] &&
+  [ "$OPENCODE_CONFIG" = "/installer/current/opencode.json" ]
+); then
+  ok "Current Zsh provider configuration overrides legacy fallback values"
+else
+  fail "Legacy fallback values overrode the current Zsh provider configuration"
+fi
+if (
   unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
   source "$ENV_FILE2"
   [ "$OPENCLAW_STATE_DIR" = "/operator/chosen/state" ] &&
-  [ "$OPENCLAW_CONFIG_PATH" = "/installer/current/config.json" ] &&
-  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ]
+  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ] &&
+  [ -z "${OPENCLAW_CONFIG_PATH:-}" ]
 ); then
-  ok "Existing operator provider configuration is preserved"
+  ok "Legacy Manul-owned fallback values remain available when Zsh does not set them"
 else
-  fail "Bootstrap overwrote or failed to append provider configuration"
+  fail "Legacy fallback compatibility was not preserved"
 fi
 
 # Legacy Caracal variables are neither loaded nor retained by Manul.
