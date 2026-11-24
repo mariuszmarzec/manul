@@ -213,6 +213,129 @@ def add_event(db: sqlite3.Connection, workflow: sqlite3.Row, state: dict[str, An
         )
 
 
+def completion_guard(args: argparse.Namespace) -> int:
+    """Enforce Team completion from durable child, event and final-QA state."""
+    db = connect(args.db)
+    try:
+        if not workflow_tables_exist(db):
+            raise ValueError("Team workflow checkpoint tables are not initialized")
+        db.execute("BEGIN IMMEDIATE")
+        workflow = db.execute(
+            """SELECT workflowId,workflowType,repository,sourceTaskId,conversationId,
+                      phase,status,stateJson
+               FROM workflow_instances
+               WHERE repository=? AND conversationId=? AND workflowType='team'
+               ORDER BY updatedAt DESC LIMIT 1""",
+            (args.repo, args.conversation_id),
+        ).fetchone()
+        if workflow is None:
+            raise ValueError("No durable Team workflow checkpoint exists for this parent")
+        if workflow["sourceTaskId"] != args.task_id:
+            raise ValueError("Team checkpoint is not owned by the current parent task")
+        parent = db.execute(
+            "SELECT action,status,claimToken FROM processed_comments WHERE commentId=?",
+            (args.task_id,),
+        ).fetchone()
+        if parent is None or parent["action"] != "TEAM" or parent["status"] != "running" or parent["claimToken"] != args.claim_token:
+            raise ValueError("Current task claim no longer owns the parent TEAM task")
+
+        state = json.loads(workflow["stateJson"])
+        items = load_items(state)
+        all_terminal = True
+        item_failures = False
+        for item in items:
+            refs = item.get("trackerRefs", [])
+            if item.get("status") in TERMINAL and not refs:
+                item_status = item["status"]
+            elif not refs:
+                item_status = "planned"
+            else:
+                executions = [task_execution(db, ref["provider"], ref["sourceId"])["status"] for ref in refs]
+                if all(status == "completed" for status in executions):
+                    item_status = "completed"
+                elif any(status == "failed" for status in executions) and all(status in TERMINAL for status in executions):
+                    item_status = "failed"
+                elif any(status == "blocked_user" for status in executions):
+                    item_status = "waiting_user"
+                elif all(status in TERMINAL for status in executions):
+                    item_status = "skipped" if all(status == "skipped" for status in executions) else "failed"
+                else:
+                    item_status = "running" if any(status in {"queued", "running", "waiting"} for status in executions) else "planned"
+            item["status"] = item_status
+            if item_status not in TERMINAL:
+                all_terminal = False
+            if item_status in {"failed", "cancelled"}:
+                item_failures = True
+
+        data = state.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("Team workflow checkpoint data must be an object")
+        data["items"] = items
+        coordinator = data.setdefault("coordinator", {})
+        if not isinstance(coordinator, dict):
+            raise ValueError("Team workflow coordinator checkpoint must be an object")
+        pending = coordinator.get("pendingChildEvents", [])
+        if not isinstance(pending, list):
+            raise ValueError("Team pendingChildEvents checkpoint must be an array")
+        if any(not isinstance(event, dict) or not isinstance(event.get("eventId"), str) or not event["eventId"] for event in pending):
+            raise ValueError("Team pendingChildEvents contains an invalid event")
+
+        finalization = coordinator.get("finalization")
+        final_qa_complete = (
+            isinstance(finalization, dict)
+            and finalization.get("status") == "passed"
+            and finalization.get("qaPassed") is True
+            and isinstance(finalization.get("summary"), str)
+            and bool(finalization["summary"].strip())
+        )
+        checkpoint_complete = state.get("status") == "completed" and state.get("phase") == "completed"
+        if all_terminal and not pending and checkpoint_complete and final_qa_complete:
+            add_event(db, workflow, state, args.task_id, "completed")
+            db.execute("COMMIT")
+            print(json.dumps({"action": "allow", "workflowId": workflow["workflowId"], "items": len(items)}, ensure_ascii=False))
+            return 0
+
+        # Pending events or missing final QA need an immediate parent run;
+        # otherwise park while at least one child is still active.
+        should_requeue = bool(pending) or all_terminal
+        action = "queued" if should_requeue else "parked"
+        if should_requeue:
+            phase = "replanning" if item_failures or any(event.get("status") in {"failed", "cancelled"} for event in pending) else "integration"
+            state["status"], state["phase"] = "active", phase
+        else:
+            phase = "waiting_children"
+            state["status"], state["phase"] = "waiting_children", "waiting_children"
+
+        changed = db.execute(
+            """UPDATE processed_comments
+               SET status=?,processedAt=?,heartbeatAt=NULL,leaseExpiresAt=NULL,
+                   workerPid=NULL,claimToken=NULL,nextAttemptAt=NULL,session_id=NULL,
+                   agentStartedAt=NULL,attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END
+               WHERE commentId=? AND status='running' AND claimToken=? AND action='TEAM'""",
+            (action, now(), args.task_id, args.claim_token),
+        ).rowcount
+        if changed != 1:
+            raise ValueError("Could not atomically defer the current parent TEAM task")
+        add_event(db, workflow, state, args.task_id, phase)
+        db.execute("COMMIT")
+        print(json.dumps({
+            "action": action,
+            "workflowId": workflow["workflowId"],
+            "nonTerminalItems": sum(item["status"] not in TERMINAL for item in items),
+            "pendingEvents": len(pending),
+            "finalQaComplete": final_qa_complete,
+        }, ensure_ascii=False))
+        return 0
+    except (sqlite3.Error, OSError, UnicodeError, json.JSONDecodeError, ValueError, KeyError) as exc:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        print(json.dumps({"action": "error", "error": str(exc)}), file=sys.stderr)
+        return 2
+    finally:
+        db.close()
+
+
+
 def reconcile(args: argparse.Namespace) -> int:
     db = connect(args.db)
     resumed: list[str] = []
@@ -422,6 +545,12 @@ def main(argv: list[str] | None = None) -> int:
     park_parser.add_argument("--task-id", required=True)
     park_parser.add_argument("--claim-token", required=True)
     park_parser.set_defaults(func=park)
+    completion_guard_parser = sub.add_parser("completion-guard")
+    completion_guard_parser.add_argument("--repo", required=True)
+    completion_guard_parser.add_argument("--conversation-id", required=True)
+    completion_guard_parser.add_argument("--task-id", required=True)
+    completion_guard_parser.add_argument("--claim-token", required=True)
+    completion_guard_parser.set_defaults(func=completion_guard)
     reconcile_parser = sub.add_parser("reconcile")
     reconcile_parser.set_defaults(func=reconcile)
     args = parser.parse_args(argv)
