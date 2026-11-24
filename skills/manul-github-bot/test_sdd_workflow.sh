@@ -22,9 +22,9 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   case "${MOCK_OPENCODE_MODE:-v2-found}" in
     v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
     v2-noisy)
-      printf '\\033[32mOpenCode background service ready\\033[0m\\n'
-      printf '%s\\n' '[INFO] loading project agents'
-      printf '%s\\n' '[{"id":"orchestrator"},{"id":"sdd"}]'
+      printf '\033[32mOpenCode background service ready\033[0m\n'
+      printf '%s\n' '[INFO] loading project agents'
+      printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'
       exit 0 ;;
 
     v2-missing-sdd) printf '%s\n' '[{"id":"orchestrator"}]'; exit 0 ;;
@@ -137,9 +137,9 @@ spec.loader.exec_module(module)
 agents = [{"id": "orchestrator"}, {"id": "sdd"}]
 cases = (
     ("plain JSON", '[{"id":"orchestrator"},{"id":"sdd"}]'),
-    ("startup banner", 'OpenCode background service ready\\n[{"id":"orchestrator"},{"id":"sdd"}]'),
-    ("ANSI banner", '\\x1b[32mOpenCode ready\\x1b[0m\\n[{"id":"orchestrator"},{"id":"sdd"}]'),
-    ("UTF-8 BOM", '\\ufeff[{"id":"orchestrator"},{"id":"sdd"}]'),
+    ("startup banner", 'OpenCode background service ready\n[{"id":"orchestrator"},{"id":"sdd"}]'),
+    ("ANSI banner", '\x1b[32mOpenCode ready\x1b[0m\n[{"id":"orchestrator"},{"id":"sdd"}]'),
+    ("UTF-8 BOM", '\ufeff[{"id":"orchestrator"},{"id":"sdd"}]'),
     ("data envelope", '{"data":[{"id":"orchestrator"},{"id":"sdd"}]}'),
 )
 for label, output in cases:
