@@ -687,6 +687,8 @@ class TeamCoordinatorTests(unittest.TestCase):
         self.assertIn('if [ "$exec_status" = "WAITING_FOR_TEAM" ] && [ "$rc" -eq 0 ]', daemon)
         self.assertIn('WAITING_FOR_TEAM)', daemon)
         self.assertIn('if [ "$TASK_ACTION" != "TEAM" ]; then', daemon)
+        self.assertIn('else\n           # Keep the clean control result successful', daemon)
+        self.assertIn('[ "$exec_status" = "WAITING_FOR_TEAM" ] && [ "$rc" -eq 0 ]', daemon)
 
 
 
