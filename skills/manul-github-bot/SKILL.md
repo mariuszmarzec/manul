@@ -276,7 +276,7 @@ the pending list directly.
 
 After all child work is terminal, integrate the results and run final QA. In the
 same final checkpoint, add
-`data.coordinator.finalization = { "status": "passed", "qaPassed": true, "summary": "<non-empty QA summary>", "workItems": [{ "id": "<item id>", "trackerRefs": [{ "provider": "github_issues", "sourceId": "owner/repo#123" }] }] }`. The `workItems` snapshot must exactly match every current item ID and its tracker references, in checkpoint order; any changed or newly added work item/reference requires fresh final QA.
+`data.coordinator.finalization = { "status": "passed", "qaPassed": true, "summary": "<non-empty QA summary>", "workItems": [{ "id": "<item id>", "status": "completed", "trackerRefs": [{ "provider": "github_issues", "sourceId": "owner/repo#123" }] }] }`. The `workItems` snapshot must exactly match every current item ID, its live terminal status and tracker references, in checkpoint order; any changed item, status or tracker reference requires fresh final QA.
 Only then emit the single final `TASK_DONE` marker and publish the final result
 comment. If children remain active, emit `TASK_WAITING_FOR_TEAM`. If an event
 still needs processing or final QA is not complete, continue the parent work;

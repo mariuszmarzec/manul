@@ -143,7 +143,7 @@ class WorkflowStateTests(unittest.TestCase):
                         "status": "passed",
                         "qaPassed": True,
                         "summary": "Initial QA passed",
-                        "workItems": [{"id": "work-a", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}],
+                        "workItems": [{"id": "work-a", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}],
                     },
                 },
             },
@@ -195,7 +195,7 @@ class WorkflowStateTests(unittest.TestCase):
                         "status": "passed",
                         "qaPassed": True,
                         "summary": "Initial QA passed",
-                        "workItems": [{"id": "work-a", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}],
+                        "workItems": [{"id": "work-a", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}],
                     },
                 },
             },
@@ -227,7 +227,7 @@ class WorkflowStateTests(unittest.TestCase):
                         "status": "passed",
                         "qaPassed": True,
                         "summary": "QA rerun after adding work-b",
-                        "workItems": [{"id": "work-a", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}, {"id": "work-b", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]}],
+                        "workItems": [{"id": "work-a", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]}, {"id": "work-b", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]}],
                     },
                 },
             },
@@ -236,8 +236,8 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertEqual(
             self.stored_state()["data"]["coordinator"]["finalization"]["workItems"],
             [
-                {"id": "work-a", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]},
-                {"id": "work-b", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]},
+                {"id": "work-a", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#11"}]},
+                {"id": "work-b", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#12"}]},
             ],
         )
 

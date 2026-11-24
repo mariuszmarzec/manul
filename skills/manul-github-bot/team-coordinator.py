@@ -288,6 +288,7 @@ def completion_guard(args: argparse.Namespace) -> int:
         work_item_snapshot = [
             {
                 "id": item["id"],
+                "status": item["status"],
                 "trackerRefs": [
                     {"provider": ref["provider"], "sourceId": ref["sourceId"]}
                     for ref in item.get("trackerRefs", [])

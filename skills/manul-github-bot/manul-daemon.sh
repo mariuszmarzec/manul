@@ -5588,7 +5588,7 @@ and put the following finalization receipt under data.coordinator:
     "status": "passed",
     "qaPassed": true,
     "summary": "<non-empty summary of final integration and QA>",
-    "workItems": [{"id": "<item id>", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#123"}]}]
+    "workItems": [{"id": "<item id>", "status": "completed", "trackerRefs": [{"provider": "github_issues", "sourceId": "owner/repo#123"}]}]
   }
 }
 A final completion is accepted only when all tracker references are terminal
@@ -5600,10 +5600,10 @@ TASK_DONE/TASK_COMPLETED while siblings are active, while pending events remain,
 or before final integration and QA. Emit TASK_WAITING_FOR_TEAM when waiting for
 active children; if all children are terminal but final integration/QA is not
 done, continue the parent task and provide the final checkpoint only afterward.
-The finalization workItems list must exactly match every current item ID and
-its trackerRefs in data.items, in the same order. Adding, removing or changing
-an item or tracker reference invalidates any previous QA receipt; submit a
-fresh finalization object.
+The finalization workItems list must exactly match every current item ID,
+its live terminal status and trackerRefs in data.items, in the same order.
+Adding, removing or changing an item, status or tracker reference invalidates
+any previous QA receipt; submit a fresh finalization object.
 TEAM_CHECKPOINT_PROTOCOL
       } >> "$TASK_PROMPT_FILE" || {
         fail_team_policy_task "$COMMENT_ID" "$safe_comment_id" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not load the required Team Workflow skill into task context." "${PR_NUM_FROM_URL:-}"

@@ -466,6 +466,7 @@ class TeamCoordinatorTests(unittest.TestCase):
                 "workItems": [
                     {
                         "id": item["id"],
+                        "status": "completed",
                         "trackerRefs": [
                             {"provider": ref["provider"], "sourceId": ref["sourceId"]}
                             for ref in item.get("trackerRefs", [])
@@ -635,6 +636,26 @@ class TeamCoordinatorTests(unittest.TestCase):
             "provider": "github_issues",
             "sourceId": "owner/repo#12",
         })
+        self.db.execute(
+            "UPDATE workflow_instances SET stateJson=? WHERE workflowId=?",
+            (json.dumps(stored), self.workflow_id),
+        )
+        self.db.commit()
+
+        rc, result = self.run_completion_guard()
+        self.assertEqual(rc, 0)
+        self.assertEqual(result["action"], "queued")
+        self.assertFalse(result["finalQaComplete"])
+
+    def test_completion_guard_rejects_qa_receipt_created_before_child_finished(self):
+        self.insert_child(11, "completed", pr_number=21)
+        self.configure_completion_guard([
+            self.team_item("work-a", "owner/repo#11"),
+        ], finalization=True)
+        stored = json.loads(self.db.execute(
+            "SELECT stateJson FROM workflow_instances WHERE workflowId=?", (self.workflow_id,)
+        ).fetchone()[0])
+        stored["data"]["coordinator"]["finalization"]["workItems"][0]["status"] = "running"
         self.db.execute(
             "UPDATE workflow_instances SET stateJson=? WHERE workflowId=?",
             (json.dumps(stored), self.workflow_id),
