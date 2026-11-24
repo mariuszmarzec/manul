@@ -1,4 +1,4 @@
-name: Team wait marker verification
+name: Team wait marker verification final routing
 
 on:
   push:
