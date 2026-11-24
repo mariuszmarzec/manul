@@ -759,6 +759,9 @@ MOCK
   grep -Fxq "$tmp" "$tmp/cwd" && ok "OpenCodeAdapter launches OpenCode from the assigned workspace" || fail "OpenCodeAdapter did not set OpenCode working directory to the assigned workspace"
   ! grep -Eq '(^|[[:space:]])--dir([[:space:]]|$)' "$tmp/args" && ok "OpenCodeAdapter does not pass the unsupported --dir flag to OpenCode 2.x" || fail "OpenCodeAdapter still passes unsupported --dir to opencode run"
   grep -q -- '--agent build' "$tmp/args" && ok "OpenCodeAdapter passes agent selection" || fail "OpenCodeAdapter ignored --agent"
+  ! grep -Eq '(^|[[:space:]])--model([[:space:]]|$)' "$tmp/args" \
+    && ok "OpenCodeAdapter leaves model selection to operator config" \
+    || fail "OpenCodeAdapter unexpectedly overrides the operator model via CLI"
   grep -q -- '--auto' "$tmp/args" && ok "OpenCodeAdapter forwards native --auto" || fail "OpenCodeAdapter ignored --auto"
   grep -q '^TASK_DONE opencode completed$' "$tmp/stdout" \
     && ok "OpenCodeAdapter normalizes text events to task output" \
