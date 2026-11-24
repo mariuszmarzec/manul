@@ -5942,8 +5942,10 @@ TEAM_CHECKPOINT_PROTOCOL
          if [ "$TASK_ACTION" != "TEAM" ]; then
            log "ERROR: non-TEAM task $COMMENT_ID returned WAITING_FOR_TEAM"
            rc=1
-         elif [ "$rc" -eq 0 ]; then
-           rc=1
+         else
+           # Keep the clean control result successful so the Team-only park
+           # branch below can consume it. A failed park sets rc=1 there.
+           rc=0
          fi
          ;;
        *)
