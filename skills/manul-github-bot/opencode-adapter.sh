@@ -1215,7 +1215,10 @@ opencode_agent_discovery() {
             # sequences before its JSON payload. Share the same strict parser
             # as sdd-policy.py so routing and SDD policy cannot disagree.
             local normalized_agents=""
-            if normalized_agents="$(python3 "$MANUL_SCRIPT_DIR/opencode_agent_list.py" < "$stdout_file" 2>/dev/null)" &&
+            # The adapter must not let a caller's stale Python environment
+            # break its own protocol parser (the OpenCode child is separately
+            # launched with PYTHONHOME removed and task-scoped PYTHONPATH).
+            if normalized_agents="$(env -u PYTHONHOME -u PYTHONPATH python3 "$MANUL_SCRIPT_DIR/opencode_agent_list.py" < "$stdout_file" 2>/dev/null)" &&
                 jq -e 'type == "array" and all(.[]; type == "object" and (.id | type == "string" and length > 0))' <<<"$normalized_agents" >/dev/null 2>&1; then
                 ProcessRunner_TmpStdout=""
                 ProcessRunner_TmpStderr=""
