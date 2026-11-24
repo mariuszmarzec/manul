@@ -21,6 +21,12 @@ printf 'mode=<%s> args=<%s>\\n' "${MOCK_OPENCODE_MODE-unset}" "$*" >> "$MOCK_TRA
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   case "${MOCK_OPENCODE_MODE:-v2-found}" in
     v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
+    v2-noisy)
+      printf '\\033[32mOpenCode background service ready\\033[0m\\n'
+      printf '%s\\n' '[INFO] loading project agents'
+      printf '%s\\n' '[{"id":"orchestrator"},{"id":"sdd"}]'
+      exit 0 ;;
+
     v2-missing-sdd) printf '%s\n' '[{"id":"orchestrator"}]'; exit 0 ;;
     v2-malformed) printf '%s\n' 'not-json'; exit 0 ;;
     v2-error) printf '%s\n' 'OpenCode server unavailable' >&2; exit 7 ;;
@@ -118,12 +124,50 @@ PY
 }
 run_case "retry timeout schedule is bounded and rejects non-finite backoff" expect_timeout_schedule_is_capped
 
+expect_agent_list_parser_is_tolerant_but_strict() {
+  python3 - "$SCRIPT_DIR/opencode_agent_list.py" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("opencode_agent_list", sys.argv[1])
+assert spec and spec.loader
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+agents = [{"id": "orchestrator"}, {"id": "sdd"}]
+cases = (
+    ("plain JSON", '[{"id":"orchestrator"},{"id":"sdd"}]'),
+    ("startup banner", 'OpenCode background service ready\\n[{"id":"orchestrator"},{"id":"sdd"}]'),
+    ("ANSI banner", '\\x1b[32mOpenCode ready\\x1b[0m\\n[{"id":"orchestrator"},{"id":"sdd"}]'),
+    ("UTF-8 BOM", '\\ufeff[{"id":"orchestrator"},{"id":"sdd"}]'),
+    ("data envelope", '{"data":[{"id":"orchestrator"},{"id":"sdd"}]}'),
+)
+for label, output in cases:
+    status, value = module.parse_agent_list(output)
+    assert status == "ok" and value == agents, (label, status, value)
+for output in ("OpenCode failed", '{"agents":[{"name":"sdd"}]}', '[{"id":""}]'):
+    status, _ = module.parse_agent_list(output)
+    assert status == "error", output
+status, value = module.parse_agent_list("[]")
+assert status == "ok" and value == []
+PY
+}
+run_case "OpenCode agent-list parser tolerates noisy output but validates agent IDs" expect_agent_list_parser_is_tolerant_but_strict
+
 run_case "repo without config stays on standard workflow" expect_standard
 AGENT=sdd; PROMPT="Add a feature"
 run_case "SDD agent without config fails instead of bootstrapping" expect_blocked
 PROMPT="bootstrap"
 RUNTIME="opencode"
 run_case "OpenCode V2 debug agents JSON discovers SDD and orchestrator" expect_bootstrap
+
+expect_noisy_agent_listing() {
+  MOCK_OPENCODE_MODE="v2-noisy"
+  local out
+  out="$(check_json 2>/dev/null || true)"
+  jq -e '.ok == true and .mode == "bootstrap" and .route_agent == "sdd"' <<<"$out" >/dev/null
+}
+run_case "OpenCode startup text and ANSI output do not break SDD agent discovery" expect_noisy_agent_listing
 
 expect_missing_agent() {
   MOCK_OPENCODE_MODE="v2-missing-sdd"
