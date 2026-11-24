@@ -30,8 +30,8 @@ MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 source "$SCRIPT_DIR/manul-platform.sh"
 manul_platform_prepare || exit 1
 manul_platform_reexec_if_needed "$SCRIPT_DIR/watchdog.sh" "$@"
-# Cron does not load ~/.zshrc, so load the runtime-owned environment before
-# resolving Manul paths or watchdog operator overrides.
+# Load Manul-specific integration fallbacks after the Zsh bootstrap. Exported
+# operator values from ~/.zshrc remain authoritative.
 source "$SCRIPT_DIR/manul-env.sh"
 if ! manul_env_load "$MANUL_DIR"; then
     echo "ERROR: failed to load $MANUL_DIR/.env" >&2
