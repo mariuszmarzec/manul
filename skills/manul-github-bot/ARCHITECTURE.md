@@ -127,12 +127,14 @@ connectivity before model startup without persisting secrets or mutating the
 operator config. Manul does not install Node/npm packages or the retired Fiteo
 task-creation plugin. OpenCode task settings are delivered via a temporary
 OPENCODE_CONFIG_CONTENT overlay while operator JSON/JSONC files remain
-untouched. Model and provider selection remain entirely operator-owned and
-site-specific: Manul neither chooses a model/provider nor adds `model` or
-`provider` fields to its overlay or a model flag to the OpenCode CLI. The
-operator may use LiteLLM, OpenCode Go, Ollama, or another configured backend;
-Manul's temporary layer must preserve whichever model/provider the effective
-OpenCode configuration selects.
+untouched. Manul selects the requested model explicitly from
+`automation.opencodeModel` (default `litellm/free-cloud`) and passes it through
+`opencode run --model`, preventing an implicit OpenCode catalog default from
+switching providers. The provider definition, endpoint and credentials remain
+operator-owned in the effective OpenCode JSON/JSONC file selected by
+`OPENCODE_CONFIG`. The temporary Manul overlay must not add or override
+`model` or `provider`; it is limited to task permissions, MCP and synthetic
+agent definitions.
 
 The top-level `.repositories` array is authoritative both with and without explicit `.taskSources`. The installer removes legacy top-level `repositoryAllowlist` and nested `.taskSources[].repositories` duplicates without merging them into the global list.
 ## Task execution plane
@@ -286,12 +288,13 @@ the existing Bash script. The cron watchdog bootstraps itself before
 restarting the daemon, so existing crontab entries do not need to be rewritten.
 The daemon and watchdog must not synthesize or prepend a separate PATH.
 
-~/.manul/.env remains only for Manul-specific integration fallbacks and
-backwards compatibility. Values already exported by Zsh take precedence;
-bootstrap does not duplicate provider paths/configuration or copy arbitrary
-shell variables. OpenCode task runs use opencode run --standalone to avoid
-inheriting stale environment from an existing background OpenCode service,
-while preserving the operator's OpenCode authentication and provider setup.
+~/.manul/.env stores Manul-specific integration fallbacks and may retain the
+non-secret OPENCODE_CONFIG path for unattended runs. An OPENCODE_CONFIG value
+exported by ~/.zshrc takes precedence over that fallback. Provider credentials
+and model/provider selection remain in the effective OpenCode config and the
+operator shell. OpenCode task runs reuse the shared OpenCode service so the
+same selected model/provider and service environment are used by Manul and the
+interactive operator.
 
 The OpenCode permission configuration keeps /tmp/** for scratch work,
 adds /tmp/manul-diagnostics/** for local diagnostic artifacts, grants

@@ -156,6 +156,16 @@ if [ "$OPT_AUTO" = "true" ]; then
     AUTO_ARGS=(--auto)
 fi
 
+# Model selection belongs to Manul's runtime config. Provider definitions and
+# credentials remain in the effective OpenCode JSON/JSONC config selected by
+# OPENCODE_CONFIG. Never let OpenCode silently choose its built-in default.
+OPENCODE_MODEL="${MANUL_OPENCODE_MODEL:-$(jq -r '.automation.opencodeModel // "litellm/free-cloud"' "$MANUL_CONFIG" 2>/dev/null || printf 'litellm/free-cloud')}"
+if [ -z "$OPENCODE_MODEL" ] || [[ "$OPENCODE_MODEL" =~ [[:space:][:cntrl:]] ]] || [[ "$OPENCODE_MODEL" != */* ]]; then
+    printf '{"status":"FAILED","task_id":"%s","exit_code":2,"summary":"Invalid automation.opencodeModel; expected provider/model","session_id":"","duration_s":0}\\n' "$OPT_TASK_ID"
+    exit 2
+fi
+MODEL_ARGS=(--model "$OPENCODE_MODEL")
+
 RAW_STDOUT_FILE="$(manul_task_file_path "${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.opencode.jsonl")"
 RAW_STDERR_FILE="$(manul_task_file_path "${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDERR_FILE")}" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.opencode.stderr")"
 CURRENT_RUN_STDOUT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.jsonl"
@@ -203,9 +213,10 @@ PY
 }
 
 
-# OpenCode reads the operator's JSON/JSONC files itself. Manul contributes
-# only a temporary runtime overlay through OPENCODE_CONFIG_CONTENT; it never
-# replaces OPENCODE_CONFIG or writes to an operator-owned configuration file.
+# OpenCode reads the effective JSON/JSONC file selected by OPENCODE_CONFIG.
+# That explicit path may be inherited from Zsh or loaded as a non-secret
+# fallback from ~/.manul/.env. Manul contributes only a temporary task overlay
+# through OPENCODE_CONFIG_CONTENT and never rewrites operator-owned files.
 OPENCODE_TASK_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/manul-opencode-config.XXXXXX")" || exit 1
 cleanup_opencode_task_config() {
     if [ -n "${OPENCODE_TASK_CONFIG_DIR:-}" ]; then
@@ -1116,7 +1127,7 @@ if [ "$CARACAL_CONFIGURED" = "1" ]; then
     _caracal_probe_stderr="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
     ProcessRunner_TmpStdout="$_caracal_probe_stdout"
     ProcessRunner_TmpStderr="$_caracal_probe_stderr"
-    _caracal_probe_result="$(ProcessRunner.run --timeout "$_caracal_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" mcp list --standalone)"
+    _caracal_probe_result="$(ProcessRunner.run --timeout "$_caracal_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" mcp list)"
     _caracal_probe_header="$(printf '%s\n' "$_caracal_probe_result" | head -n 1)"
     _caracal_probe_rc="${_caracal_probe_header%%|*}"
     ProcessRunner_TmpStdout=""
@@ -1201,7 +1212,7 @@ opencode_agent_discovery() {
         : >"$stderr_file"
         ProcessRunner_TmpStdout="$stdout_file"
         ProcessRunner_TmpStderr="$stderr_file"
-        result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents --standalone)"
+        result="$(ProcessRunner.run --timeout "$timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" debug agents)"
         header="$(printf '%s\n' "$result" | head -n 1)"
         rc="${header%%|*}"
         duration="$(printf '%s\n' "$result" | head -n 1 | cut -d'|' -f2)"
@@ -1416,7 +1427,8 @@ while true; do
         --idle-tool-timeout "$AGENT_TOOL_IDLE_TIMEOUT" \
         --idle-step-timeout "$AGENT_STEP_IDLE_TIMEOUT" \
         --cwd "$OPT_WORKSPACE" \
-        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run --standalone \
+        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
+            "${MODEL_ARGS[@]}" \
             "${AUTO_ARGS[@]}" \
             "${SESSION_ARGS[@]}" \
             "${AGENT_ARGS[@]}" \

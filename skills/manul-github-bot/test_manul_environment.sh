@@ -38,9 +38,9 @@ grep -q 'manul-env.sh' "$SCRIPT_DIR/install-manul-symlinks.sh"   && ok "Symlink 
 grep -q '"manul-zsh-bootstrap.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys Zsh bootstrap" || fail "Symlink installer does not deploy Zsh bootstrap"
 grep -q 'MANUL_ZSH_ENV_READY=1' "$SCRIPT_DIR/manul-shell.zsh" && ok "Interactive shell marks its initialized Zsh environment" || fail "Shell integration does not export the Zsh environment marker"
 grep -q 'manul-zsh-bootstrap.sh' "$SCRIPT_DIR/watchdog.sh" && ok "Watchdog bootstraps ~/.zshrc from cron" || fail "Watchdog bypasses Zsh bootstrap"
-grep -Fq '"$OPENCODE_BIN" mcp list --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "Caracal MCP preflight uses the task-local OpenCode server" || fail "Caracal MCP preflight can reuse the shared OpenCode server"
-grep -Fq '"$OPENCODE_BIN" debug agents --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode agent discovery uses the task-local server" || fail "OpenCode agent discovery can reuse the shared OpenCode server"
-grep -Fq '"$OPENCODE_BIN" run --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode task runs use the task-local server" || fail "OpenCode task run can reuse the shared OpenCode server"
+grep -Fq '"$OPENCODE_BIN" mcp list)' "$SCRIPT_DIR/opencode-adapter.sh" && ok "Caracal MCP preflight uses the shared OpenCode server" || fail "Caracal MCP preflight does not use the shared OpenCode server"
+grep -Fq '"$OPENCODE_BIN" debug agents)' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode agent discovery uses the shared server" || fail "OpenCode agent discovery does not use the shared server"
+grep -Fq '"$OPENCODE_BIN" run \\' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode task runs use the shared server" || fail "OpenCode task run does not use the shared server"
 grep -q '"manul-failure-utils.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys failure sanitization helper" || fail "Symlink installer does not deploy failure sanitization helper"
 
 grep -q 'manul-env.sh" --bootstrap' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer bootstraps the operator environment"   || fail "Installer does not bootstrap the operator environment"
@@ -88,7 +88,7 @@ ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCR
 [ -f "$ENV_FILE" ] && ok "Bootstrap creates ~/.manul/.env equivalent" || fail "Bootstrap did not create environment file"
 assert_file_mode_600 "$ENV_FILE"
 
-if grep -qE '^(OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_CONFIG|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|MANUL_CANONICAL_DIR|MANUL_CANONICAL_ROOT|MANUL_CANONICAL_BRANCH)=' "$ENV_FILE"; then
+if grep -qE '^(OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|MANUL_CANONICAL_DIR|MANUL_CANONICAL_ROOT|MANUL_CANONICAL_BRANCH)=' "$ENV_FILE"; then
   fail "Bootstrap duplicated shell-owned provider/path configuration in ~/.manul/.env"
 else
   ok "Bootstrap leaves provider binaries/configuration and source paths to ~/.zshrc"
@@ -161,13 +161,14 @@ else
 fi
 
 if (
-  unset OPENCODE_API_KEY LITELLM_MASTER_KEY
+  unset OPENCODE_CONFIG OPENCODE_API_KEY LITELLM_MASTER_KEY
   source "$SCRIPT_DIR/manul-env.sh"
   manul_env_load "$PRECEDENCE"
+  [ "$OPENCODE_CONFIG" = "/legacy/opencode.json" ] &&
   [ -z "${OPENCODE_API_KEY:-}" ] &&
   [ -z "${LITELLM_MASTER_KEY:-}" ]
 ); then
-  ok "Legacy OpenCode Console/LiteLLM keys are not loaded from ~/.manul/.env"
+  ok "Manul retains the non-secret OpenCode config path, but never loads legacy provider API keys"
 else
   fail "Legacy provider API keys leaked from ~/.manul/.env"
 fi
@@ -219,11 +220,12 @@ export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
 ENV_FILE2="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE")"
 
 if (
-  ! grep -qE '^(OPENCLAW_STATE_DIR|OPENCODE_CONFIG|OPENCODE_API_KEY|LITELLM_MASTER_KEY)=' "$ENV_FILE2" &&
+  ! grep -qE '^(OPENCLAW_STATE_DIR|OPENCODE_API_KEY|LITELLM_MASTER_KEY)=' "$ENV_FILE2" &&
+  grep -qx 'OPENCODE_CONFIG=/operator/chosen/opencode.json' "$ENV_FILE2" &&
   grep -qx 'FITEO_MANUL_PAT=legacy-manul-token' "$ENV_FILE2" &&
   grep -qx 'FITEO_BASE_URL=https://legacy-fiteo.example' "$ENV_FILE2"
 ); then
-  ok "Bootstrap removes legacy provider settings but preserves Manul-specific credential fallbacks"
+  ok "Bootstrap preserves the explicit OpenCode config path and Manul-specific credential fallbacks"
 else
   fail "Bootstrap retained provider settings or removed Manul integration fallbacks"
 fi
@@ -244,11 +246,11 @@ if (
   unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
   source "$ENV_FILE2"
   [ -z "${OPENCLAW_STATE_DIR:-}" ] &&
-  [ -z "${OPENCODE_CONFIG:-}" ] &&
+  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ] &&
   [ "$FITEO_MANUL_PAT" = "legacy-manul-token" ] &&
   [ "$FITEO_BASE_URL" = "https://legacy-fiteo.example" ]
 ); then
-  ok "Legacy provider config is not used as fallback; Manul integration fallback remains usable"
+  ok "Explicit OpenCode config path remains a Manul fallback; API keys remain excluded"
 else
   fail "Legacy provider configuration leaked from the Manul environment file"
 fi
@@ -330,9 +332,9 @@ chmod 600 "$TODO_RUNTIME/.env"
 TODO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$TODO_RUNTIME")"
 if (
   ! grep -q 'TODO_LOCAL_MCP_TOKEN' "$TODO_ENV_FILE" &&
-  ! grep -q '^OPENCODE_CONFIG=' "$TODO_ENV_FILE"
+  grep -qx 'OPENCODE_CONFIG=/operator/chosen/opencode.json' "$TODO_ENV_FILE"
 ); then
-  ok "Bootstrap discards retired Todo credentials and legacy host/provider configuration"
+  ok "Bootstrap discards retired Todo credentials while retaining the OpenCode config path"
 else
   fail "Bootstrap retained retired credentials or host/provider configuration"
 fi
