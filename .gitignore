@@ -6,3 +6,6 @@ test-results/
 
 # OpenCode custom-tool runtime dependency installed beside the canonical Manul skill.
 node_modules/
+
+# Python bytecode caches.
+__pycache__/
