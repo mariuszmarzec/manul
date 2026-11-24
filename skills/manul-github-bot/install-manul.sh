@@ -197,9 +197,9 @@ fi
 
 # Validate only the backend selected by the operator. An unrelated installed
 # backend must not make an incomplete installation look ready.
-# 4b. Persist provider-specific environment needed by unattended processes.
-#     Only an explicit allowlist is copied from the installer environment.
-#     Existing ~/.manul/.env content is preserved.
+# 4b. Prepare the optional Manul-specific integration fallback file.
+#     Operator PATH, provider config and exported credentials come from ~/.zshrc;
+#     this file is never a second provider/PATH configuration source.
 echo
 echo "  Preparing operator environment..."
 if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
@@ -207,8 +207,9 @@ if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
 fi
 echo "  Environment file: $RUNTIME_DIR/.env"
 
-# Use the exact persisted provider config that the daemon/watchdog will load.
-# In particular, do not silently drop OPENCODE_CONFIG between install and run.
+# Load optional Manul-specific integration fallbacks. The installer is normally
+# launched from the operator's initialized Zsh session, whose exports take
+# precedence over any legacy values retained in ~/.manul/.env.
 # shellcheck source=manul-env.sh
 source "$CANONICAL_DIR/manul-env.sh"
 if ! manul_env_load "$RUNTIME_DIR"; then
