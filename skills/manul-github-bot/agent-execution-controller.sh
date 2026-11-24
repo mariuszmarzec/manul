@@ -25,6 +25,7 @@
 #   INTERRUPTED      → requeue for retry (same as recovery)
 #   BLOCKED          → transition to blocked_user
 #   NEEDS_CONTINUATION → requeue with same session_id (same logical task)
+#   WAITING_FOR_TEAM → dispatcher validates and parks the Team parent as waiting_children
 #
 
 MANUL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
