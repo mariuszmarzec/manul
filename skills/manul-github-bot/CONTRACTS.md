@@ -489,10 +489,12 @@ The example configuration currently defines:
 - lock TTL;
 - maximum concurrent tasks.
 
-The location of this configuration is `~/.manul/config.json`. Operator/provider
-environment for unattended execution is stored separately in `~/.manul/.env`;
-it is not part of the Manul JSON configuration contract. The semantics of
-these controls should not change accidentally.
+The location of this configuration is `~/.manul/config.json`. The operator's
+exported process environment (including `PATH`, provider settings and tool
+locations) comes from the existing `~/.zshrc`. Unattended entrypoints load that
+same file through `manul-zsh-bootstrap.sh`; `~/.manul/.env` is reserved for
+Manul-specific integration fallbacks and is not a second PATH/provider config.
+The semantics of these controls should not change accidentally.
 
 ## 18. Runtime boundary
 
@@ -733,6 +735,31 @@ must inherit the configured model and must not declare their own model. Tests
 must prove that an arbitrary operator-selected model/provider survives while
 the Manul overlay adds its own runtime controls. Any change to this boundary is
 a behavioural-contract change and requires explicit user direction.
+
+### Operator Zsh environment
+
+The operator's existing ~/.zshrc is the single source of truth for exported
+runtime settings, including PATH, OpenCode/LiteLLM/FreeLLMAPI configuration,
+Node and other tool locations, and exported credentials. Manul's shell
+integration marks an already initialized interactive Zsh process so commands
+do not start nested shells. Unattended/direct entrypoints (including the cron
+watchdog and direct daemon startup) must use manul-zsh-bootstrap.sh, which
+runs zsh -ic, marks the environment initialized, and then execs the
+unchanged Bash entrypoint. Manul scripts remain Bash; do not move PATH to
+.zshenv, duplicate it in ~/.manul/.env, or synthesize a second PATH in
+the daemon/watchdog.
+
+~/.manul/.env is retained only for Manul-specific integration credentials
+and backwards-compatible fallback values. Values exported by ~/.zshrc
+always win, and bootstrap must not copy the active shell environment into this
+file. Do not persist provider binary/config paths or arbitrary exported
+variables there.
+
+OpenCode task runs use opencode run --standalone so an already-running
+OpenCode background service cannot substitute its older process environment
+for the one initialized from the operator's ~/.zshrc. Preserve
+OPENCODE_API_KEY and the operator's configured provider credentials; that
+key is not an instruction to select OpenCode Go.
 
 A Todo root is queued once with its complete subtask tree. Descendants are ordered
 implementation steps, not separate queue entries. The adapter preserves the
