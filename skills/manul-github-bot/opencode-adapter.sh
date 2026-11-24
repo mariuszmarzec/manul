@@ -1416,7 +1416,7 @@ while true; do
         --idle-tool-timeout "$AGENT_TOOL_IDLE_TIMEOUT" \
         --idle-step-timeout "$AGENT_STEP_IDLE_TIMEOUT" \
         --cwd "$OPT_WORKSPACE" \
-        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
+        -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run --standalone \
             "${AUTO_ARGS[@]}" \
             "${SESSION_ARGS[@]}" \
             "${AGENT_ARGS[@]}" \
