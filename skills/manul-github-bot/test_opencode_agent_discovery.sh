@@ -28,6 +28,12 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
     printf '%s\n' "$*" >>"$MOCK_DISCOVERY_CALLS"
     case "$MOCK_AGENT_MODE" in
         v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
+        v2-noisy)
+            printf '\033[36mOpenCode background service ready\033[0m\n'
+            printf '%s\n' '[INFO] plugin catalog loaded'
+            printf '%s\n' '[{"id":"sdd"},{"id":"build"}]'
+            exit 0 ;;
+
         v2-missing) printf '%s\n' '[{"id":"orchestrator"}]'; exit 0 ;;
         v2-error) printf '%s\n' 'OpenCode server unavailable' >&2; exit 7 ;;
         v2-flaky)
@@ -94,6 +100,12 @@ assert_json_status "$(cat "$result")" "COMPLETED" "OpenCode V2 native SDD agent 
 grep -Fxq 'debug agents' "$TMP_ROOT/v2-found/discovery.calls" && ok "OpenCode V2 uses the plural agent-list command" || fail "OpenCode V2 agent-list command was not called"
 grep -q -- '--agent sdd' "$TMP_ROOT/v2-found/run.args" && ok "OpenCode V2 receives the native --agent sdd flag" || fail "OpenCode V2 did not receive --agent sdd"
 ! grep -q 'debug agent sdd' "$TMP_ROOT/v2-found/discovery.calls" && ok "OpenCode V2 never invokes the removed singular probe" || fail "OpenCode V2 invoked the removed singular probe"
+run_case v2-noisy
+result="$TMP_ROOT/v2-noisy/result.json"
+assert_json_status "$(cat "$result")" "COMPLETED" "OpenCode adapter accepts a valid list after startup text and ANSI sequences"
+[ "$(wc -l <"$TMP_ROOT/v2-noisy/discovery.calls")" -eq 1 ] && ok "Noisy but valid OpenCode output does not trigger unnecessary retries" || fail "Noisy output discovery call count was $(wc -l <"$TMP_ROOT/v2-noisy/discovery.calls")"
+grep -q -- '--agent sdd' "$TMP_ROOT/v2-noisy/run.args" && ok "Noisy OpenCode output still routes to the requested native agent" || fail "Noisy output did not route to --agent sdd"
+
 
 run_case v2-missing
 result="$TMP_ROOT/v2-missing/result.json"

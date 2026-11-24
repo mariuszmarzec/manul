@@ -69,7 +69,7 @@ fi
 CANONICAL_DIR="$(cd "$CANONICAL_DIR" && pwd)"
 export MANUL_CANONICAL_DIR="$CANONICAL_DIR"
 
-for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh migrate-sdd-agent-config.sh sdd-policy.py team-policy.py team-coordinator.py workflow-state.py manul-env.sh \
+for required in install-manul-symlinks.sh config.json.example migrate-repository-config.sh migrate-sdd-agent-config.sh sdd-policy.py opencode_agent_list.py team-policy.py team-coordinator.py workflow-state.py manul-env.sh \
              manul-conversation.sh workspace-manager.sh watchdog.sh \
              manul-shell.zsh update-manul.sh normalize-script-line-endings.py opencode-permissions.sh manul-daemon.sh task-process-control.sh manul-status.sh manul-query.sh manul-slack-intake.sh manul-operator-context.py; do
     if [ ! -f "$CANONICAL_DIR/$required" ]; then

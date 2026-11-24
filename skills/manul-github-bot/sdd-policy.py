@@ -5,6 +5,11 @@ import argparse, json, math, os, re, shutil, subprocess, sys, time
 from pathlib import Path
 from typing import Callable, TypeVar
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from opencode_agent_list import parse_agent_list as parse_opencode_agent_list
+
 T = TypeVar("T", int, float)
 
 def emit(ok: bool, **values: object) -> int:
@@ -90,17 +95,8 @@ def _run_debug_agents(binary, root, timeout: int) -> tuple[int | None, str, str,
 
 
 def _parse_agent_list(stdout: str) -> tuple[str, list[dict[str, object]] | str]:
-    """Parse JSON agent list. Returns (status, detail)."""
-    try:
-        agents = json.loads(stdout)
-    except json.JSONDecodeError:
-        return "error", "OpenCode debug agents returned invalid JSON"
-    if not isinstance(agents, list) or any(
-        not isinstance(agent, dict) or not isinstance(agent.get("id"), str)
-        for agent in agents
-    ):
-        return "error", "OpenCode debug agents returned an unexpected JSON structure"
-    return "ok", agents
+    """Normalize and validate the OpenCode agent-list output."""
+    return parse_opencode_agent_list(stdout)
 
 
 def _classify_v2_error(stdout: str, stderr: str) -> bool:

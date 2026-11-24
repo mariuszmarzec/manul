@@ -122,6 +122,7 @@ SCRIPTS=(
     "task-process-control.sh"
     "openclaw-adapter.sh"
     "opencode-adapter.sh"
+    "opencode_agent_list.py"
     "codex-adapter.sh"
     "claude-code-adapter.sh"
     "agent-task-runner.sh"
