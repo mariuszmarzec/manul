@@ -716,8 +716,8 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   exit 0
 fi
 printf '%s' "${OPENCODE_CONFIG_CONTENT:-}" |
-  jq -e '.model == "litellm/free-cloud"' >/dev/null || {
-    echo "Manul did not pin the OpenCode model to litellm/free-cloud" >&2
+  jq -e '.model == null and .provider == null' >/dev/null || {
+    echo "Manul runtime overlay must not override operator model/provider configuration" >&2
     exit 93
   }
 printf '%s\n' "$*" > "$MOCK_ARGS_FILE"
@@ -908,17 +908,17 @@ test_opencode_recovers_configured_model_from_empty_jsonc() {
   mkdir -p "$home/.manul"
   cat >"$json_config" <<'JSON'
 {
-  "model": "litellm/free-cloud",
+  "model": "operator-site/custom-model",
   "provider": {
-    "litellm": {
+    "operator-site": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "LiteLLM",
+      "name": "Operator Site Provider",
       "options": {
         "baseURL": "http://127.0.0.1:4000/v1",
         "apiKey": "test-only-key"
       },
       "models": {
-        "free-cloud": { "name": "free-cloud" }
+        "custom-model": { "name": "custom-model" }
       }
     }
   }
@@ -952,7 +952,7 @@ case "${1:-}" in
       echo "empty JSONC config was not recovered before agent discovery" >&2
       exit 65
     }
-    jq -e '.model == "litellm/free-cloud" and (.provider.litellm | type == "object")' \
+    jq -e '.model == "operator-site/custom-model" and (.provider["operator-site"] | type == "object")' \
       "$OPENCODE_CONFIG" >/dev/null
     printf '%s\n' '[{"id":"manul-operator-query"}]'
     ;;
@@ -961,15 +961,15 @@ case "${1:-}" in
       echo "OpenCode run did not receive the configured JSON file" >&2
       exit 65
     }
-    jq -e '.model == "litellm/free-cloud" and (.provider.litellm | type == "object")' \
+    jq -e '.model == "operator-site/custom-model" and (.provider["operator-site"] | type == "object")' \
       "$OPENCODE_CONFIG" >/dev/null
     jq -e '
       .agent["manul-operator-query"].tools["*"] == false
-      and .model == "litellm/free-cloud"
+      and .model == null
       and .provider == null
     ' <<<"${OPENCODE_CONFIG_CONTENT:-}" >/dev/null
     cat >/dev/null
-    printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-config-recovery","part":{"type":"text","text":"TASK_DONE recovered LiteLLM config"}}'
+    printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-config-recovery","part":{"type":"text","text":"TASK_DONE recovered operator model config"}}'
     ;;
   *)
     echo "unexpected OpenCode invocation: $*" >&2
