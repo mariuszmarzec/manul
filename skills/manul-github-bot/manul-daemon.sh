@@ -16,9 +16,20 @@ set -uo pipefail  # 'u' causes errors on unbound variables, 'o pipefail' catches
 # ERR trap: log any unhandled command failure with context
 trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]; then echo "[$(date -Is)] FATAL_ERR line=$LINENO cmd=$BASH_COMMAND rc=$?" >> "${LIFECYCLE_LOG:-/dev/null}" 2>/dev/null; fi' ERR
 
-# The daemon is started from the initialized operator Zsh environment, either
-# by the interactive shell integration or by the watchdog's Zsh bootstrap.
-# Keep PATH exactly as supplied by ~/.zshrc; do not synthesize a second copy.
+# Direct daemon invocations must get the same exported environment as the
+# official startup/watchdog paths. Interactive callers already carry the marker.
+EARLY_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [ "${MANUL_ZSH_ENV_READY:-}" != "1" ]; then
+  BOOTSTRAP="$EARLY_SCRIPT_DIR/manul-zsh-bootstrap.sh"
+  if [ ! -f "$BOOTSTRAP" ]; then
+    echo "ERROR: Manul Zsh bootstrap is missing: $BOOTSTRAP" >&2
+    exit 127
+  fi
+  exec bash "$BOOTSTRAP" "$EARLY_SCRIPT_DIR/manul-daemon.sh" "$@"
+fi
+
+# The daemon inherits the operator's exact exported PATH/provider settings from
+# ~/.zshrc; no second PATH list is maintained in Manul.
 
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
 # Absolute path to this script (the daemon is invoked via a symlink, so $0 may
@@ -42,9 +53,8 @@ manul_platform_prepare || exit 1
 manul_platform_reexec_if_needed "$DAEMON_SCRIPT_ABS" "$@"
 
 
-# Load operator/provider overrides from the runtime-owned environment file.
-# This is required for unattended cron/watchdog execution because ~/.zshrc is
-# not loaded there.
+# Load Manul-specific integration fallbacks after the operator's ~/.zshrc
+# environment. Already-exported shell values always take precedence.
 source "$DAEMON_SCRIPT_DIR/manul-env.sh"
 if ! manul_env_load "$MANUL_DIR"; then
   echo "ERROR: failed to load $MANUL_DIR/.env" >&2
