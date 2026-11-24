@@ -5839,7 +5839,11 @@ TEAM_CHECKPOINT_PROTOCOL
             fi
             if [ "$TASK_EXECUTION_KIND" = "repository" ]; then release_task_repo_lock "$REPO"; fi
             release_task_lock
-            set_activity "$COMMENT_ID" "$team_guard_action"
+            if [ "$team_guard_action" = "parked" ]; then
+              set_activity "$COMMENT_ID" "waiting_children"
+            else
+              set_activity "$COMMENT_ID" "queued"
+            fi
             return 0
           else
             log "ERROR: Team completion guard returned unknown action for parent $COMMENT_ID: $team_guard_action"

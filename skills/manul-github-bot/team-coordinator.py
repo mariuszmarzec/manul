@@ -324,13 +324,14 @@ def completion_guard(args: argparse.Namespace) -> int:
             phase = "waiting_children"
             state["status"], state["phase"] = "waiting_children", "waiting_children"
 
+        task_status = "waiting_children" if action == "parked" else "queued"
         changed = db.execute(
             """UPDATE processed_comments
                SET status=?,processedAt=?,heartbeatAt=NULL,leaseExpiresAt=NULL,
                    workerPid=NULL,claimToken=NULL,nextAttemptAt=NULL,session_id=NULL,
                    agentStartedAt=NULL,attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END
                WHERE commentId=? AND status='running' AND claimToken=? AND action='TEAM'""",
-            (action, now(), args.task_id, args.claim_token),
+            (task_status, now(), args.task_id, args.claim_token),
         ).rowcount
         if changed != 1:
             raise ValueError("Could not atomically defer the current parent TEAM task")
