@@ -841,8 +841,10 @@ selected by the operator's OPENCODE_CONFIG environment (when configured) and
 preserves unrelated settings. That variable and provider authentication come
 from the operator's ~/.zshrc; they are not copied into ~/.manul/.env.
 Daemon/watchdog and installer all inherit the same initialized shell
-environment. OpenCode task invocations use opencode run --standalone so a
-stale shared background service cannot override task-local environment.
+environment. OpenCode task invocations reuse the shared OpenCode service (without
+--standalone) so the model/provider selection and authentication match the
+operator's interactive OpenCode session. The explicit OPENCODE_CONFIG path
+may come from the Zsh environment or the non-secret Manul .env fallback.
 Rules include /tmp/** for task scratch space, the dedicated
 /tmp/manul-diagnostics/** directory for local diagnostic artifacts,
 read/search-only access to ~/.manul/logs/**, and the narrowly scoped Gradle
