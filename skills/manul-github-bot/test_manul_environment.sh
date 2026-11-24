@@ -134,6 +134,8 @@ cat > "$PRECEDENCE/.env" <<'EOF'
 PATH=/legacy/manul/path
 OPENCODE_CONFIG=/legacy/opencode.json
 OPENCODE_BIN=/legacy/bin/opencode
+OPENCODE_API_KEY=legacy-console-key
+LITELLM_MASTER_KEY=legacy-litellm-key
 FITEO_BASE_URL=https://legacy-fiteo.example
 EOF
 chmod 600 "$PRECEDENCE/.env"
@@ -141,12 +143,16 @@ if (
   export PATH="$TMP/operator-zsh-bin:/usr/bin:/bin"
   export OPENCODE_CONFIG="$TMP/operator-opencode.json"
   export OPENCODE_BIN="$TMP/operator-bin/opencode"
+  export OPENCODE_API_KEY="operator-console-key"
+  export LITELLM_MASTER_KEY="operator-litellm-key"
   export FITEO_BASE_URL="https://operator-zsh.example"
   source "$SCRIPT_DIR/manul-env.sh"
   manul_env_load "$PRECEDENCE"
   [ "$PATH" = "$TMP/operator-zsh-bin:/usr/bin:/bin" ] &&
   [ "$OPENCODE_CONFIG" = "$TMP/operator-opencode.json" ] &&
   [ "$OPENCODE_BIN" = "$TMP/operator-bin/opencode" ] &&
+  [ "$OPENCODE_API_KEY" = "operator-console-key" ] &&
+  [ "$LITELLM_MASTER_KEY" = "operator-litellm-key" ] &&
   [ "$FITEO_BASE_URL" = "https://operator-zsh.example" ]
 ); then
   ok "Exported ~/.zshrc environment takes precedence over legacy Manul values"
@@ -187,6 +193,8 @@ mkdir -p "$PRESERVE"
 cat > "$PRESERVE/.env" <<'EOF'
 OPENCLAW_STATE_DIR=/operator/chosen/state
 OPENCODE_CONFIG=/operator/chosen/opencode.json
+OPENCODE_API_KEY=legacy-console-key
+LITELLM_MASTER_KEY=legacy-litellm-key
 FITEO_MANUL_PAT=legacy-manul-token
 FITEO_BASE_URL=https://legacy-fiteo.example
 EOF
@@ -199,7 +207,7 @@ export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
 ENV_FILE2="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE")"
 
 if (
-  ! grep -qE '^(OPENCLAW_STATE_DIR|OPENCODE_CONFIG)=' "$ENV_FILE2" &&
+  ! grep -qE '^(OPENCLAW_STATE_DIR|OPENCODE_CONFIG|OPENCODE_API_KEY|LITELLM_MASTER_KEY)=' "$ENV_FILE2" &&
   grep -qx 'FITEO_MANUL_PAT=legacy-manul-token' "$ENV_FILE2" &&
   grep -qx 'FITEO_BASE_URL=https://legacy-fiteo.example' "$ENV_FILE2"
 ); then
