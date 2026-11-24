@@ -156,6 +156,16 @@ if [ "$OPT_AUTO" = "true" ]; then
     AUTO_ARGS=(--auto)
 fi
 
+# Model selection belongs to Manul's runtime config. Provider definitions and
+# credentials remain in the effective OpenCode JSON/JSONC config selected by
+# OPENCODE_CONFIG. Never let OpenCode silently choose its built-in default.
+OPENCODE_MODEL="${MANUL_OPENCODE_MODEL:-$(jq -r '.automation.opencodeModel // "litellm/free-cloud"' "$MANUL_CONFIG" 2>/dev/null || printf 'litellm/free-cloud')}"
+if [ -z "$OPENCODE_MODEL" ] || [[ "$OPENCODE_MODEL" =~ [[:space:][:cntrl:]] ]] || [[ "$OPENCODE_MODEL" != */* ]]; then
+    printf '{"status":"FAILED","task_id":"%s","exit_code":2,"summary":"Invalid automation.opencodeModel; expected provider/model","session_id":"","duration_s":0}\\n' "$OPT_TASK_ID"
+    exit 2
+fi
+MODEL_ARGS=(--model "$OPENCODE_MODEL")
+
 RAW_STDOUT_FILE="$(manul_task_file_path "${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDOUT_FILE")}" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.opencode.jsonl")"
 RAW_STDERR_FILE="$(manul_task_file_path "${MANUL_TASK_LOG_DIR:-$(dirname "$OPT_STDERR_FILE")}" "$OPT_TASK_ID" "attempt-${OPT_ATTEMPT}.opencode.stderr")"
 CURRENT_RUN_STDOUT_FILE="${RAW_STDOUT_FILE%.jsonl}.current.jsonl"
@@ -1418,6 +1428,7 @@ while true; do
         --idle-step-timeout "$AGENT_STEP_IDLE_TIMEOUT" \
         --cwd "$OPT_WORKSPACE" \
         -- env -u PYTHONHOME "PYTHONPATH=$OPT_WORKSPACE/src:$OPT_WORKSPACE" "$OPENCODE_BIN" run \
+            "${MODEL_ARGS[@]}" \
             "${AUTO_ARGS[@]}" \
             "${SESSION_ARGS[@]}" \
             "${AGENT_ARGS[@]}" \
