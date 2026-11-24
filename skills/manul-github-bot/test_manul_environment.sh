@@ -44,7 +44,7 @@ grep -q 'manul-env.sh" --bootstrap' "$SCRIPT_DIR/install-manul.sh"   && ok "Inst
 
 grep -q 'manul_env_load' "$SCRIPT_DIR/manul-daemon.sh"   && ok "Daemon loads Manul-specific integration fallbacks"   || fail "Daemon does not load Manul-specific integration fallbacks"
 
-grep -q 'manul_env_load' "$SCRIPT_DIR/watchdog.sh"   && ok "Watchdog loads the runtime operator environment"   || fail "Watchdog does not load the runtime operator environment"
+grep -q 'manul_env_load' "$SCRIPT_DIR/watchdog.sh"   && ok "Watchdog loads Manul-specific integration fallbacks"   || fail "Watchdog does not load Manul-specific integration fallbacks"
 
 grep -q 'manul_env_load' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer reloads persisted provider environment before configuring OpenCode"   || fail "Installer skips persisted provider environment"
 grep -q 'manul_env_load' "$SCRIPT_DIR/repair-manul-runtime.sh"   && ok "Repair reloads persisted provider environment before configuring OpenCode"   || fail "Repair skips persisted provider environment"
