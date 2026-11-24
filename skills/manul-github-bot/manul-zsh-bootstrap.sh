@@ -50,7 +50,19 @@ fi
 # -i loads ~/.zshrc (the operator's source of truth); -c executes the target.
 # Do not use a login shell here: Manul needs the interactive rc environment,
 # without adding a second, separately maintained login-profile configuration.
-exec "$ZSH_EXECUTABLE" -ic '
+#
+# A user's ~/.zshrc may start ssh-agent and add keys. Hide only those routine
+# status lines; keep all other startup diagnostics and Manul output visible.
+set +e
+"$ZSH_EXECUTABLE" -ic '
     export MANUL_ZSH_ENV_READY=1
     exec "$@"
-' manul-zsh-bootstrap "$@"
+' manul-zsh-bootstrap "$@" \
+    2> >(sed -E '/^Agent pid [0-9]+$/d; /^Identity added: /d' >&2) \
+    | sed -E '/^Agent pid [0-9]+$/d; /^Identity added: /d'
+pipeline_status=("${PIPESTATUS[@]}")
+set -e
+if [ "${pipeline_status[0]}" -ne 0 ]; then
+    exit "${pipeline_status[0]}"
+fi
+exit "${pipeline_status[1]}"
