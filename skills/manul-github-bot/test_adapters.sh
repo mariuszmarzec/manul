@@ -917,7 +917,7 @@ test_opencode_recovers_configured_model_from_empty_jsonc() {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Operator Site Provider",
       "options": {
-        "baseURL": "http://127.0.0.1:4000/v1",
+        "baseURL": "https://operator-site.example/v1",
         "apiKey": "test-only-key"
       },
       "models": {
