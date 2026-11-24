@@ -35,6 +35,9 @@ echo
 # 0. Integration wiring.
 # ---------------------------------------------------------------------------
 grep -q 'manul-env.sh' "$SCRIPT_DIR/install-manul-symlinks.sh"   && ok "Symlink installer deploys manul-env.sh"   || fail "Symlink installer does not deploy manul-env.sh"
+grep -q '"manul-zsh-bootstrap.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys Zsh bootstrap" || fail "Symlink installer does not deploy Zsh bootstrap"
+grep -q 'MANUL_ZSH_ENV_READY=1' "$SCRIPT_DIR/manul-shell.zsh" && ok "Interactive shell marks its initialized Zsh environment" || fail "Shell integration does not export the Zsh environment marker"
+grep -q 'manul-zsh-bootstrap.sh' "$SCRIPT_DIR/watchdog.sh" && ok "Watchdog bootstraps ~/.zshrc from cron" || fail "Watchdog bypasses Zsh bootstrap"
 grep -q '"manul-failure-utils.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys failure sanitization helper" || fail "Symlink installer does not deploy failure sanitization helper"
 
 grep -q 'manul-env.sh" --bootstrap' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer bootstraps the operator environment"   || fail "Installer does not bootstrap the operator environment"
@@ -88,14 +91,10 @@ else
   ok "Bootstrap leaves provider binaries/configuration and source paths to ~/.zshrc"
 fi
 
-if ! grep -q '^FITEO_BASE_URL=' "$ENV_FILE" ||
-   ! grep -q '^FITEO_MANUL_PAT=' "$ENV_FILE" ||
-   ! grep -q '^FITEO_MANUL_SHARE_USER_ID=1$' "$ENV_FILE" ||
-   ! grep -q '^CUSTOM_JIRA_USER=' "$ENV_FILE" ||
-   ! grep -q '^CUSTOM_JIRA_PASSWORD=' "$ENV_FILE"; then
-  fail "Bootstrap did not persist configured Manul integration credentials"
+if grep -qE '^(FITEO_BASE_URL|FITEO_MANUL_PAT|FITEO_MANUL_SHARE_USER_ID|CUSTOM_JIRA_USER|CUSTOM_JIRA_PASSWORD)=' "$ENV_FILE"; then
+  fail "Bootstrap duplicated environment variables already supplied by the operator's Zsh"
 else
-  ok "Bootstrap persists only Manul integration credentials"
+  ok "Bootstrap does not duplicate Zsh-owned integration credentials"
 fi
 
 if grep -q 'UNSAFE_SECRET' "$ENV_FILE"; then
@@ -153,28 +152,32 @@ else
   fail "Manul environment loader overrode the operator's exported Zsh settings"
 fi
 
-# The recipient ID is persisted independently and refreshed even when the
-# remote Fiteo source does not need a separate endpoint/PAT pair.
+# Legacy Manul-owned values remain as fallbacks, but a current Zsh export wins.
 SHARE_ONLY="$TMP/share-only"
 mkdir -p "$SHARE_ONLY"
-cat > "$SHARE_ONLY/.env" <<MANUL_SHARE_ENV
+cat > "$SHARE_ONLY/.env" <<'MANUL_SHARE_ENV'
 EXISTING_OPERATOR_SETTING=preserve-me
 FITEO_PAT=old-operator-pat
 FITEO_MANUL_SHARE_USER_ID=99
 MANUL_SHARE_ENV
 chmod 600 "$SHARE_ONLY/.env"
-cat > "$SHARE_ONLY/config.json" <<MANUL_SHARE_CONFIG
-{"taskSources":[{"type":"todo_remote_mcp","enabled":true,"shareUserIdEnv":"FITEO_MANUL_SHARE_USER_ID"}]}
-MANUL_SHARE_CONFIG
-SHARE_ONLY_ENV_FILE="$(FITEO_MANUL_SHARE_USER_ID=1 env -u FITEO_BASE_URL -u FITEO_MANUL_PAT -u FITEO_PAT bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
-if grep -qx 'FITEO_MANUL_SHARE_USER_ID=1' "$SHARE_ONLY_ENV_FILE" &&
+SHARE_ONLY_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
+if grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
    grep -qx 'EXISTING_OPERATOR_SETTING=preserve-me' "$SHARE_ONLY_ENV_FILE" &&
-   ! grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
-   ! grep -q '^FITEO_PAT=' "$SHARE_ONLY_ENV_FILE" &&
-    ! grep -q '^FITEO_PAT=old-operator-pat$' "$SHARE_ONLY_ENV_FILE"; then
-  ok "Bootstrap refreshes the share recipient independently of Fiteo credentials"
+   ! grep -q '^FITEO_PAT=' "$SHARE_ONLY_ENV_FILE"; then
+  ok "Bootstrap preserves Manul-owned fallbacks and removes retired operator credentials"
 else
-  fail "Bootstrap did not refresh the share recipient independently"
+  fail "Bootstrap changed existing Manul fallbacks unexpectedly"
+fi
+if (
+  export FITEO_MANUL_SHARE_USER_ID=1
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$SHARE_ONLY"
+  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ]
+); then
+  ok "Current Zsh recipient ID overrides the stored Manul fallback"
+else
+  fail "Stored recipient ID overrode the current Zsh environment"
 fi
 
 PRESERVE="$TMP/preserve"
@@ -230,9 +233,8 @@ else
 fi
 
 
-# Fiteo MCP credentials are refreshed as one pair even when no Todo remote
-# task source is configured, preventing a long-lived daemon from keeping a
-# previously issued PAT after the operator updates opencode.env.
+# Existing Manul Fiteo fallback credentials are preserved; the live Zsh
+# environment supersedes them for this invocation without writing duplicates.
 PRESERVE_FITEO="$TMP/preserve-fiteo"
 mkdir -p "$PRESERVE_FITEO"
 cat > "$PRESERVE_FITEO/.env" <<'EOF'
@@ -247,16 +249,25 @@ FITEO_MANUL_SHARE_USER_ID="1"
 export FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID
 FITEO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE_FITEO")"
 if (
-  unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID FITEO_PAT
-  source "$FITEO_ENV_FILE"
+  grep -qx 'FITEO_BASE_URL=https://old-fiteo.example' "$FITEO_ENV_FILE" &&
+  grep -qx 'FITEO_MANUL_PAT=old-manul-pat' "$FITEO_ENV_FILE" &&
+  ! grep -q '^FITEO_PAT=' "$FITEO_ENV_FILE" &&
+  ! grep -q 'new-fiteo.example' "$FITEO_ENV_FILE"
+); then
+  ok "Bootstrap retains only the manually-managed Fiteo fallback"
+else
+  fail "Bootstrap duplicated Zsh Fiteo values or retained the operator PAT"
+fi
+if (
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$PRESERVE_FITEO"
   [ "$FITEO_BASE_URL" = "https://new-fiteo.example" ] &&
   [ "$FITEO_MANUL_PAT" = "new-manul-fiteo-pat" ] &&
-  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ] &&
-  [ -z "${FITEO_PAT:-}" ]
+  [ "$FITEO_MANUL_SHARE_USER_ID" = "1" ]
 ); then
-  ok "Bootstrap refreshes Manul Fiteo credentials without persisting the operator PAT"
+  ok "Current Zsh Fiteo credentials supersede Manul fallback values"
 else
-  fail "Bootstrap did not refresh Manul Fiteo credentials correctly"
+  fail "Manul fallback credentials overrode the operator's Zsh environment"
 fi
 assert_file_mode_600 "$FITEO_ENV_FILE"
 
