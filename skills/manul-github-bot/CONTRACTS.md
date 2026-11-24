@@ -723,7 +723,7 @@ startup.
 ### OpenCode model/provider ownership
 
 The model selector is owned by Manul runtime configuration at
-`automation.opencodeModel` (default `litellm/free-cloud`) and MUST be passed
+`automation.opencodeModel` (default `litellm/freeLLMAPI`) and MUST be passed
 explicitly to every `opencode run` invocation using `--model`, including
 continuations. An unset field uses the documented default; a non-empty invalid
 value fails before model startup. Provider definitions, base URLs and provider
@@ -1011,3 +1011,6 @@ existing configuration and event semantics.
 - Supported monitor definitions are validated by the CLI. Unknown source or
   output types, invalid intervals, malformed IDs, disabled Todo providers
   and repository references outside the global allowlist fail closed.
+
+
+The OpenCode selector uses the catalog key under `providers.<provider>.models`, not that entry's `modelID`. For example, `providers.litellm.models.freeLLMAPI.modelID = "free-cloud"` requires the selector `litellm/freeLLMAPI`; the provider then sends `free-cloud` to LiteLLM.
