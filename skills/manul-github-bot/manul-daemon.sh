@@ -19,7 +19,7 @@ trap 'if [[ $BASH_COMMAND != "return "* ]] && [[ $BASH_COMMAND != *"|| true"* ]]
 # Direct daemon invocations must get the same exported environment as the
 # official startup/watchdog paths. Interactive callers already carry the marker.
 EARLY_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-if [ "${MANUL_ZSH_ENV_READY:-}" != "1" ]; then
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]] && [ "${MANUL_ZSH_ENV_READY:-}" != "1" ]; then
   BOOTSTRAP="$EARLY_SCRIPT_DIR/manul-zsh-bootstrap.sh"
   if [ ! -f "$BOOTSTRAP" ]; then
     echo "ERROR: Manul Zsh bootstrap is missing: $BOOTSTRAP" >&2
