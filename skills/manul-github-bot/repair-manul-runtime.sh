@@ -9,7 +9,7 @@
 # 2. Deploying symlinks to canonical scripts
 # 3. Restoring config.json from template if missing
 # 4. Restoring manul.db from an existing backup
-# 5. Preparing provider environment for unattended runs
+# 5. Preparing Manul-specific integration credentials; provider environment comes from ~/.zshrc
 # 6. Validating/upgrading the DB using the canonical Manul init routines
 #
 # The repair script never invents a new application schema. A missing or
