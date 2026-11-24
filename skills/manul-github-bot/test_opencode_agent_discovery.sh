@@ -29,9 +29,9 @@ if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
     case "$MOCK_AGENT_MODE" in
         v2-found) printf '%s\n' '[{"id":"orchestrator"},{"id":"sdd"}]'; exit 0 ;;
         v2-noisy)
-            printf '\\033[36mOpenCode background service ready\\033[0m\\n'
-            printf '%s\\n' '[INFO] plugin catalog loaded'
-            printf '%s\\n' '[{"id":"sdd"},{"id":"build"}]'
+            printf '\033[36mOpenCode background service ready\033[0m\n'
+            printf '%s\n' '[INFO] plugin catalog loaded'
+            printf '%s\n' '[{"id":"sdd"},{"id":"build"}]'
             exit 0 ;;
 
         v2-missing) printf '%s\n' '[{"id":"orchestrator"}]'; exit 0 ;;
