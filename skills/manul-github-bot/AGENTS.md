@@ -102,16 +102,14 @@ Never put secrets, local credentials, or machine-specific state into the reposit
 
 A task-scoped OpenCode permission exception must use a temporary invocation-local config for the exact canonical active workspace only; do not weaken the global sibling-workspace deny or persist per-task permissions globally. Add regression coverage for global config immutability and sibling isolation.
 
-Manul model selection is configured explicitly by `automation.opencodeModel`
-(default `litellm/freeLLMAPI`) and passed to `opencode run --model`. The model
-must not be selected implicitly by OpenCode's catalog default. Provider
-configuration and credentials remain in the operator's effective OpenCode
-JSON/JSONC file selected by `OPENCODE_CONFIG`; preserve that file and never add
-or override top-level `provider` or `model` in `OPENCODE_CONFIG_CONTENT`.
-Manul may add only task-scoped permissions, MCP entries and synthetic agent
-definitions; those definitions must not declare their own model. Tests must
-prove that the configured Manul model is passed unchanged while the operator's
-provider configuration remains untouched.
+OpenCode model/provider selection is owned by the operator's effective OpenCode
+configuration and is site-specific. The adapter must preserve it exactly: never
+add or override top-level `model` or `provider` in `OPENCODE_CONFIG_CONTENT`,
+never pass a model-selection CLI flag, and never assume a particular backend
+(LiteLLM, OpenCode Go, Ollama or otherwise). Manul may add only its task-scoped
+permissions, MCP entries and purpose-specific synthetic agent definitions;
+those definitions must not contain a model override. Add regression coverage
+with an arbitrary operator-selected model/provider, not a hard-coded backend.
 
 When changing a behavioural contract, update `CONTRACTS.md` in the same change and add/adjust tests that prove the new contract.
 
@@ -137,5 +135,3 @@ Monitor-specific persistent files or databases belong under that monitor's
 `MONITORS.md`, `SKILL.md`, `README.md`, and `CONTRACTS.md` whenever the
 monitor CLI, source, output or lifecycle contract changes.
 
-
-For LiteLLM configurations that expose a friendly OpenCode catalog key, use that key in `automation.opencodeModel`. For example, if `providers.litellm.models.freeLLMAPI.modelID` is `free-cloud`, select `litellm/freeLLMAPI`; `free-cloud` is the upstream LiteLLM alias, not the OpenCode catalog key.
