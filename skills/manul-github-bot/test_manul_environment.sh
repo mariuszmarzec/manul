@@ -310,11 +310,11 @@ chmod 600 "$TODO_RUNTIME/.env"
 TODO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$TODO_RUNTIME")"
 if (
   ! grep -q 'TODO_LOCAL_MCP_TOKEN' "$TODO_ENV_FILE" &&
-  grep -q '^OPENCODE_CONFIG=/operator/chosen/opencode.json$' "$TODO_ENV_FILE"
+  ! grep -q '^OPENCODE_CONFIG=' "$TODO_ENV_FILE"
 ); then
-  ok "Bootstrap discards legacy Todo credentials while preserving unrelated operator settings"
+  ok "Bootstrap discards retired Todo credentials and legacy host/provider configuration"
 else
-  fail "Bootstrap retained a legacy Todo credential or changed unrelated settings"
+  fail "Bootstrap retained retired credentials or host/provider configuration"
 fi
 assert_file_mode_600 "$TODO_ENV_FILE"
 
