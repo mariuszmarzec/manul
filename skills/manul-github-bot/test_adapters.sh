@@ -764,7 +764,15 @@ MOCK
   grep -qx 'OPENCODE_API_KEY=opencode-console-fixture-key' "$tmp/env" && ok "OpenCodeAdapter preserves operator OpenCode Console authentication" || fail "OpenCodeAdapter dropped OPENCODE_API_KEY"
   grep -Fxq "$tmp" "$tmp/cwd" && ok "OpenCodeAdapter launches OpenCode from the assigned workspace" || fail "OpenCodeAdapter did not set OpenCode working directory to the assigned workspace"
   ! grep -Eq '(^|[[:space:]])--dir([[:space:]]|$)' "$tmp/args" && ok "OpenCodeAdapter does not pass the unsupported --dir flag to OpenCode 2.x" || fail "OpenCodeAdapter still passes unsupported --dir to opencode run"
-  grep -q -- '--agent build' "$tmp/args" && ok "OpenCodeAdapter passes agent selection" || fail "OpenCodeAdapter ignored --agent"
+  if grep -q -- '--agent build' "$tmp/args"; then
+    ok "OpenCodeAdapter passes agent selection"
+  else
+    printf 'DEBUG agent discovery args: %s\n' "$(cat "$tmp/discovery-args" 2>/dev/null || echo missing)" >&2
+    printf 'DEBUG OpenCode run args: %s\n' "$(cat "$tmp/args" 2>/dev/null || echo missing)" >&2
+    printf 'DEBUG runtime files:\n' >&2
+    find "$tmp/runtime" -type f -maxdepth 8 -print -exec cat {} \; 2>/dev/null >&2 || true
+    fail "OpenCodeAdapter ignored --agent"
+  fi
   ! grep -Eq '(^|[[:space:]])--model([[:space:]]|$)' "$tmp/args" \
     && ok "OpenCodeAdapter leaves model selection to the OpenCode config" \
     || fail "OpenCodeAdapter unexpectedly overrides the OpenCode model"
@@ -775,9 +783,12 @@ MOCK
   printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_success' \
     && ok "OpenCodeAdapter returns runtime session ID" \
     || fail "OpenCodeAdapter did not return session ID"
-  printf '%s' "$out" | jq -r '.diagnostics.selected_agent' | grep -qx 'build' \
-    && ok "OpenCodeAdapter records the selected role in its diagnostics" \
-    || fail "OpenCodeAdapter selected role diagnostic missing"
+  if [ "$(printf '%s' "$out" | jq -r '.diagnostics.selected_agent')" = "build" ]; then
+    ok "OpenCodeAdapter records the selected role in its diagnostics"
+  else
+    printf 'DEBUG adapter JSON: %s\n' "$out" >&2
+    fail "OpenCodeAdapter selected role diagnostic missing"
+  fi
   grep -Fq 'role=build' "$tmp/stderr" \
     && ok "OpenCodeAdapter startup log records the selected role" \
     || fail "OpenCodeAdapter startup log omitted the selected role"
