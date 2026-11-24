@@ -160,6 +160,18 @@ else
   fail "Manul environment loader overrode the operator's exported Zsh settings"
 fi
 
+if (
+  unset OPENCODE_API_KEY LITELLM_MASTER_KEY
+  source "$SCRIPT_DIR/manul-env.sh"
+  manul_env_load "$PRECEDENCE"
+  [ -z "${OPENCODE_API_KEY:-}" ] &&
+  [ -z "${LITELLM_MASTER_KEY:-}" ]
+); then
+  ok "Legacy OpenCode Console/LiteLLM keys are not loaded from ~/.manul/.env"
+else
+  fail "Legacy provider API keys leaked from ~/.manul/.env"
+fi
+
 # Legacy Manul-owned values remain as fallbacks, but a current Zsh export wins.
 SHARE_ONLY="$TMP/share-only"
 mkdir -p "$SHARE_ONLY"
@@ -306,8 +318,8 @@ else
 fi
 assert_file_mode_600 "$FITEO_ENV_FILE"
 
-# Legacy Todo credentials are discarded without being loaded; unrelated
-# operator settings remain intact.
+# Legacy Todo credentials and obsolete host/provider settings are discarded
+# without being loaded; Manul-specific integration fallbacks remain intact.
 TODO_RUNTIME="$TMP/todo-legacy-credential-runtime"
 mkdir -p "$TODO_RUNTIME"
 cat > "$TODO_RUNTIME/.env" <<'EOF'
