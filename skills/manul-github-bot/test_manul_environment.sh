@@ -38,6 +38,9 @@ grep -q 'manul-env.sh' "$SCRIPT_DIR/install-manul-symlinks.sh"   && ok "Symlink 
 grep -q '"manul-zsh-bootstrap.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys Zsh bootstrap" || fail "Symlink installer does not deploy Zsh bootstrap"
 grep -q 'MANUL_ZSH_ENV_READY=1' "$SCRIPT_DIR/manul-shell.zsh" && ok "Interactive shell marks its initialized Zsh environment" || fail "Shell integration does not export the Zsh environment marker"
 grep -q 'manul-zsh-bootstrap.sh' "$SCRIPT_DIR/watchdog.sh" && ok "Watchdog bootstraps ~/.zshrc from cron" || fail "Watchdog bypasses Zsh bootstrap"
+grep -Fq '"$OPENCODE_BIN" mcp list --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "Caracal MCP preflight uses the task-local OpenCode server" || fail "Caracal MCP preflight can reuse the shared OpenCode server"
+grep -Fq '"$OPENCODE_BIN" debug agents --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode agent discovery uses the task-local server" || fail "OpenCode agent discovery can reuse the shared OpenCode server"
+grep -Fq '"$OPENCODE_BIN" run --standalone' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode task runs use the task-local server" || fail "OpenCode task run can reuse the shared OpenCode server"
 grep -q '"manul-failure-utils.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys failure sanitization helper" || fail "Symlink installer does not deploy failure sanitization helper"
 
 grep -q 'manul-env.sh" --bootstrap' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer bootstraps the operator environment"   || fail "Installer does not bootstrap the operator environment"
