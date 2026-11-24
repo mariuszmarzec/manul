@@ -48,6 +48,9 @@ cat >"$BIN_DIR/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'command=%s\n' "$*" >>"$MOCK_CARACAL_PROOF_FILE"
+[ "${1:-}" = "--standalone" ] || { echo "expected OpenCode --standalone root flag" >&2; exit 64; }
+shift
+printf 'effective_command=%s\n' "$*" >>"$MOCK_CARACAL_PROOF_FILE"
 printf 'url=%s\n' "${CARACAL_MCP_URL:-<unset>}" >>"$MOCK_CARACAL_PROOF_FILE"
 printf 'token=%s\n' "${CARACAL_ACCESS_TOKEN:-<unset>}" >>"$MOCK_CARACAL_PROOF_FILE"
 printf 'resolve_live=%s\n' "${CARACAL_RESOLVE_LIVE:-unset}" >>"$MOCK_CARACAL_PROOF_FILE"
@@ -96,8 +99,8 @@ run_adapter() {
 
 out="$(run_adapter caracal-connected connected)"
 [ "$(printf '%s' "$out" | jq -r '.status')" = "COMPLETED" ] || fail "connected Caracal task did not complete: $out"
-grep -Fq 'command=mcp list' "$PROOF" || fail "adapter did not probe the effective OpenCode MCP registry"
-grep -Fq 'command=run' "$PROOF" || fail "adapter did not start the model after Caracal passed"
+grep -Fq 'command=--standalone mcp list' "$PROOF" || fail "adapter did not probe the effective OpenCode MCP registry"
+grep -Fq 'command=--standalone run' "$PROOF" || fail "adapter did not start the model after Caracal passed"
 [ "$(grep -c '^url=http://127.0.0.1:3500/mcp$' "$PROOF")" -ge 2 ] || fail "Caracal URL did not reach both MCP preflight and agent process"
 [ "$(grep -c '^token=fixture-caracal-token$' "$PROOF")" -ge 2 ] || fail "Caracal token did not reach both MCP preflight and agent process"
 ! grep -q '^resolve_live=1$' "$PROOF" || fail "provider's one-shot live-resolution flag leaked into OpenCode"
@@ -110,7 +113,7 @@ pass "Manul refreshes Caracal provider env per task, verifies connection, and ke
 out="$(run_adapter caracal-disconnected disconnected)" || true
 [ "$(printf '%s' "$out" | jq -r '.status')" = "FAILED" ] || fail "disconnected Caracal did not fail closed: $out"
 [ "$(printf '%s' "$out" | jq -r '.failure_code')" = "PRE_EXECUTION_FAILURE" ] || fail "disconnected Caracal failure code is missing: $out"
-! grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent started despite a disconnected mandatory Caracal MCP"
+! grep -Eq '^command=--standalone run([[:space:]]|$)' "$PROOF" || fail "agent started despite a disconnected mandatory Caracal MCP"
 pass "Manul blocks model startup when configured Caracal MCP is disconnected"
 
 : >"$PROOF"
