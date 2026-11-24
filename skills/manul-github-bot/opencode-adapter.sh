@@ -1055,12 +1055,11 @@ if execution_kind == "slack_intake" and not todo_server_name:
     # No confirmed local endpoint means no tools at all, never a different Todo identity.
     operator_agent_config["manul-slack-intake"]["tools"] = {"*": False}
 
-# Manul workers must not inherit the operator's interactive/default model.
-# The Globalskills routing contract pins every Manul turn to local LiteLLM.
-# This is invocation-scoped and leaves operator-owned provider config untouched.
+# Model/provider selection belongs to the operator's OpenCode installation and
+# may differ between machines. Manul must never pin, rewrite or supply either.
+# The overlay is limited to task-scoped permissions, MCP and synthetic agents.
 overlay = {
     "permissions": permissions,
-    "model": "litellm/free-cloud",
 }
 if servers:
     overlay["mcp"] = {"servers": servers}
