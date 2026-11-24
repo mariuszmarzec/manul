@@ -120,7 +120,6 @@
   "automation": {
     "enabled": true,
     "agentRuntime": "openclaw",
-    "opencodeModel": "litellm/freeLLMAPI",
     "agentTimeoutSeconds": 43500,
     "opencodeMaxStepLimitContinuations": 3,
     "heartbeatTimeout": 900,
