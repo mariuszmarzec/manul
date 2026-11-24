@@ -105,13 +105,14 @@ if ! jq empty "$RUNTIME_DIR/config.json" >/dev/null 2>&1; then
 fi
 
 echo
-echo "  Preparing operator environment..."
+echo "  Preparing Manul-specific integration fallbacks..."
 if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
     fail "Could not prepare $RUNTIME_DIR/.env"
 fi
 echo "  Environment file: $RUNTIME_DIR/.env"
 
-# The permission helper must use the same custom OpenCode config as daemon/watchdog.
+# The permission helper inherits the operator's active Zsh environment, just
+# like the daemon and watchdog.
 # shellcheck source=manul-env.sh
 source "$CANONICAL_DIR/manul-env.sh"
 if ! manul_env_load "$RUNTIME_DIR"; then
