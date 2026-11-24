@@ -9,8 +9,8 @@
 # Runtime-owned integration environment file:
 #   ~/.manul/.env
 #
-# The bootstrap operation persists only explicitly supported Manul integration
-# values. It never copies arbitrary environment variables.
+# Bootstrap creates/validates this private fallback file and removes retired
+# credentials. It never copies active shell variables into a second file.
 
 manul_env_file() {
   local runtime_dir="${1:-${MANUL_DIR:-$HOME/.manul}}"
@@ -32,7 +32,7 @@ manul_env_load() {
   set -a
   # Treat ~/.zshrc as the source of truth for exported operator settings.
   # The Manul file supplies only values absent from the inherited environment;
-  # it can never replace PATH, even if an old version wrote one here.
+  # it can never replace PATH, even if an older version wrote one here.
   # shellcheck disable=SC1090
   . <(awk '
     BEGIN {
