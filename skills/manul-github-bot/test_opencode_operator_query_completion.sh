@@ -41,7 +41,7 @@ case "${1:-}" in
     # clean response without its optional TASK_DONE marker.
     if [ "${MANUL_TASK_EXECUTION_KIND:-}" = "operator_query" ]; then
       printf '%s' "${OPENCODE_CONFIG_CONTENT:-}" |
-        jq -e '.tools["*"] == false and .agent["manul-operator-query"].tools["*"] == false' >/dev/null
+        jq -e '.model == null and .provider == null and .tools["*"] == false and .agent["manul-operator-query"].tools["*"] == false' >/dev/null
     fi
     # Deliberately return a useful text event and session ID, but no TASK_DONE.
     printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-no-marker","part":{"type":"text","text":"Operator answer: one task is running."}}'
