@@ -765,7 +765,7 @@ MOCK
   grep -Fxq "$tmp" "$tmp/cwd" && ok "OpenCodeAdapter launches OpenCode from the assigned workspace" || fail "OpenCodeAdapter did not set OpenCode working directory to the assigned workspace"
   ! grep -Eq '(^|[[:space:]])--dir([[:space:]]|$)' "$tmp/args" && ok "OpenCodeAdapter does not pass the unsupported --dir flag to OpenCode 2.x" || fail "OpenCodeAdapter still passes unsupported --dir to opencode run"
   grep -q -- '--agent build' "$tmp/args" && ok "OpenCodeAdapter passes agent selection" || fail "OpenCodeAdapter ignored --agent"
-  grep -q -- '--model litellm/free-cloud' "$tmp/args" \
+  grep -q -- '--model litellm/freeLLMAPI' "$tmp/args" \
     && ok "OpenCodeAdapter uses the model selected in Manul config" \
     || fail "OpenCodeAdapter did not pass the Manul-configured model"
   grep -q -- '--auto' "$tmp/args" && ok "OpenCodeAdapter forwards native --auto" || fail "OpenCodeAdapter ignored --auto"
@@ -1139,7 +1139,7 @@ MOCK
   [ "$(cat "$tmp/count")" = "2" ] && ok "Configured limit allows one internal continuation" || fail "Internal invocation count=$(cat "$tmp/count" 2>/dev/null || echo missing)"
   grep -Fq -- '--session ses_internal' "$tmp/args" && ok "Internal continuation resumes the original OpenCode session" || fail "Internal continuation did not pass the session ID"
   ! grep -q -- '--standalone' "$tmp/args" && ok "Initial and resumed turns both reuse the shared OpenCode service" || fail "A resumed OpenCode turn unexpectedly requested a standalone server"
-  [ "$(grep -o -- '--model litellm/free-cloud' "$tmp/args" | wc -l)" -eq 2 ] && ok "Initial and resumed turns both use the Manul-configured model" || fail "A resumed OpenCode turn lost the configured model"
+  [ "$(grep -o -- '--model litellm/freeLLMAPI' "$tmp/args" | wc -l)" -eq 2 ] && ok "Initial and resumed turns both use the Manul-configured model" || fail "A resumed OpenCode turn lost the configured model"
   printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_internal' && ok "Final result retains the resumed OpenCode session identity" || fail "Final session identity missing"
   grep -Fq "TASK_DONE resumed after step limit" "$tmp/stdout" && ok "Final text/control marker is normalized from the resumed run" || fail "TASK_DONE marker missing from normalized output"
   [ -f "$tmp/runtime/logs/tasks/task-oc-internal-resume.attempt-1.opencode.jsonl" ] && ok "All inner invocations are retained in the same attempt log" || fail "Aggregated per-attempt runtime log missing"
