@@ -116,7 +116,7 @@ echo "  Environment file: $RUNTIME_DIR/.env"
 # shellcheck source=manul-env.sh
 source "$CANONICAL_DIR/manul-env.sh"
 if ! manul_env_load "$RUNTIME_DIR"; then
-    fail "Could not load $RUNTIME_DIR/.env for provider configuration"
+    fail "Could not load $RUNTIME_DIR/.env for Manul integration fallbacks"
 fi
 
 echo
