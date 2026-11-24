@@ -86,8 +86,8 @@ EOF
     fi
   fi
 
-  # Remove credentials that must never be retained as Manul identity or local
-  # transport state. Preserve all other pre-existing Manul-specific entries.
+  # Remove retired operator/local credentials and obsolete host/provider
+  # config/API-key entries. Preserve Manul-specific integration fallbacks.
   local refreshed_file
   if grep -qE '^[[:space:]]*(export[[:space:]]+)?(FITEO_PAT|TODO_LOCAL_MCP_TOKEN|CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN|OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_CONFIG|OPENCODE_CONFIG_DIR|OPENCODE_API_KEY|OPENCODE_CONSOLE_TOKEN|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|OPENAI_API_KEY|OPENAI_API_BASE|OPENAI_BASE_URL|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|GOOGLE_API_KEY|MISTRAL_API_KEY|LITELLM_API_KEY|LITELLM_MASTER_KEY|LITELLM_API_BASE|FREELLMAPI_API_KEY|FREELLMAPI_BASE_URL|OLLAMA_API_KEY|OLLAMA_HOST)=' "$env_file"; then
     refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
