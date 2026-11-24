@@ -13,7 +13,7 @@ import re
 import sys
 from typing import Any
 
-_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\\[[0-?]*[ -/]*[@-~])|\x9B[0-?]*[ -/]*[@-~]")
+_ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_])|\x9b[0-?]*[ -/]*[@-~]", re.IGNORECASE)
 _WRAPPER_KEYS = ("agents", "data", "result")
 
 
@@ -44,11 +44,13 @@ def parse_agent_list(stdout: str) -> tuple[str, list[dict[str, Any]] | str]:
 
     # Prefer the normal contract (one JSON document at the beginning). If a
     # runtime banner/log line precedes it, scan later JSON value boundaries.
-    candidates = [len(cleaned) - len(cleaned.lstrip())]
-    candidates.extend(
-        index for index, char in enumerate(cleaned)
-        if char in "[{" and index not in candidates
-    )
+    first = len(cleaned) - len(cleaned.lstrip())
+    candidates = [first]
+    seen = {first}
+    for index, char in enumerate(cleaned):
+        if char in "[{" and index not in seen:
+            candidates.append(index)
+            seen.add(index)
     for offset in candidates:
         try:
             value, _end = decoder.raw_decode(cleaned, offset)
