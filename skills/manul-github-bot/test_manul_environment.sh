@@ -327,7 +327,6 @@ mkdir -p "$TODO_RUNTIME"
 cat > "$TODO_RUNTIME/.env" <<'EOF'
 OPENCODE_CONFIG=/operator/chosen/opencode.json
 TODO_LOCAL_MCP_TOKEN=legacy-fixture-value
-OPENCODE_CONFIG=/operator/chosen/opencode.json
 EOF
 chmod 600 "$TODO_RUNTIME/.env"
 TODO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$TODO_RUNTIME")"
