@@ -5,7 +5,7 @@
 #   1. Self-detect and validate canonical source
 #   2. Ensure runtime directory
 #   3. Deploy symlinks via install-manul-symlinks.sh
-#   4. Restore config.json from example if missing and prepare operator .env
+#   4. Restore config.json from example if missing and prepare Manul fallbacks
 #   5. Validate/migrate manul.db. Existing task state is preserved. A fresh DB
 #      is created only with explicit --init-state on a first-time installation.
 #   6. Install the dormant watchdog cron and canonical zsh shell integration
@@ -201,7 +201,7 @@ fi
 #     Operator PATH, provider config and exported credentials come from ~/.zshrc;
 #     this file is never a second provider/PATH configuration source.
 echo
-echo "  Preparing operator environment..."
+echo "  Preparing Manul-specific integration fallbacks..."
 if ! bash "$CANONICAL_DIR/manul-env.sh" --bootstrap "$RUNTIME_DIR"; then
     fail "Could not prepare $RUNTIME_DIR/.env"
 fi
@@ -213,7 +213,7 @@ echo "  Environment file: $RUNTIME_DIR/.env"
 # shellcheck source=manul-env.sh
 source "$CANONICAL_DIR/manul-env.sh"
 if ! manul_env_load "$RUNTIME_DIR"; then
-    fail "Could not load $RUNTIME_DIR/.env for provider configuration"
+    fail "Could not load $RUNTIME_DIR/.env for Manul integration fallbacks"
 fi
 
 # 4c. Configure provider-owned OpenCode permissions required by unattended Manul execution.
