@@ -226,6 +226,120 @@ if [ -z "$_OPENCODE_BASE_CONFIG" ]; then
         done
     done
 fi
+# Recover from a stale/empty explicit JSONC selection when the sibling JSON
+# file is the operator's actual configured model/provider file. This is a
+# process-local correction: never rewrite either operator-owned config file.
+if [[ "$_OPENCODE_BASE_CONFIG" == *.jsonc ]]; then
+    _OPENCODE_RECOVERED_CONFIG="$(python3 - "$_OPENCODE_BASE_CONFIG" <<'PY_OPENCODE_CONFIG_RECOVERY'
+import json
+import sys
+from pathlib import Path
+
+def parse_jsonc(source):
+    output = []
+    index = 0
+    in_string = False
+    escaped = False
+    line_comment = False
+    block_comment = False
+    while index < len(source):
+        char = source[index]
+        nxt = source[index + 1] if index + 1 < len(source) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+                output.append(char)
+            else:
+                output.append(" ")
+        elif block_comment:
+            if char == "*" and nxt == "/":
+                output.extend("  ")
+                index += 1
+                block_comment = False
+            else:
+                output.append("\n" if char == "\n" else " ")
+        elif in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+            output.append(char)
+        elif char == "/" and nxt == "/":
+            output.extend("  ")
+            index += 1
+            line_comment = True
+        elif char == "/" and nxt == "*":
+            output.extend("  ")
+            index += 1
+            block_comment = True
+        else:
+            output.append(char)
+        index += 1
+    if in_string or block_comment:
+        raise ValueError("unterminated JSONC string/comment")
+
+    source = "".join(output)
+    output = []
+    index = 0
+    in_string = False
+    escaped = False
+    while index < len(source):
+        char = source[index]
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+            output.append(char)
+        elif char == ",":
+            lookahead = index + 1
+            while lookahead < len(source) and source[lookahead].isspace():
+                lookahead += 1
+            if lookahead >= len(source) or source[lookahead] not in "]}":
+                output.append(char)
+        else:
+            output.append(char)
+        index += 1
+    return json.loads("".join(output))
+
+selected = Path(sys.argv[1]).expanduser()
+sibling = selected.with_suffix(".json")
+try:
+    selected_config = parse_jsonc(selected.read_text(encoding="utf-8"))
+    sibling_config = parse_jsonc(sibling.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(0)
+
+selected_model = selected_config.get("model") if isinstance(selected_config, dict) else None
+sibling_model = sibling_config.get("model") if isinstance(sibling_config, dict) else None
+sibling_providers = sibling_config.get("provider", sibling_config.get("providers")) if isinstance(sibling_config, dict) else None
+if (
+    not isinstance(selected_model, str) or not selected_model.strip()
+) and (
+    isinstance(sibling_model, str) and sibling_model.strip()
+    and isinstance(sibling_providers, dict) and bool(sibling_providers)
+):
+    print(sibling)
+PY_OPENCODE_CONFIG_RECOVERY
+)"
+    if [ -n "$_OPENCODE_RECOVERED_CONFIG" ]; then
+        OPENCODE_CONFIG="$_OPENCODE_RECOVERED_CONFIG"
+        export OPENCODE_CONFIG
+        _OPENCODE_BASE_CONFIG="$_OPENCODE_RECOVERED_CONFIG"
+        log "recovered configured OpenCode JSON from an explicit JSONC file with no model; using $_OPENCODE_BASE_CONFIG for this process"
+    fi
+fi
+
 _TASK_WORKSPACE_ROOT_INPUT="${MANUL_TASK_WORKSPACE_ROOT:-}"
 _TASK_WORKDIR_INPUT="${MANUL_TASK_WORKDIR:-}"
 _TASK_EXECUTION_KIND_INPUT="${MANUL_TASK_EXECUTION_KIND:-repository}"
