@@ -60,7 +60,7 @@ def parse_agent_list(stdout: str) -> tuple[str, list[dict[str, Any]] | str]:
         if agents is not None:
             return "ok", agents
 
-    return "error", "OpenCode debug agents output did not contain a valid JSON agent list"
+    return "error", "OpenCode debug agents returned invalid JSON or an unsupported agent-list structure"
 
 
 def main() -> int:
