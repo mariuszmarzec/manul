@@ -127,7 +127,11 @@ connectivity before model startup without persisting secrets or mutating the
 operator config. Manul does not install Node/npm packages or the retired Fiteo
 task-creation plugin. OpenCode task settings are delivered via a temporary
 OPENCODE_CONFIG_CONTENT overlay while operator JSON/JSONC files remain
-untouched.
+untouched. Every Manul OpenCode invocation pins its main model to
+`litellm/free-cloud` in that temporary overlay, so Manul work cannot silently
+inherit an unrelated interactive default such as an OpenCode Go model. The
+LiteLLM provider definition remains operator-owned and is loaded from the
+normal OpenCode configuration.
 
 The top-level `.repositories` array is authoritative both with and without explicit `.taskSources`. The installer removes legacy top-level `repositoryAllowlist` and nested `.taskSources[].repositories` duplicates without merging them into the global list.
 ## Task execution plane
