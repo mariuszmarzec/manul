@@ -1131,6 +1131,7 @@ MOCK
   [ "$rc" -eq 0 ] && ok "Internal continuation returns success to the same Manul attempt" || fail "Internal continuation rc=$rc"
   [ "$(cat "$tmp/count")" = "2" ] && ok "Configured limit allows one internal continuation" || fail "Internal invocation count=$(cat "$tmp/count" 2>/dev/null || echo missing)"
   grep -Fq -- '--session ses_internal' "$tmp/args" && ok "Internal continuation resumes the original OpenCode session" || fail "Internal continuation did not pass the session ID"
+  [ "$(grep -c -- '--standalone' "$tmp/args")" -eq 2 ] && ok "Initial and resumed turns both use standalone OpenCode servers" || fail "A resumed OpenCode turn reused the shared background service"
   printf '%s' "$out" | jq -r '.session_id' | grep -qx 'ses_internal' && ok "Final result retains the resumed OpenCode session identity" || fail "Final session identity missing"
   grep -Fq "TASK_DONE resumed after step limit" "$tmp/stdout" && ok "Final text/control marker is normalized from the resumed run" || fail "TASK_DONE marker missing from normalized output"
   [ -f "$tmp/runtime/logs/tasks/task-oc-internal-resume.attempt-1.opencode.jsonl" ] && ok "All inner invocations are retained in the same attempt log" || fail "Aggregated per-attempt runtime log missing"
