@@ -187,6 +187,8 @@ mkdir -p "$PRESERVE"
 cat > "$PRESERVE/.env" <<'EOF'
 OPENCLAW_STATE_DIR=/operator/chosen/state
 OPENCODE_CONFIG=/operator/chosen/opencode.json
+FITEO_MANUL_PAT=legacy-manul-token
+FITEO_BASE_URL=https://legacy-fiteo.example
 EOF
 chmod 600 "$PRESERVE/.env"
 
@@ -197,35 +199,38 @@ export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
 ENV_FILE2="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE")"
 
 if (
-  grep -qx 'OPENCLAW_STATE_DIR=/operator/chosen/state' "$ENV_FILE2" &&
-  grep -qx 'OPENCODE_CONFIG=/operator/chosen/opencode.json' "$ENV_FILE2" &&
-  ! grep -q '^OPENCLAW_CONFIG_PATH=' "$ENV_FILE2"
+  ! grep -qE '^(OPENCLAW_STATE_DIR|OPENCODE_CONFIG)=' "$ENV_FILE2" &&
+  grep -qx 'FITEO_MANUL_PAT=legacy-manul-token' "$ENV_FILE2" &&
+  grep -qx 'FITEO_BASE_URL=https://legacy-fiteo.example' "$ENV_FILE2"
 ); then
-  ok "Manul bootstrap preserves legacy fallbacks without copying current shell settings"
+  ok "Bootstrap removes legacy provider settings but preserves Manul-specific credential fallbacks"
 else
-  fail "Bootstrap duplicated active shell configuration or damaged fallbacks"
+  fail "Bootstrap retained provider settings or removed Manul integration fallbacks"
 fi
 if (
   source "$SCRIPT_DIR/manul-env.sh"
   manul_env_load "$PRESERVE"
   [ "$OPENCLAW_STATE_DIR" = "/installer/current/state" ] &&
   [ "$OPENCLAW_CONFIG_PATH" = "/installer/current/config.json" ] &&
-  [ "$OPENCODE_CONFIG" = "/installer/current/opencode.json" ]
+  [ "$OPENCODE_CONFIG" = "/installer/current/opencode.json" ] &&
+  [ "$FITEO_MANUL_PAT" = "legacy-manul-token" ] &&
+  [ "$FITEO_BASE_URL" = "https://legacy-fiteo.example" ]
 ); then
-  ok "Current Zsh provider configuration overrides legacy fallback values"
+  ok "Zsh provider exports win while Manul-specific fallback credentials remain available"
 else
-  fail "Legacy fallback values overrode the current Zsh provider configuration"
+  fail "Provider exports or Manul integration fallbacks were not loaded correctly"
 fi
 if (
   unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
   source "$ENV_FILE2"
-  [ "$OPENCLAW_STATE_DIR" = "/operator/chosen/state" ] &&
-  [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ] &&
-  [ -z "${OPENCLAW_CONFIG_PATH:-}" ]
+  [ -z "${OPENCLAW_STATE_DIR:-}" ] &&
+  [ -z "${OPENCODE_CONFIG:-}" ] &&
+  [ "$FITEO_MANUL_PAT" = "legacy-manul-token" ] &&
+  [ "$FITEO_BASE_URL" = "https://legacy-fiteo.example" ]
 ); then
-  ok "Legacy Manul-owned fallback values remain available when Zsh does not set them"
+  ok "Legacy provider config is not used as fallback; Manul integration fallback remains usable"
 else
-  fail "Legacy fallback compatibility was not preserved"
+  fail "Legacy provider configuration leaked from the Manul environment file"
 fi
 
 # Legacy Caracal variables are neither loaded nor retained by Manul.
