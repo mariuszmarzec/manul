@@ -1142,8 +1142,13 @@ TASK_ACTION="TEAM"
 DEFAULT_BRANCH="main"
 evaluate_task_completion "test/repo" "65" "TEAM_NOOP" "TEAM_NOOP" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_NOOP" "" "$INITIAL_HEAD_TEAM_NOOP" "$TEAM_BRANCH_NOOP" "main" "" "" "" "" "implementation" "" "repository" "$TEAM_BRANCH_NOOP"
 TEAM_PR_COUNT_AFTER="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
-if [ "$COMPLETION_SUCCESS" != "true" ] || [ "$COMMENT_ONLY_DELIVERY" != "true" ] || [ "$TEAM_PR_COUNT_AFTER" != "$TEAM_PR_COUNT_BEFORE" ]; then
-  echo "FAIL: verified Team no-op should complete without creating an empty PR (success=$COMPLETION_SUCCESS commentOnly=$COMMENT_ONLY_DELIVERY reason=$FAIL_REASON)" >&2
+if [ "$COMPLETION_SUCCESS" != "true" ] || [ "$TEAM_PR_COUNT_AFTER" != "$TEAM_PR_COUNT_BEFORE" ]; then
+  echo "FAIL: verified Team no-op should complete without creating an empty PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
+  tail -n 70 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+if ! grep -q "skipping PR URL verification for verified comment-only delivery" "$LOG_FILE"; then
+  echo "FAIL: verified Team no-op did not use the comment-only result path" >&2
   tail -n 70 "$LOG_FILE" >&2 || true
   exit 1
 fi
