@@ -912,9 +912,22 @@ workspace_prepare_team_task_branch() {
     return 1
   fi
 
-  local base_ref="refs/remotes/origin/$base_branch"
-  if ! git -C "$workdir" show-ref --verify --quiet "$base_ref"; then
-    echo "workspace_prepare_team_task_branch: remote base '$base_branch' is unavailable" >&2
+  local base_ref="refs/remotes/origin/$base_branch" remote_base_sha fetched_base_sha
+  remote_base_sha="$(git -C "$workdir" ls-remote --heads origin "$base_branch" 2>/dev/null | awk 'NR == 1 {print $1}')" || {
+    echo "workspace_prepare_team_task_branch: could not verify remote base '$base_branch'" >&2
+    return 1
+  }
+  if [ -z "$remote_base_sha" ]; then
+    echo "workspace_prepare_team_task_branch: remote base '$base_branch' does not exist" >&2
+    return 1
+  fi
+  if ! git -C "$workdir" fetch origin "$base_branch" --quiet; then
+    echo "workspace_prepare_team_task_branch: could not fetch the exact remote base '$base_branch'" >&2
+    return 1
+  fi
+  fetched_base_sha="$(git -C "$workdir" rev-parse --verify "$base_ref^{commit}" 2>/dev/null || true)"
+  if [ -z "$fetched_base_sha" ] || [ "$fetched_base_sha" != "$remote_base_sha" ]; then
+    echo "workspace_prepare_team_task_branch: remote base '$base_branch' changed or could not be verified during preparation" >&2
     return 1
   fi
 
