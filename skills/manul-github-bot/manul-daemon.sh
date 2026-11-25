@@ -4013,8 +4013,8 @@ evaluate_task_completion() {
           log "dispatch: task $COMMENT_ID accepted with verified comment-only delivery"
         else
           SUCCESS="false"
-          FAILURE_CODE="VERIFICATION_FAILED"
-          FAIL_REASON="Implementation task completed on base/default branch ($current_branch) without a verified task PR"
+          FAILURE_CODE="${IMPLEMENT_COMMENT_ONLY_FAILURE_CODE:-VERIFICATION_FAILED}"
+          FAIL_REASON="${IMPLEMENT_COMMENT_ONLY_FAILURE_REASON:-Implementation task completed on base/default branch ($current_branch) without a verified pre-existing or merged task PR}"
           log "dispatch: task $COMMENT_ID rejected on base branch $current_branch: $FAIL_REASON"
           lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_delivery_rejected code=$FAILURE_CODE branch=$current_branch"
         fi
