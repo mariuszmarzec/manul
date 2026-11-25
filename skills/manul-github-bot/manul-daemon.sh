@@ -3280,7 +3280,7 @@ verify_result_comment_pr_url_if_required() {
   shift 2
 
   if [ "$comment_only_delivery" = "true" ]; then
-    log "dispatch: skipping PR URL verification for verified comment-only IMPLEMENT delivery"
+    log "dispatch: skipping PR URL verification for verified comment-only delivery"
     lc_log "PR_RESULT_LINK_VERIFY_SKIPPED" "reason=verified_comment_only_delivery"
     return 0
   fi
