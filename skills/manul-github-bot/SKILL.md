@@ -882,15 +882,25 @@ It is retained only for Manul-specific integration credentials/fallbacks that
 the operator deliberately keeps there. Caracal remains operator-owned; its URL
 and token are never copied into ~/.manul/.env or task artifacts. When the
 operator's static effective OpenCode configuration enables
-mcp.servers.caracal-rag, the OpenCode adapter loads the current provider
+mcp.servers.caracal-rag, the OpenCode adapter refreshes the provider
 environment from ~/.caracal/env.sh for that task (with
-CARACAL_RESOLVE_LIVE=1), passes the values only to the OpenCode process,
-and verifies caracal-rag through that same binary/configuration before agent
-startup. A missing provider or disconnected configured Caracal server is a
-pre-execution infrastructure failure. Manul does not inject or rewrite the
-Caracal MCP entry or modify operator JSON/JSONC files. If Caracal is absent or
-disabled in the operator's static config, the adapter does not load its
-provider or require Caracal.
+CARACAL_RESOLVE_LIVE=1), then checks Caracal through the same OpenCode
+binary/configuration before agent startup. If the provider cannot be prepared
+or Caracal is not reported as connected, Manul disables only Caracal in the
+temporary task overlay, clears its URL/token from the agent process, records
+the diagnostic and continues without that optional MCP. This does not consume
+the task's agent-attempt budget. Manul does not rewrite operator JSON/JSONC
+files.
+
+Before agent startup, Manul also checks every MCP entry it creates in the task
+overlay. A Manul-created MCP that is not reported as connected is removed from
+that task's overlay, and its corresponding URL/token variables are cleared
+from the agent process environment. The aggregate `opencode mcp list` exit code does not
+block startup when an unrelated optional or operator-owned server is offline.
+Manul never removes or rewrites other operator-owned MCP entries. The static
+OpenCode configuration is loaded by OpenCode itself and remains untouched.
+If Caracal is absent or disabled in the operator's effective static config,
+the adapter does not load its provider or require Caracal.
 
 OpenCode loads the operator's JSON or JSONC configuration itself. Manul leaves
 `OPENCODE_CONFIG` and all operator config files untouched, then supplies a

@@ -718,19 +718,28 @@ are an explicit provider error, never a successful silent skip.
 
 Caracal remains operator-owned. If the operator's static effective OpenCode
 configuration enables `caracal-rag`, the OpenCode adapter refreshes its live
-provider URL/token from `~/.caracal/env.sh` for each task, passes them only to
-the child OpenCode process, and verifies that Caracal is connected using the
-same binary and effective configuration that will run the agent. Configured
-Caracal failures block agent startup as pre-execution infrastructure failures.
-The provider secrets are never copied into `~/.manul/.env`, task artifacts or
-logs. Manul does not inject or rewrite the Caracal MCP entry or modify
-operator JSON/JSONC files. If the static entry is absent or disabled, Caracal
-is not loaded or required. OpenCode operator configuration is loaded by
-OpenCode itself. Manul preserves `OPENCODE_CONFIG` and operator JSON/JSONC
-files, contributes only a temporary `OPENCODE_CONFIG_CONTENT` overlay, and
-injects Manul-owned MCP names only when they do not collide with known
-operator entries. Other optional MCP connectivity never blocks OpenCode task
-startup.
+provider URL/token from `~/.caracal/env.sh` for each task and passes them only
+to the child OpenCode process. Before agent startup, Manul checks the MCP
+connection using the exact OpenCode binary, workspace, effective configuration
+and process environment that will run the agent. If the Caracal provider cannot
+be prepared or OpenCode does not report the server as connected, Manul disables
+only `caracal-rag` in the temporary task overlay, clears its credentials from
+the agent process, records a diagnostic and continues without Caracal. This is
+an optional capability, not a pre-execution infrastructure failure. Provider
+secrets are never copied into `~/.manul/.env`, task artifacts or logs.
+
+Manul also checks every MCP entry it creates in the temporary OpenCode overlay.
+An entry that is not reported as connected is removed from that task overlay
+before the agent starts, and its corresponding Manul-owned URL/token variables
+are cleared from the agent process environment. The aggregate `opencode mcp list` exit code is not
+used as a global gate: one unrelated operator-owned server being offline does
+not block the task. Operator-owned MCP entries other than Caracal are never
+removed or rewritten by Manul. OpenCode continues to load the operator's JSON
+and JSONC files itself; Manul preserves `OPENCODE_CONFIG` and all operator
+configuration files and contributes only its temporary
+`OPENCODE_CONFIG_CONTENT` overlay. If Caracal is absent or disabled in the
+operator's effective static configuration, its provider is not loaded or
+required.
 
 ### OpenCode model/provider ownership
 
