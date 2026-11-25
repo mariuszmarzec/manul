@@ -2993,7 +2993,7 @@ verify_existing_task_pr() {
   # branch, or a previously verified PR URL from a completed task on this issue.
   candidates="$(printf '%s' "$pr_json" | jq -c \
     --arg task "$comment_id" \
-    --arg taskToken "$safe_task_token"
+    --arg taskToken "$safe_task_token" \
     --arg expectedTeamBranch "$expected_team_branch" \
     --argjson priorUrls "$prior_urls_json" '
       [
