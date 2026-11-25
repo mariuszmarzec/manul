@@ -72,10 +72,10 @@ manul_env_persist_integration_values() {
   values_file="$(mktemp "$runtime_dir/.env-values.XXXXXX")" || return 1
   for var_name in FITEO_BASE_URL FITEO_MANUL_PAT MANUL_USER_ID FITEO_MANUL_SHARE_USER_ID; do
     case "$var_name" in
-      FITEO_BASE_URL) var_value="${F​​ITEO_BASE_URL:-}" ;;
-      FITEO_MANUL_PAT) var_value="${F​​ITEO_MANUL_PAT:-}" ;;
-      MANUL_USER_ID) var_value="${M​​ANUL_USER_ID:-}" ;;
-      FITEO_MANUL_SHARE_USER_ID) var_value="${F​​ITEO_MANUL_SHARE_USER_ID:-}" ;;
+      FITEO_BASE_URL) var_value="${FITEO_BASE_URL:-}" ;;
+      FITEO_MANUL_PAT) var_value="${FITEO_MANUL_PAT:-}" ;;
+      MANUL_USER_ID) var_value="${MANUL_USER_ID:-}" ;;
+      FITEO_MANUL_SHARE_USER_ID) var_value="${FITEO_MANUL_SHARE_USER_ID:-}" ;;
     esac
     [ -n "$var_value" ] || continue
 
@@ -89,145 +89,7 @@ manul_env_persist_integration_values() {
         [[ "$var_value" =~ ^[1-9][0-9]*$ ]] || continue
         ;;
     esac
-    if [[ "$var_value" == *
-  local runtime_dir="${1:?runtime directory required}"
-  local env_file
-  env_file="$(manul_env_file "$runtime_dir")"
-
-  mkdir -p "$runtime_dir" || return 1
-
-  if [ -e "$env_file" ] && [ ! -f "$env_file" ]; then
-    echo "ERROR: Manul environment path exists but is not a regular file: $env_file" >&2
-    return 1
-  fi
-
-  if [ ! -f "$env_file" ]; then
-    if ! cat > "$env_file" <<'EOF'
-# Manul integration environment.
-#
-# Operator PATH, provider configuration, API keys and tool settings come
-# directly from the operator's ~/.zshrc. This file stores only Manul-owned
-# integration fallbacks such as the dedicated Fiteo URL, PAT and share IDs.
-EOF
-    then
-      return 1
-    fi
-  fi
-
-  # Remove retired operator/local credentials and obsolete host/provider
-  # config/API-key entries. Preserve Manul-specific integration fallbacks.
-  local refreshed_file
-  if grep -qE '^[[:space:]]*(export[[:space:]]+)?(FITEO_PAT|TODO_LOCAL_MCP_TOKEN|CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN|OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_API_KEY|OPENCODE_CONSOLE_TOKEN|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|OPENAI_API_KEY|OPENAI_API_BASE|OPENAI_BASE_URL|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|GOOGLE_API_KEY|MISTRAL_API_KEY|LITELLM_API_KEY|LITELLM_MASTER_KEY|LITELLM_API_BASE|FREELLMAPI_API_KEY|FREELLMAPI_BASE_URL|OLLAMA_API_KEY|OLLAMA_HOST)=' "$env_file"; then
-    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
-    if ! awk '
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?(OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_API_KEY|OPENCODE_CONSOLE_TOKEN|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|OPENAI_API_KEY|OPENAI_API_BASE|OPENAI_BASE_URL|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|GOOGLE_API_KEY|MISTRAL_API_KEY|LITELLM_API_KEY|LITELLM_MASTER_KEY|LITELLM_API_BASE|FREELLMAPI_API_KEY|FREELLMAPI_BASE_URL|OLLAMA_API_KEY|OLLAMA_HOST)=/
-    ' "$env_file" > "$refreshed_file"; then
-      rm -f -- "$refreshed_file"
-      return 1
-    fi
-    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
-    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
-  fi
-
-  # Persist the dedicated remote Fiteo credentials needed by unattended
-  # poller/watchdog tasks. Existing values survive when a field is absent from
-  # this shell (for example, the PAT may already live in the private .env).
-  manul_env_persist_integration_values "$runtime_dir" "$env_file" || {
-    echo "ERROR: could not persist Manul-owned integration values." >&2
-    return 1
-  }
-
-  chmod 600 "$env_file" || return 1
-  if ! bash -n "$env_file" >/dev/null 2>&1; then
-    echo "ERROR: invalid shell syntax in Manul environment file: $env_file" >&2
-    return 1
-  fi
-  printf '%s' "$env_file"
-}
-
-if [ "${1:-}" = "--bootstrap" ]; then
-  [ "${2:-}" != "" ] || {
-    echo "Usage: $0 --bootstrap <runtime-dir>" >&2
-    exit 2
-  }
-  manul_env_bootstrap "$2"
-elif [ "${1:-}" = "--load" ]; then
-  [ "${2:-}" != "" ] || {
-    echo "Usage: $0 --load <runtime-dir>" >&2
-    exit 2
-  }
-  manul_env_load "$2"
-fi
-\n'* || "$var_value" == *
-  local runtime_dir="${1:?runtime directory required}"
-  local env_file
-  env_file="$(manul_env_file "$runtime_dir")"
-
-  mkdir -p "$runtime_dir" || return 1
-
-  if [ -e "$env_file" ] && [ ! -f "$env_file" ]; then
-    echo "ERROR: Manul environment path exists but is not a regular file: $env_file" >&2
-    return 1
-  fi
-
-  if [ ! -f "$env_file" ]; then
-    if ! cat > "$env_file" <<'EOF'
-# Manul integration environment.
-#
-# Operator PATH, provider configuration, API keys and tool settings come
-# directly from the operator's ~/.zshrc. This file is only for Manul-specific
-# values intentionally managed here. Existing entries are preserved.
-EOF
-    then
-      return 1
-    fi
-  fi
-
-  # Remove retired operator/local credentials and obsolete host/provider
-  # config/API-key entries. Preserve Manul-specific integration fallbacks.
-  local refreshed_file
-  if grep -qE '^[[:space:]]*(export[[:space:]]+)?(FITEO_PAT|TODO_LOCAL_MCP_TOKEN|CARACAL_MCP_URL|CARACAL_ACCESS_TOKEN|OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_API_KEY|OPENCODE_CONSOLE_TOKEN|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|OPENAI_API_KEY|OPENAI_API_BASE|OPENAI_BASE_URL|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|GOOGLE_API_KEY|MISTRAL_API_KEY|LITELLM_API_KEY|LITELLM_MASTER_KEY|LITELLM_API_BASE|FREELLMAPI_API_KEY|FREELLMAPI_BASE_URL|OLLAMA_API_KEY|OLLAMA_HOST)=' "$env_file"; then
-    refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || return 1
-    if ! awk '
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?FITEO_PAT=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?TODO_LOCAL_MCP_TOKEN=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_MCP_URL=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?CARACAL_ACCESS_TOKEN=/ &&
-      $0 !~ /^[[:space:]]*(export[[:space:]]+)?(OPENCLAW_STATE_DIR|OPENCLAW_CONFIG_PATH|OPENCLAW_HOME|OPENCLAW_GATEWAY_PORT|OPENCLAW_BIN|OPENCODE_BIN|OPENCODE_API_KEY|OPENCODE_CONSOLE_TOKEN|CODEX_HOME|CODEX_BIN|CODEX_MODEL|CLAUDE_CONFIG_DIR|CLAUDE_BIN|CLAUDE_MODEL|OPENAI_API_KEY|OPENAI_API_BASE|OPENAI_BASE_URL|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|GOOGLE_API_KEY|MISTRAL_API_KEY|LITELLM_API_KEY|LITELLM_MASTER_KEY|LITELLM_API_BASE|FREELLMAPI_API_KEY|FREELLMAPI_BASE_URL|OLLAMA_API_KEY|OLLAMA_HOST)=/
-    ' "$env_file" > "$refreshed_file"; then
-      rm -f -- "$refreshed_file"
-      return 1
-    fi
-    chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
-    mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
-  fi
-
-  chmod 600 "$env_file" || return 1
-  if ! bash -n "$env_file" >/dev/null 2>&1; then
-    echo "ERROR: invalid shell syntax in Manul environment file: $env_file" >&2
-    return 1
-  fi
-  printf '%s' "$env_file"
-}
-
-if [ "${1:-}" = "--bootstrap" ]; then
-  [ "${2:-}" != "" ] || {
-    echo "Usage: $0 --bootstrap <runtime-dir>" >&2
-    exit 2
-  }
-  manul_env_bootstrap "$2"
-elif [ "${1:-}" = "--load" ]; then
-  [ "${2:-}" != "" ] || {
-    echo "Usage: $0 --load <runtime-dir>" >&2
-    exit 2
-  }
-  manul_env_load "$2"
-fi
-\r'* ]]; then
+    if [[ "$var_value" == *$'\n'* || "$var_value" == *$'\r'* ]]; then
       continue
     fi
 
@@ -291,8 +153,8 @@ manul_env_bootstrap() {
 # Manul integration environment.
 #
 # Operator PATH, provider configuration, API keys and tool settings come
-# directly from the operator's ~/.zshrc. This file is only for Manul-specific
-# values intentionally managed here. Existing entries are preserved.
+# directly from the operator's ~/.zshrc. This file stores only Manul-owned
+# integration fallbacks such as the dedicated Fiteo URL, PAT and share IDs.
 EOF
     then
       return 1
@@ -317,6 +179,14 @@ EOF
     chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
     mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
   fi
+
+  # Persist only the allowlisted Manul-owned Fiteo values needed by unattended
+  # poller/watchdog tasks. A pre-existing PAT remains when it is not in this
+  # shell; the operator's FITEO_PAT is removed above and never copied.
+  manul_env_persist_integration_values "$runtime_dir" "$env_file" || {
+    echo "ERROR: could not persist Manul-owned integration values." >&2
+    return 1
+  }
 
   chmod 600 "$env_file" || return 1
   if ! bash -n "$env_file" >/dev/null 2>&1; then
