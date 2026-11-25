@@ -561,6 +561,10 @@ if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false"
   [ "$VERIFIED_EXISTING_PR_BRANCH" = "$TEAM_BRANCH" ]
   [ "$VERIFIED_EXISTING_PR_URL" = "https://github.com/test/repo/pull/82" ]
   echo "PASS: resumes the existing PR by the stable Team conversation branch"
+else
+  echo "FAIL: did not recover the existing PR from its stable Team branch" >&2
+  exit 1
+fi
 
 # A stable Team PR's verified GitHub base is authoritative even when the
 # repository's preferred base changed after that PR was created.
@@ -580,10 +584,7 @@ else
   echo "FAIL: stable Team PR with its previously selected base was not recovered" >&2
   exit 1
 fi
-else
-  echo "FAIL: did not recover the existing PR from its stable Team branch" >&2
-  exit 1
-fi
+
 wrong_team_branch_rc=0
 verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" "feature/team-82-wrongbranch" || wrong_team_branch_rc=$?
 [ "$wrong_team_branch_rc" -eq 1 ] || {
