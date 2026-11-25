@@ -3977,18 +3977,26 @@ else
             fi
           fi
 
-          if [ "$SUCCESS" = "true" ] && [ "$team_branch_has_delta" = "false" ] &&
-             verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$INITIAL_HEAD" "$current_branch"; then
-            already_satisfied="true"
-            COMMENT_ONLY_DELIVERY="true"
-            log "dispatch: Team task $COMMENT_ID accepted as verified no-op on $TEAM_TASK_BRANCH; no empty PR required"
-            lc_log "TEAM_NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO branch=$TEAM_TASK_BRANCH base=$INITIAL_BASE_BRANCH"
-          elif [ "$SUCCESS" = "true" ] && [ "$team_branch_has_delta" = "false" ]; then
-            SUCCESS="false"
-            FAILURE_CODE="VERIFICATION_FAILED"
-            FAIL_REASON="Team no-op did not publish a verifiable non-empty result comment"
-            log "dispatch: Team task $COMMENT_ID no-op result comment was rejected: $FAIL_REASON"
-            lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_noop_result_rejected"
+          if [ "$SUCCESS" = "true" ] && [ "$team_branch_has_delta" = "false" ]; then
+            if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+              # Todo completion is delivered through its task-source status
+              # update, not a GitHub issue comment. The normal provider update
+              # still runs after this verified no-op completion decision.
+              already_satisfied="true"
+              log "dispatch: Team Todo task $COMMENT_ID accepted as no-op on $TEAM_TASK_BRANCH; no empty PR required"
+              lc_log "TEAM_NO_REPO_CHANGE" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE branch=$TEAM_TASK_BRANCH base=$INITIAL_BASE_BRANCH"
+            elif verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$INITIAL_HEAD" "$current_branch"; then
+              already_satisfied="true"
+              COMMENT_ONLY_DELIVERY="true"
+              log "dispatch: Team task $COMMENT_ID accepted as verified no-op on $TEAM_TASK_BRANCH; no empty PR required"
+              lc_log "TEAM_NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO branch=$TEAM_TASK_BRANCH base=$INITIAL_BASE_BRANCH"
+            else
+              SUCCESS="false"
+              FAILURE_CODE="VERIFICATION_FAILED"
+              FAIL_REASON="Team no-op did not publish a verifiable non-empty result comment"
+              log "dispatch: Team task $COMMENT_ID no-op result comment was rejected: $FAIL_REASON"
+              lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_noop_result_rejected"
+            fi
           fi
         fi
       elif [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
