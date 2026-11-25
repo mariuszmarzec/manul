@@ -889,7 +889,7 @@ workspace_team_task_branch_name() {
   [ -n "$conversation_id" ] || return 1
 
   digest="$(printf '%s' "$conversation_id" | git hash-object --stdin 2>/dev/null)" || return 1
-  [[ "$digest" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$digest" =~ ^[0-9a-f]{40,64}$ ]] || return 1
   printf 'feature/team-%s-%s\n' "$issue_number" "\${digest:0:12}"
 }
 
