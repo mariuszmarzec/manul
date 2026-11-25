@@ -46,6 +46,7 @@ git -C "$SEED" add README.md
 git -C "$SEED" commit -qm "main base"
 git -C "$SEED" remote add origin "$REMOTE"
 git -C "$SEED" push -q -u origin main
+git -C "$SEED" push -q origin main:develop
 
 # The primary repository includes a local-only submodule. Every workspace
 # checkout and every branch-specific recovery must initialize its exact
