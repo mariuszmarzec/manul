@@ -71,13 +71,6 @@ manul_env_persist_integration_values() {
 
   values_file="$(mktemp "$runtime_dir/.env-values.XXXXXX")" || return 1
   for var_name in FITEO_BASE_URL FITEO_MANUL_PAT MANUL_USER_ID FITEO_MANUL_SHARE_USER_ID; do
-    # The operator's initialized Zsh is the source of truth for exported
-    # values. Do not copy those values into ~/.manul/.env: keep an existing
-    # Manul-owned fallback intact and let the live shell value take precedence
-    # through manul_env_load. Non-exported Manul values may still be persisted.
-    if declare -xp "$var_name" >/dev/null 2>&1; then
-      continue
-    fi
     case "$var_name" in
       FITEO_BASE_URL) var_value="${FITEO_BASE_URL:-}" ;;
       FITEO_MANUL_PAT) var_value="${FITEO_MANUL_PAT:-}" ;;
