@@ -1156,6 +1156,15 @@ echo "[OK] Team no-op is accepted on its reserved branch with no empty PR"
 
 echo ""
 echo "=== Test TEAM-TODO-NOOP: Todo Team no-op completes without a GitHub issue comment ==="
+# Keep the provider boundary hermetic while asserting the exact completion
+# request made by the production evaluator.
+TODO_COMPLETION_RECEIPT="$TEST_TMPDIR/todo-completion-receipt.txt"
+TASK_SOURCE_ID="116715"
+task_source_complete() {
+  [ "$2" = "todo_remote_mcp" ] && [ "$3" = "$TASK_SOURCE_ID" ] || return 1
+  printf '%s|%s\n' "$2" "$3" >"$TODO_COMPLETION_RECEIPT"
+  return 0
+}
 WORKDIR_TEAM_TODO="$TEST_TMPDIR/workdir-team-todo"
 ORIGIN_TEAM_TODO="$TEST_TMPDIR/origin-team-todo.git"
 mkdir -p "$WORKDIR_TEAM_TODO"
@@ -1188,6 +1197,11 @@ TEAM_PR_COUNT_AFTER="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
 if [ "$COMPLETION_SUCCESS" != "true" ] || [ "$TEAM_PR_COUNT_AFTER" != "$TEAM_PR_COUNT_BEFORE" ]; then
   echo "FAIL: Todo Team no-op should complete without a GitHub comment or empty PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
   tail -n 70 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+if [ "$(cat "$TODO_COMPLETION_RECEIPT" 2>/dev/null || true)" != "todo_remote_mcp|116715" ]; then
+  echo "FAIL: Todo Team no-op did not complete the expected source task" >&2
+  cat "$LOG_FILE" >&2
   exit 1
 fi
 echo "[OK] Todo Team no-op completes through its provider path without an empty PR"
