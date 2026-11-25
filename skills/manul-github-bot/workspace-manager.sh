@@ -884,13 +884,12 @@ workspace_prepare_task_base_branch() {
 # the triggering comment or execution attempt. A /manul team resume therefore
 # recovers the same branch even when it arrives as a new comment.
 workspace_team_task_branch_name() {
-  local issue_number="$1" conversation_id="$2" digest
-  [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || return 1
+  local conversation_id="$1" digest
   [ -n "$conversation_id" ] || return 1
 
   digest="$(printf '%s' "$conversation_id" | git hash-object --stdin 2>/dev/null)" || return 1
   [[ "$digest" =~ ^[0-9a-f]{40,64}$ ]] || return 1
-  printf 'feature/team-%s-%s\n' "$issue_number" "${digest:0:12}"
+  printf 'feature/team-%s\n' "${digest:0:12}"
 }
 
 # Prepare the daemon-owned branch before a Team agent can write anything.
