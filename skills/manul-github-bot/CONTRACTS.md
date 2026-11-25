@@ -286,6 +286,15 @@ Repository-change tasks:
 - after every later push to a branch with a PR, including checkpoints and review/CI fixes, refresh the same PR description from the cumulative diff and current verification results;
 - read back and verify the description and PR identity/head SHA before reporting delivery; stale or unverified description means delivery is incomplete.
 
+### Team parent branch lifecycle
+
+For `/manul team` parents:
+- the daemon derives and prepares one stable task branch from the logical conversation identity before invoking the Orchestrator;
+- child-completion wakeups and explicit parent resumes reuse that same branch, even when the wake comment/task ID differs;
+- the daemon verifies and restores an existing PR for that branch instead of creating a second branch or PR;
+- a verified no-op may finish with a non-empty result comment and no empty PR;
+- repository changes on the Team branch still require the normal clean, pushed, verified PR delivery contract.
+
 ### PR review/conversation tasks
 
 When a task comes from an existing PR review/conversation:
