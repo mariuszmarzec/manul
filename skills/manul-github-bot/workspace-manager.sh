@@ -880,6 +880,165 @@ workspace_prepare_task_base_branch() {
   return 1
 }
 
+# Derive one stable Team branch from the logical GitHub conversation, not from
+# the triggering comment or execution attempt. A /manul team resume therefore
+# recovers the same branch even when it arrives as a new comment.
+workspace_team_task_branch_name() {
+  local issue_number="$1" conversation_id="$2" digest
+  [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || return 1
+  [ -n "$conversation_id" ] || return 1
+
+  digest="$(printf '%s' "$conversation_id" | git hash-object --stdin 2>/dev/null)" || return 1
+  [[ "$digest" =~ ^[0-9a-f]{40}$ ]] || return 1
+  printf 'feature/team-%s-%s\n' "$issue_number" "\${digest:0:12}"
+}
+
+# Prepare the daemon-owned branch before a Team agent can write anything.
+# Unlike base-branch preparation, this function deliberately preserves an
+# already checked-out task branch (including uncommitted task-local progress)
+# across every parent wake/resume. It never resets or cleans a dirty checkout.
+workspace_prepare_team_task_branch() {
+  local workdir="$1" branch="$2" base_branch="$3"
+  local workspace_root="\${4:-}" repository="\${5:-}"
+  [ -n "$workdir" ] && [ -n "$branch" ] && [ -n "$base_branch" ] || return 1
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
+  git check-ref-format --branch "$base_branch" >/dev/null 2>&1 || return 1
+
+  if [ ! -d "$workdir/.git" ] || [ -L "$workdir/.git" ]; then
+    echo "workspace_prepare_team_task_branch: primary checkout Git metadata is invalid" >&2
+    return 1
+  fi
+  if ! git -C "$workdir" fetch origin --quiet; then
+    echo "workspace_prepare_team_task_branch: could not refresh origin before preparing '$branch'; existing checkout was preserved" >&2
+    return 1
+  fi
+
+  local base_ref="refs/remotes/origin/$base_branch"
+  if ! git -C "$workdir" show-ref --verify --quiet "$base_ref"; then
+    echo "workspace_prepare_team_task_branch: remote base '$base_branch' is unavailable" >&2
+    return 1
+  fi
+
+  # Distinguish a genuinely absent remote task branch from a failed remote
+  # query. Do not create a replacement branch when the remote cannot be read.
+  local remote_refs remote_sha remote_ref
+  remote_refs="$(git -C "$workdir" ls-remote --heads origin "$branch" 2>/dev/null)" || {
+    echo "workspace_prepare_team_task_branch: could not verify remote task branch '$branch'" >&2
+    return 1
+  }
+  remote_sha="$(printf '%s\n' "$remote_refs" | awk 'NR == 1 { print $1 }')"
+  remote_ref="refs/remotes/origin/$branch"
+  if [ -n "$remote_sha" ]; then
+    if ! git -C "$workdir" fetch origin "$branch:$remote_ref" --quiet; then
+      echo "workspace_prepare_team_task_branch: could not fetch existing remote task branch '$branch'" >&2
+      return 1
+    fi
+    local fetched_remote_sha
+    fetched_remote_sha="$(git -C "$workdir" rev-parse --verify "$remote_ref^{commit}" 2>/dev/null || true)"
+    if [ -z "$fetched_remote_sha" ] || [ "$fetched_remote_sha" != "$remote_sha" ]; then
+      echo "workspace_prepare_team_task_branch: remote task branch '$branch' changed during preparation; retry required" >&2
+      return 1
+    fi
+  fi
+
+  local current_branch dirty local_sha
+  current_branch="$(git -C "$workdir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  dirty="$(git -C "$workdir" status --porcelain 2>/dev/null || true)"
+
+  if [ "$current_branch" = "$branch" ]; then
+    # This is the normal Team wake/resume path. Preserve the exact checkout and
+    # local edits; only fast-forward when the remote is a strict descendant and
+    # the worktree is clean.
+    local_sha="$(git -C "$workdir" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+    if [ -z "$local_sha" ] || ! git -C "$workdir" merge-base "$base_ref" "$local_sha" >/dev/null 2>&1; then
+      echo "workspace_prepare_team_task_branch: existing task branch '$branch' has no verifiable history from base '$base_branch'" >&2
+      return 1
+    fi
+    if [ -n "$remote_sha" ] && [ "$local_sha" != "$remote_sha" ]; then
+      if git -C "$workdir" merge-base --is-ancestor "$local_sha" "$remote_sha" 2>/dev/null; then
+        if [ -n "$dirty" ]; then
+          echo "workspace_prepare_team_task_branch: remote '$branch' advanced while the local task worktree is dirty; preserving it and refusing an unsafe fast-forward" >&2
+          return 1
+        fi
+        if ! git -C "$workdir" merge --ff-only "$remote_ref" >/dev/null 2>&1; then
+          echo "workspace_prepare_team_task_branch: fast-forward of '$branch' failed" >&2
+          return 1
+        fi
+      elif ! git -C "$workdir" merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+        echo "workspace_prepare_team_task_branch: local and remote task branch '$branch' have diverged; preserving local work" >&2
+        return 1
+      fi
+    fi
+  else
+    # Switching branches is safe only from a clean checkout. In particular, do
+    # not let a Team retry overwrite edits left on main or another task branch.
+    if [ -n "$dirty" ]; then
+      echo "workspace_prepare_team_task_branch: cannot switch from '$current_branch' to '$branch' because the current checkout is dirty; preserving it" >&2
+      return 2
+    fi
+
+    if git -C "$workdir" show-ref --verify --quiet "refs/heads/$branch"; then
+      local_sha="$(git -C "$workdir" rev-parse --verify "refs/heads/$branch^{commit}" 2>/dev/null || true)"
+      if [ -z "$local_sha" ] || ! git -C "$workdir" merge-base "$base_ref" "$local_sha" >/dev/null 2>&1; then
+        echo "workspace_prepare_team_task_branch: existing local branch '$branch' is not verifiably based on '$base_branch'" >&2
+        return 1
+      fi
+      if [ -n "$remote_sha" ] && [ "$local_sha" != "$remote_sha" ] &&
+         ! git -C "$workdir" merge-base --is-ancestor "$local_sha" "$remote_sha" 2>/dev/null &&
+         ! git -C "$workdir" merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+        echo "workspace_prepare_team_task_branch: local and remote task branch '$branch' have diverged; preserving both refs" >&2
+        return 1
+      fi
+      if ! git -C "$workdir" checkout "$branch" >/dev/null 2>&1; then
+        echo "workspace_prepare_team_task_branch: could not check out existing local task branch '$branch'" >&2
+        return 1
+      fi
+      if [ -n "$remote_sha" ] && git -C "$workdir" merge-base --is-ancestor "$local_sha" "$remote_sha" 2>/dev/null; then
+        if ! git -C "$workdir" merge --ff-only "$remote_ref" >/dev/null 2>&1; then
+          echo "workspace_prepare_team_task_branch: could not fast-forward local task branch '$branch'" >&2
+          return 1
+        fi
+      fi
+    elif [ -n "$remote_sha" ]; then
+      if ! git -C "$workdir" merge-base "$base_ref" "$remote_sha" >/dev/null 2>&1; then
+        echo "workspace_prepare_team_task_branch: remote task branch '$branch' is unrelated to base '$base_branch'" >&2
+        return 1
+      fi
+      if ! git -C "$workdir" checkout -b "$branch" "$remote_ref" >/dev/null 2>&1; then
+        echo "workspace_prepare_team_task_branch: could not check out remote task branch '$branch'" >&2
+        return 1
+      fi
+    else
+      # No prior Team branch exists. Restore the selected base only after the
+      # worktree is known clean, then create the stable branch from its remote
+      # tracking ref. The base helper is intentionally not used on a resumed
+      # task branch because it resets that branch to the base.
+      if ! workspace_prepare_task_base_branch "$workdir" "$base_branch" "$workspace_root" "$repository"; then
+        echo "workspace_prepare_team_task_branch: could not prepare clean base '$base_branch'" >&2
+        return 1
+      fi
+      if ! git -C "$workdir" checkout -b "$branch" "$base_ref" >/dev/null 2>&1; then
+        echo "workspace_prepare_team_task_branch: could not create task branch '$branch' from '$base_branch'" >&2
+        return 1
+      fi
+    fi
+  fi
+
+  current_branch="$(git -C "$workdir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  local final_head
+  final_head="$(git -C "$workdir" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+  if [ "$current_branch" != "$branch" ] || [ -z "$final_head" ] ||
+     ! git -C "$workdir" merge-base "$base_ref" "$final_head" >/dev/null 2>&1; then
+    echo "workspace_prepare_team_task_branch: final branch/base verification failed (branch=\${current_branch:-detached}, expected=$branch)" >&2
+    return 1
+  fi
+  if ! workspace_sync_submodules "$workdir"; then
+    echo "workspace_prepare_team_task_branch: submodule initialization failed for '$branch'" >&2
+    return 1
+  fi
+  return 0
+}
+
 # Clone configured related repositories into this task's workspace. The shared
 # cache is a source only. Related repos are read-only by default; dirty/diverged
 # prior checkouts are preserved and reported instead of destructively reset.
@@ -1210,4 +1369,4 @@ workspace_busy_count() {
   sqlite3 "$DB" "SELECT COUNT(*) FROM workspaces WHERE status='BUSY'"
 }
 
-export -f workspace_preserve_recovery_snapshot workspace_restore_recovery_snapshot workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null
+export -f workspace_preserve_recovery_snapshot workspace_restore_recovery_snapshot workspace_init workspace_pool_init workspace_lease workspace_release workspace_reclaim workspace_context_acquire workspace_claim_id workspace_prepare_pr_branch workspace_team_task_branch_name workspace_prepare_team_task_branch workspace_mark_broken workspace_repo_matches workspace_repo_relative_path workspace_primary_repo_path workspace_migrate_legacy_checkout workspace_prepare_primary_checkout workspace_prepare_related_checkouts workspace_get_path workspace_owned_path_matches workspace_cleanup_stale workspace_available_count workspace_busy_count 2>/dev/null
