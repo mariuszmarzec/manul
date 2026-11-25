@@ -1140,7 +1140,7 @@ FAIL_REASON=""
 FAILURE_CODE=""
 TASK_ACTION="TEAM"
 DEFAULT_BRANCH="main"
-evaluate_task_completion "test/repo" "65" "TEAM_NOOP" "TEAM_NOOP" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_NOOP" "" "$INITIAL_HEAD_TEAM_NOOP" "$TEAM_BRANCH_NOOP" "main" "" "" "" "" "implementation" "" "repository" "$TEAM_BRANCH_NOOP"
+evaluate_task_completion "test/repo" "65" "TEAM_NOOP" "TEAM_NOOP" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_NOOP" "" "$INITIAL_HEAD_TEAM_NOOP" "$TEAM_BRANCH_NOOP" "main" "" "" "" "" "implementation" "" "repository" "$TEAM_BRANCH_NOOP" "$TASK_ACTION"
 TEAM_PR_COUNT_AFTER="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
 if [ "$COMPLETION_SUCCESS" != "true" ] || [ "$TEAM_PR_COUNT_AFTER" != "$TEAM_PR_COUNT_BEFORE" ]; then
   echo "FAIL: verified Team no-op should complete without creating an empty PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
@@ -1183,7 +1183,7 @@ FAIL_REASON=""
 FAILURE_CODE=""
 TASK_ACTION="TEAM"
 DEFAULT_BRANCH="main"
-evaluate_task_completion "test/repo" "0" "TEAM_TODO_NOOP" "TEAM_TODO_NOOP" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_TODO" "" "$INITIAL_HEAD_TEAM_TODO" "$TEAM_BRANCH_TODO" "main" "" "" "" "" "implementation" "todo_remote_mcp" "repository" "$TEAM_BRANCH_TODO"
+evaluate_task_completion "test/repo" "0" "TEAM_TODO_NOOP" "TEAM_TODO_NOOP" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_TODO" "" "$INITIAL_HEAD_TEAM_TODO" "$TEAM_BRANCH_TODO" "main" "" "" "" "" "implementation" "todo_remote_mcp" "repository" "$TEAM_BRANCH_TODO" "$TASK_ACTION"
 TEAM_PR_COUNT_AFTER="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
 if [ "$COMPLETION_SUCCESS" != "true" ] || [ "$TEAM_PR_COUNT_AFTER" != "$TEAM_PR_COUNT_BEFORE" ]; then
   echo "FAIL: Todo Team no-op should complete without a GitHub comment or empty PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
@@ -1221,7 +1221,7 @@ FINAL_COMMENT=""
 FAIL_REASON=""
 FAILURE_CODE=""
 TASK_ACTION="TEAM"
-evaluate_task_completion "test/repo" "67" "TEAM_BASE_GUARD" "TEAM_BASE_GUARD" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_BASE" "" "$INITIAL_HEAD_TEAM_BASE" "main" "main" "" "" "" "" "implementation" "" "repository" "feature/team-67-0123456789ab"
+evaluate_task_completion "test/repo" "67" "TEAM_BASE_GUARD" "TEAM_BASE_GUARD" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_BASE" "" "$INITIAL_HEAD_TEAM_BASE" "main" "main" "" "" "" "" "implementation" "" "repository" "feature/team-67-0123456789ab" "$TASK_ACTION"
 if [ "$COMPLETION_SUCCESS" = "true" ] || ! printf '%s' "$FAIL_REASON" | grep -q "base/default branch"; then
   echo "FAIL: Team changed main but was not rejected (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
   tail -n 70 "$LOG_FILE" >&2 || true
@@ -1261,7 +1261,7 @@ FAIL_REASON=""
 FAILURE_CODE=""
 TASK_ACTION="TEAM"
 DEFAULT_BRANCH="main"
-evaluate_task_completion "test/repo" "68" "TEAM_CODE" "TEAM_CODE" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_CODE" "" "$INITIAL_HEAD_TEAM_CODE" "$TEAM_BRANCH_CODE" "main" "" "" "" "" "implementation" "" "repository" "$TEAM_BRANCH_CODE"
+evaluate_task_completion "test/repo" "68" "TEAM_CODE" "TEAM_CODE" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_CODE" "" "$INITIAL_HEAD_TEAM_CODE" "$TEAM_BRANCH_CODE" "main" "" "" "" "" "implementation" "" "repository" "$TEAM_BRANCH_CODE" "$TASK_ACTION"
 if [ "$COMPLETION_SUCCESS" != "true" ] || [ -z "$(sqlite3 "$DB" "SELECT COALESCE(prUrl,'') FROM processed_comments WHERE commentId='TEAM_CODE';" 2>/dev/null)" ]; then
   echo "FAIL: code-changing Team task should be delivered through a verified PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
   tail -n 80 "$LOG_FILE" >&2 || true
