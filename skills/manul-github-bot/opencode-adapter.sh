@@ -432,119 +432,123 @@ fi
 export MANUL_TASK_WORKSPACE_ROOT="$_workspace_real"
 if [ -n "$_workdir_real" ]; then export MANUL_TASK_WORKDIR="$_workdir_real"; fi
 
-# Caracal is configured statically in the operator's OpenCode config. A
-# long-lived Manul daemon does not inherit the environment exported by aicode,
-# so refresh the provider's live URL/token in this task process only. Never
-# copy these credentials into ~/.manul/.env or the task-scoped config overlay.
+# Caracal is operator-owned. Refresh its provider per task, but treat it as an
+# optional capability: provider resolution failures must not stop agent startup.
 CARACAL_CONFIGURED=0
-_mcp_preflight_stage="caracal_mcp_preflight"
+CARACAL_CONFIG_SHAPE="servers"
+CARACAL_PROVIDER_READY=0
 if [ "$_TASK_EXECUTION_KIND_INPUT" != "operator_query" ] && [ "$_TASK_EXECUTION_KIND_INPUT" != "slack_intake" ]; then
     _caracal_config_state="$(python3 - "${_OPENCODE_BASE_CONFIG:-}" "${OPENCODE_CONFIG_CONTENT:-}" <<'PY_CARACAL_CONFIG'
 import json
 import sys
 from pathlib import Path
 
-def strip_jsonc(source: str) -> str:
-    output = []
-    index = 0
-    in_string = False
-    escaped = False
-    while index < len(source):
-        char = source[index]
-        nxt = source[index + 1] if index + 1 < len(source) else ""
+def parse_jsonc(source):
+    output, i, in_string, escaped = [], 0, False, False
+    while i < len(source):
+        char = source[i]
+        nxt = source[i + 1] if i + 1 < len(source) else ""
         if in_string:
             output.append(char)
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            index += 1
+            if escaped: escaped = False
+            elif char == "\\": escaped = True
+            elif char == '"': in_string = False
+            i += 1
             continue
         if char == '"':
             in_string = True
             output.append(char)
-            index += 1
+        elif char == "/" and nxt == "/":
+            while i < len(source) and source[i] != "\n": i += 1
             continue
-        if char == "/" and nxt == "/":
-            while index < len(source) and source[index] != "\n":
-                index += 1
+        elif char == "/" and nxt == "*":
+            i += 2
+            while i + 1 < len(source) and source[i:i+2] != "*/":
+                if source[i] == "\n": output.append("\n")
+                i += 1
+            i += 2
             continue
-        if char == "/" and nxt == "*":
-            index += 2
-            while index + 1 < len(source) and source[index:index + 2] != "*/":
-                if source[index] == "\n":
-                    output.append("\n")
-                index += 1
-            index += 2
-            continue
-        output.append(char)
-        index += 1
-    return "".join(output)
-
-def parse_config(source: str):
-    return json.loads(strip_jsonc(source))
+        else:
+            output.append(char)
+        i += 1
+    source = "".join(output)
+    output, i, in_string, escaped = [], 0, False, False
+    while i < len(source):
+        char = source[i]
+        if in_string:
+            output.append(char)
+            if escaped: escaped = False
+            elif char == "\\": escaped = True
+            elif char == '"': in_string = False
+        elif char == '"':
+            in_string = True
+            output.append(char)
+        elif char == ",":
+            j = i + 1
+            while j < len(source) and source[j].isspace(): j += 1
+            if j >= len(source) or source[j] not in "}]": output.append(char)
+        else:
+            output.append(char)
+        i += 1
+    return json.loads("".join(output))
 
 configs = []
-config_path = sys.argv[1]
-inline = sys.argv[2]
-if config_path:
-    file = Path(config_path)
-    if file.is_file():
-        configs.append(parse_config(file.read_text(encoding="utf-8")))
-if inline:
-    configs.append(parse_config(inline))
-
+if sys.argv[1]:
+    path = Path(sys.argv[1]).expanduser()
+    if path.is_file(): configs.append(parse_jsonc(path.read_text(encoding="utf-8")))
+if sys.argv[2]: configs.append(parse_jsonc(sys.argv[2]))
 for config in configs:
     mcp = config.get("mcp") or {}
-    if not isinstance(mcp, dict):
-        continue
+    if not isinstance(mcp, dict): continue
     servers = mcp.get("servers") or {}
-    if isinstance(servers, dict):
-        server = servers.get("caracal-rag")
-        if isinstance(server, dict) and server.get("disabled") is not True:
-            print("enabled")
-            raise SystemExit(0)
-    server = mcp.get("caracal-rag")
+    server = servers.get("caracal-rag") if isinstance(servers, dict) else None
     if isinstance(server, dict) and server.get("disabled") is not True:
-        print("enabled")
-        raise SystemExit(0)
+        print("enabled:servers"); raise SystemExit(0)
+    server = mcp.get("caracal-rag")
+    if isinstance(server, dict) and server.get("enabled") is not False and server.get("disabled") is not True:
+        print("enabled:legacy"); raise SystemExit(0)
 print("disabled")
 PY_CARACAL_CONFIG
 )" || _caracal_config_state="invalid"
-    if [ "$_caracal_config_state" = "enabled" ]; then
-        CARACAL_CONFIGURED=1
-        CARACAL_HOME="${CARACAL_HOME:-$HOME/.caracal}"
-        CARACAL_ENV_FILE="${CARACAL_ENV_FILE:-$CARACAL_HOME/env.sh}"
-        _caracal_env_diagnostics="$OPENCODE_TASK_CONFIG_DIR/caracal-provider.stderr"
-        if [ ! -r "$CARACAL_ENV_FILE" ]; then
-            jq -cn --arg task_id "$OPT_TASK_ID" --arg path "$CARACAL_ENV_FILE" \
-                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:("Caracal MCP is configured in OpenCode, but its provider environment is unavailable: " + $path),failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
-            exit 78
-        fi
-        export CARACAL_HOME CARACAL_RESOLVE_LIVE=1
-        if ! . "$CARACAL_ENV_FILE" >/dev/null 2>"$_caracal_env_diagnostics"; then
-            unset CARACAL_RESOLVE_LIVE
-            append_redacted_stderr "$_caracal_env_diagnostics"
-            jq -cn --arg task_id "$OPT_TASK_ID" \
-                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"Caracal provider environment could not be loaded or its live endpoint check failed.",failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
-            exit 78
-        fi
-        unset CARACAL_RESOLVE_LIVE
-        if [ -z "${CARACAL_MCP_URL:-}" ] || [ -z "${CARACAL_ACCESS_TOKEN:-}" ] ||
-           ! [[ "$CARACAL_MCP_URL" =~ ^https?://[^[:space:][:cntrl:]]+$ ]] ||
-           [[ "$CARACAL_MCP_URL" == *"{env:"* || "$CARACAL_MCP_URL" == *"127.0.0.1:0"* ]]; then
-            append_redacted_stderr "$_caracal_env_diagnostics"
-            jq -cn --arg task_id "$OPT_TASK_ID" \
-                '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"Caracal provider did not supply a valid live HTTP(S) MCP URL and access token.",failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
-            exit 78
-        fi
-        export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
-        log "Caracal provider environment refreshed for this OpenCode task; credentials remain process-scoped"
-    elif [ "$_caracal_config_state" = "invalid" ]; then
-        log "unable to inspect operator OpenCode config for Caracal; normal OpenCode config validation remains authoritative"
-    fi
+    case "$_caracal_config_state" in
+        enabled:servers|enabled:legacy)
+            CARACAL_CONFIGURED=1
+            CARACAL_CONFIG_SHAPE="${_caracal_config_state#enabled:}"
+            CARACAL_HOME="${CARACAL_HOME:-$HOME/.caracal}"
+            CARACAL_ENV_FILE="${CARACAL_ENV_FILE:-$CARACAL_HOME/env.sh}"
+            _caracal_env_diagnostics="$OPENCODE_TASK_CONFIG_DIR/caracal-provider.stderr"
+            if [ -r "$CARACAL_ENV_FILE" ]; then
+                unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+                export CARACAL_HOME CARACAL_RESOLVE_LIVE=1
+                if . "$CARACAL_ENV_FILE" >/dev/null 2>"$_caracal_env_diagnostics"; then
+                    unset CARACAL_RESOLVE_LIVE
+                    if [ -n "${CARACAL_MCP_URL:-}" ] &&
+                       [ -n "${CARACAL_ACCESS_TOKEN:-}" ] &&
+                       [[ "$CARACAL_MCP_URL" =~ ^https?://[^[:space:][:cntrl:]]+$ ]] &&
+                       [[ "$CARACAL_MCP_URL" != *"{env:"* ]] &&
+                       [[ "$CARACAL_MCP_URL" != *"127.0.0.1:0"* ]]; then
+                        export CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+                        CARACAL_PROVIDER_READY=1
+                        log "Caracal provider values refreshed for this task; credentials remain process-scoped"
+                    else
+                        append_redacted_stderr "$_caracal_env_diagnostics"
+                        unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+                        log "Caracal provider returned an invalid URL/token; disabling Caracal for this task"
+                    fi
+                else
+                    unset CARACAL_RESOLVE_LIVE
+                    append_redacted_stderr "$_caracal_env_diagnostics"
+                    unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+                    log "Caracal provider check failed; continuing without Caracal for this task"
+                fi
+            else
+                log "Caracal provider environment is missing; continuing without Caracal for this task"
+            fi
+            ;;
+        invalid)
+            log "could not inspect operator OpenCode config for Caracal; normal OpenCode config validation remains authoritative"
+            ;;
+    esac
 fi
 
 # A daemon can outlive the aicode launcher. Refresh Manul's dedicated Fiteo
@@ -1104,32 +1108,127 @@ if [ "$TODO_LOCAL_MCP_AVAILABLE" = "1" ]; then
     log "optional Manul local Todo MCP is configured when its reserved server name is free"
 fi
 
-# Validate Caracal through the same OpenCode binary, global static config,
-# task-scoped overlay and process environment that will execute the agent.
-# Ignore mcp-list's aggregate exit code when Caracal itself is connected, since
-# an unrelated optional MCP (for example Fiteo) may be offline.
-if [ "$CARACAL_CONFIGURED" = "1" ]; then
-    _caracal_probe_timeout="${MANUL_CARACAL_MCP_PROBE_TIMEOUT_SECONDS:-45}"
-    if ! [[ "$_caracal_probe_timeout" =~ ^[0-9]+$ ]] || [ "$_caracal_probe_timeout" -lt 1 ] || [ "$_caracal_probe_timeout" -gt 180 ]; then
-        _caracal_probe_timeout=45
+# Probe MCP reachability using the exact OpenCode binary/config/environment
+# that will execute the agent. Aggregate mcp-list exit status is not a gate:
+# an unrelated operator-owned MCP outage must never block Manul.
+_opencode_refresh_task_overlay() {
+    OPENCODE_CONFIG_CONTENT="$(cat "$_OVERLAY_JSON_FILE")"
+    export OPENCODE_CONFIG_CONTENT
+}
+
+_opencode_disable_caracal_for_task() {
+    python3 - "$_OVERLAY_JSON_FILE" "$CARACAL_CONFIG_SHAPE" <<'PY_DISABLE_CARACAL'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+shape = sys.argv[2]
+config = json.loads(path.read_text(encoding="utf-8"))
+mcp = config.setdefault("mcp", {})
+if shape == "legacy":
+    server = mcp.setdefault("caracal-rag", {})
+    if isinstance(server, dict):
+        server["enabled"] = False
+        server["disabled"] = True
+else:
+    server = mcp.setdefault("servers", {}).setdefault("caracal-rag", {})
+    if isinstance(server, dict): server["disabled"] = True
+path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8")
+PY_DISABLE_CARACAL
+}
+
+_opencode_remove_manul_mcp_from_task() {
+    python3 - "$_OVERLAY_JSON_FILE" "$1" <<'PY_REMOVE_MANUL_MCP'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+name = sys.argv[2]
+config = json.loads(path.read_text(encoding="utf-8"))
+mcp = config.get("mcp")
+if isinstance(mcp, dict):
+    servers = mcp.get("servers")
+    if isinstance(servers, dict):
+        servers.pop(name, None)
+        if not servers: mcp.pop("servers", None)
+    if not mcp: config.pop("mcp", None)
+path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8")
+PY_REMOVE_MANUL_MCP
+}
+
+_opencode_mcp_is_connected() {
+    python3 - "$1" "$2" <<'PY_MCP_STATUS'
+import re, sys
+from pathlib import Path
+try:
+    output = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+except OSError:
+    raise SystemExit(1)
+name = sys.argv[2]
+output = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", output)
+name_re = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"(?![A-Za-z0-9_.-])", re.I)
+connected_re = re.compile(r"\bconnected\b", re.I)
+bad_re = re.compile(r"\b(disconnected|failed|disabled|error|connecting|pending|needs authentication)\b", re.I)
+for line in output.splitlines():
+    if name_re.search(line) and connected_re.search(line) and not bad_re.search(line):
+        raise SystemExit(0)
+raise SystemExit(1)
+PY_MCP_STATUS
+}
+
+# These are the MCP entries Manul actually generated in the temporary overlay.
+mapfile -t _manul_mcp_server_names < <(jq -r '.mcp.servers // {} | keys[]?' <<<"$OPENCODE_CONFIG_CONTENT")
+if [ "$CARACAL_CONFIGURED" = "1" ] && [ "$CARACAL_PROVIDER_READY" != "1" ]; then
+    if ! _opencode_disable_caracal_for_task; then
+        jq -cn --arg task_id "$OPT_TASK_ID" '{status:"FAILED",task_id:$task_id,exit_code:65,summary:"Unable to disable unavailable Caracal in task overlay.",failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
+        exit 65
     fi
-    _caracal_probe_stdout="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stdout"
-    _caracal_probe_stderr="$OPENCODE_TASK_CONFIG_DIR/caracal-mcp-list.stderr"
-    ProcessRunner_TmpStdout="$_caracal_probe_stdout"
-    ProcessRunner_TmpStderr="$_caracal_probe_stderr"
-    _caracal_probe_result="$(ProcessRunner.run --timeout "$_caracal_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" mcp list)"
-    _caracal_probe_header="$(printf '%s\n' "$_caracal_probe_result" | head -n 1)"
-    _caracal_probe_rc="${_caracal_probe_header%%|*}"
+    _opencode_refresh_task_overlay
+    log "Caracal disabled in task overlay because provider preparation failed"
+fi
+
+_mcp_probe_required=0
+if [ "${#_manul_mcp_server_names[@]}" -gt 0 ] || { [ "$CARACAL_CONFIGURED" = "1" ] && [ "$CARACAL_PROVIDER_READY" = "1" ]; }; then
+    _mcp_probe_required=1
+fi
+if [ "$_mcp_probe_required" = "1" ]; then
+    _mcp_probe_timeout="${MANUL_OPENCODE_MCP_PROBE_TIMEOUT_SECONDS:-${MANUL_CARACAL_MCP_PROBE_TIMEOUT_SECONDS:-20}}"
+    if ! [[ "$_mcp_probe_timeout" =~ ^[0-9]+$ ]] || [ "$_mcp_probe_timeout" -lt 1 ] || [ "$_mcp_probe_timeout" -gt 180 ]; then _mcp_probe_timeout=20; fi
+    _mcp_probe_stdout="$OPENCODE_TASK_CONFIG_DIR/opencode-mcp-list.stdout"
+    _mcp_probe_stderr="$OPENCODE_TASK_CONFIG_DIR/opencode-mcp-list.stderr"
+    ProcessRunner_TmpStdout="$_mcp_probe_stdout"
+    ProcessRunner_TmpStderr="$_mcp_probe_stderr"
+    _mcp_probe_result="$(ProcessRunner.run --timeout "$_mcp_probe_timeout" --cwd "$_workspace_real" -- "$OPENCODE_BIN" mcp list)"
+    _mcp_probe_header="$(printf '%s\n' "$_mcp_probe_result" | head -n 1)"
+    _mcp_probe_rc="${_mcp_probe_header%%|*}"
     ProcessRunner_TmpStdout=""
     ProcessRunner_TmpStderr=""
-    if ! grep -Eiq '(^|[[:space:]])caracal-rag[[:space:]]+connected([[:space:]]|$)|(^|[[:space:]])connected[[:space:]]+caracal-rag([[:space:]]|$)' "$_caracal_probe_stdout"; then
-        append_redacted_stderr "$_caracal_probe_stderr"
-        log "OpenCode Caracal MCP preflight failed (mcp list exit ${_caracal_probe_rc:-unknown}); agent was not started"
-        jq -cn --arg task_id "$OPT_TASK_ID" \
-            '{status:"FAILED",task_id:$task_id,exit_code:78,summary:"OpenCode did not report caracal-rag as connected. Check the static OpenCode MCP entry and the Caracal provider endpoint/authentication.",failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
-        exit 78
+
+    if [ "$CARACAL_CONFIGURED" = "1" ] && [ "$CARACAL_PROVIDER_READY" = "1" ]; then
+        if _opencode_mcp_is_connected "$_mcp_probe_stdout" "caracal-rag"; then
+            log "OpenCode reports caracal-rag connected"
+        else
+            append_redacted_stderr "$_mcp_probe_stderr"
+            if ! _opencode_disable_caracal_for_task; then
+                jq -cn --arg task_id "$OPT_TASK_ID" '{status:"FAILED",task_id:$task_id,exit_code:65,summary:"Unable to disable unreachable Caracal in task overlay.",failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}}'
+                exit 65
+            fi
+            unset CARACAL_MCP_URL CARACAL_ACCESS_TOKEN
+            _opencode_refresh_task_overlay
+            log "Caracal not connected (mcp list exit ${_mcp_probe_rc:-unknown}); disabled it only for this task and continuing"
+        fi
     fi
-    log "OpenCode reports caracal-rag connected using the task's effective configuration"
+
+    for _manul_mcp_name in "${_manul_mcp_server_names[@]}"; do
+        if _opencode_mcp_is_connected "$_mcp_probe_stdout" "$_manul_mcp_name"; then
+            log "Manul-managed MCP '$_manul_mcp_name' passed connectivity check"
+        else
+            if _opencode_remove_manul_mcp_from_task "$_manul_mcp_name"; then
+                _opencode_refresh_task_overlay
+                log "Removed unreachable Manul-managed MCP '$_manul_mcp_name' from task overlay"
+            else
+                log "WARN: could not remove unreachable Manul-managed MCP '$_manul_mcp_name'; continuing without failing task"
+            fi
+        fi
+    done
 fi
 
 # The preflight contract checks that the selected OpenCode binary and the
