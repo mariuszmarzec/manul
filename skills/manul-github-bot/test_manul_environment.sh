@@ -40,7 +40,7 @@ grep -q 'MANUL_ZSH_ENV_READY=1' "$SCRIPT_DIR/manul-shell.zsh" && ok "Interactive
 grep -q 'manul-zsh-bootstrap.sh' "$SCRIPT_DIR/watchdog.sh" && ok "Watchdog bootstraps ~/.zshrc from cron" || fail "Watchdog bypasses Zsh bootstrap"
 grep -Fq '"$OPENCODE_BIN" mcp list)' "$SCRIPT_DIR/opencode-adapter.sh" && ok "Caracal MCP preflight uses the shared OpenCode server" || fail "Caracal MCP preflight does not use the shared OpenCode server"
 grep -Fq '"$OPENCODE_BIN" debug agents)' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode agent discovery uses the shared server" || fail "OpenCode agent discovery does not use the shared server"
-grep -Fq '"$OPENCODE_BIN" run \\' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode task runs use the shared server" || fail "OpenCode task run does not use the shared server"
+grep -Fq '"$OPENCODE_BIN" run' "$SCRIPT_DIR/opencode-adapter.sh" && ok "OpenCode task runs use the shared server" || fail "OpenCode task run does not use the shared server"
 grep -q '"manul-failure-utils.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys failure sanitization helper" || fail "Symlink installer does not deploy failure sanitization helper"
 
 grep -q 'manul-env.sh" --bootstrap' "$SCRIPT_DIR/install-manul.sh"   && ok "Installer bootstraps the operator environment"   || fail "Installer does not bootstrap the operator environment"
