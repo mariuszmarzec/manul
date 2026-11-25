@@ -5149,7 +5149,7 @@ REPORT_ONLY_PROMPT
        base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
 
        if [ "$TASK_ACTION" = "TEAM" ]; then
-         TEAM_TASK_BRANCH="$(workspace_team_task_branch_name "$ISSUE_NUM" "$CONVERSATION_ID" 2>/dev/null || true)"
+         TEAM_TASK_BRANCH="$(workspace_team_task_branch_name "$CONVERSATION_ID" 2>/dev/null || true)"
          if [ -z "$TEAM_TASK_BRANCH" ]; then
            handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not derive a stable Team task branch because the logical conversation identity is missing or invalid." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_branch_identity"
            return 0
