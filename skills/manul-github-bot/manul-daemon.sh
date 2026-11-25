@@ -5244,6 +5244,7 @@ REPORT_ONLY_PROMPT
            fi
          fi
        fi
+     fi
      # Pin proactive PR work only after the source branch has been fetched.
      # A race during checkout becomes a cooldown retry, never an implicit rebase.
      if [ -n "$PROACTIVE_PR_POLICY" ]; then
