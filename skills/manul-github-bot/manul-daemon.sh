@@ -3159,11 +3159,11 @@ verify_required_pr() {
   local action
   action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   # Legacy tasks may have a NULL/empty action because the action column was
-  # introduced after the task was queued. Standalone issue/comment tasks are
-  # implementation tasks by default; only an explicit non-IMPLEMENT action
-  # (e.g. REVIEW_FIX) opts out of standalone PR verification.
+  # introduced after the task was queued. Standalone IMPLEMENT tasks and
+  # code-changing TEAM parents both require a verified PR. Explicit actions
+  # such as REVIEW_FIX retain their separate delivery contract.
   action="${action:-IMPLEMENT}"
-  [ "$action" = "IMPLEMENT" ] || return 0
+  [ "$action" = "IMPLEMENT" ] || [ "$action" = "TEAM" ] || return 0
   local comment_url
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   [[ "$comment_url" == *"/pull/"* ]] && return 0
