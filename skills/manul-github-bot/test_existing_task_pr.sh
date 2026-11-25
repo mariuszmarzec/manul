@@ -369,7 +369,7 @@ fi
 # Assert that the real IMPLEMENT evaluator preserves strict PR validation,
 # while routing only the verified comment-only exception through its dedicated
 # finalization gate.
-evaluator_block="$(grep -F -A 95 'elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]' "$SCRIPT_DIR/manul-daemon.sh")"
+evaluator_block="$(grep -F -A 220 'if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]' "$SCRIPT_DIR/manul-daemon.sh")"
 grep -q 'verify_existing_task_pr' <<<"$evaluator_block"
 grep -Fq '[[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]' <<<"$evaluator_block"
 grep -q 'verify_merged_result_pr' <<<"$evaluator_block"
