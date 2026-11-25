@@ -894,7 +894,8 @@ files.
 
 Before agent startup, Manul also checks every MCP entry it creates in the task
 overlay. A Manul-created MCP that is not reported as connected is removed from
-that task's overlay. The aggregate `opencode mcp list` exit code does not
+that task's overlay, and its corresponding URL/token variables are cleared
+from the agent process environment. The aggregate `opencode mcp list` exit code does not
 block startup when an unrelated optional or operator-owned server is offline.
 Manul never removes or rewrites other operator-owned MCP entries. The static
 OpenCode configuration is loaded by OpenCode itself and remains untouched.
