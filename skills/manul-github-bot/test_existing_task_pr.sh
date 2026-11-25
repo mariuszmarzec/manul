@@ -574,7 +574,7 @@ fi
 
 # A stable Team PR's verified GitHub base is authoritative even when the
 # repository's preferred base changed after that PR was created.
-git -C "$WORKDIR" push -q origin "$INITIAL_BASE_SHA:refs/heads/develop"
+"$REAL_GIT" -C "$WORKDIR" push -q origin "$INITIAL_BASE_SHA:refs/heads/develop"
 jq -cn --arg url "https://github.com/test/repo/pull/83" \
   --arg branch "$TEAM_BRANCH" --arg sha "$PR_HEAD_SHA" \
   '[{number:83,url:$url,state:"OPEN",baseRefName:"develop",headRefName:$branch,body:"Team workflow checkpoint",headRefOid:$sha}]' \
