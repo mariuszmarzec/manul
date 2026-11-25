@@ -3842,17 +3842,16 @@ evaluate_task_completion() {
     fi
   fi
   
-  # 7.6 Determine whether the agent actually changed repository state.
-  # Informational tasks may legitimately finish without a branch or PR.
-  # Every repository change must be verified through the full PR/result pipeline,
-  # including issue-body tasks (issuebody:*). The task identifier format must
-  # never weaken the implementation PR requirement.
+  # 7.6 Verify repository changes and no-op deliveries from one explicit
+  # decision tree. The no-diff branch must be the sibling of the changed-repo
+  # branch; do not attach it to the later push-verification conditional.
   if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
     repo_changed="false"
     if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
-    log "dispatch: completion preflight task=$COMMENT_ID action=$TASK_ACTION source=$TASK_SOURCE_TYPE branch=$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo detached) reservedTeamBranch=$TEAM_TASK_BRANCH repoChanged=$repo_changed base=$INITIAL_BASE_BRANCH"
+    current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+    log "dispatch: completion preflight task=$COMMENT_ID action=$TASK_ACTION source=$TASK_SOURCE_TYPE branch=${current_branch:-detached} reservedTeamBranch=$TEAM_TASK_BRANCH repoChanged=$repo_changed base=$INITIAL_BASE_BRANCH"
+
     if [ "$repo_changed" = "true" ]; then
-      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ]; then
         SUCCESS="false"
         FAILURE_CODE="VERIFICATION_FAILED"
@@ -3860,7 +3859,6 @@ evaluate_task_completion() {
         log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
       elif [ -n "$PR_HEAD_BRANCH" ]; then
         # PR-tied tasks are intentionally executed on the existing PR head branch.
-        # That branch equals the prepared INITIAL_BRANCH, so it is valid by design.
         if [ "$current_branch" != "$PR_HEAD_BRANCH" ]; then
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
@@ -3871,7 +3869,7 @@ evaluate_task_completion() {
           SUCCESS="false"
           FAILURE_CODE="DELIVERY_NOT_COMMITTED"
           FAIL_REASON="Delivery rejected: TASK_DONE left uncommitted repository changes on PR head branch $current_branch (${repo_state_issues% })"
-          log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on PR head branch $current_branch (${repo_state_issues% })"
+          log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted repository changes on PR head branch $current_branch (${repo_state_issues% })"
           lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
         else
           log "dispatch: task $COMMENT_ID changed repository on expected PR head branch $current_branch"
@@ -3886,60 +3884,55 @@ evaluate_task_completion() {
         SUCCESS="false"
         FAILURE_CODE="DELIVERY_NOT_COMMITTED"
         FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but the repository has uncommitted changes on branch $current_branch (${repo_state_issues% })"
-        log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on branch $current_branch (${repo_state_issues% })"
+        log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted repository changes on branch $current_branch (${repo_state_issues% })"
         lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
       elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
         SUCCESS="false"
         FAILURE_CODE="VERIFICATION_FAILED"
         FAIL_REASON="Implementation task did not produce a real PR against its branch base"
         log "dispatch: task $COMMENT_ID PR verification failed"
-else
-         local verified_base
-         verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
-         if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" && ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
-           SUCCESS="false"
-           FAILURE_CODE="VERIFICATION_FAILED"
-           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
-           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
-         else
-           log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
-         fi
-       fi
-       fi
+      else
+        local verified_base
+        verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+        if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" &&
+           ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
+          log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
+        else
+          log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
+        fi
+      fi
 
-       # 7.7. Delivery push verification. A task that reports TASK_DONE with a real
-       # repository change must have committed AND pushed its work. Distinguish the
-       # concrete delivery states so retry/failure comments explain exactly what is
-       # missing instead of collapsing everything to a generic verification failure.
-       # Only runs when the repository actually changed; informational tasks with no
-       # diff have nothing to deliver and must not be rejected here.
-       if [ "$SUCCESS" = "true" ] && [ "$repo_changed" = "true" ]; then
-         local has_origin_remote="false"
-         local remote_branch_sha=""
-         if git -C "$WORKDIR" remote get-url origin >/dev/null 2>&1; then
-           has_origin_remote="true"
-           remote_branch_sha="$(git -C "$WORKDIR" ls-remote --heads origin "$current_branch" 2>/dev/null | awk '{print $1}')"
-         fi
+      # Delivery push verification is part of the changed-repository branch,
+      # never a sibling of its no-diff alternative.
+      if [ "$SUCCESS" = "true" ]; then
+        local has_origin_remote="false"
+        local remote_branch_sha=""
+        if git -C "$WORKDIR" remote get-url origin >/dev/null 2>&1; then
+          has_origin_remote="true"
+          remote_branch_sha="$(git -C "$WORKDIR" ls-remote --heads origin "$current_branch" 2>/dev/null | awk '{print $1}')"
+        fi
 
-         if [ "$has_origin_remote" = "true" ] && [ -z "$remote_branch_sha" ]; then
-           SUCCESS="false"
-           FAILURE_CODE="DELIVERY_NOT_PUSHED"
-           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch was never pushed to the origin remote"
-           log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch not pushed to origin"
-         elif [ "$has_origin_remote" = "true" ] && [ -n "$remote_branch_sha" ] \
-           && [ "$remote_branch_sha" != "$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null)" ]; then
-           SUCCESS="false"
-           FAILURE_CODE="DELIVERY_NOT_PUSHED"
-           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch diverged from the pushed origin/$current_branch"
-           log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch diverges from origin"
-         else
-           log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
-         fi
-       fi
-     elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]; then
+        if [ "$has_origin_remote" = "true" ] && [ -z "$remote_branch_sha" ]; then
+          SUCCESS="false"
+          FAILURE_CODE="DELIVERY_NOT_PUSHED"
+          FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch was never pushed to the origin remote"
+          log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch not pushed to origin"
+        elif [ "$has_origin_remote" = "true" ] && [ "$remote_branch_sha" != "$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null)" ]; then
+          SUCCESS="false"
+          FAILURE_CODE="DELIVERY_NOT_PUSHED"
+          FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch diverged from the pushed origin/$current_branch"
+          log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch diverges from origin"
+        else
+          log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
+        fi
+      fi
+
+    elif [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]; then
       log "dispatch: completion no-diff path task=$COMMENT_ID action=$TASK_ACTION"
       local already_satisfied="false"
-      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
 
       if [ "$TASK_ACTION" = "TEAM" ]; then
         if [ -n "$PR_HEAD_BRANCH" ]; then
@@ -3950,16 +3943,16 @@ else
           else
             SUCCESS="false"
             FAILURE_CODE="VERIFICATION_FAILED"
-            FAIL_REASON="Team task left its verified PR branch (expected $PR_HEAD_BRANCH, got $current_branch)"
+            FAIL_REASON="Team task left its verified PR branch (expected $PR_HEAD_BRANCH, got ${current_branch:-detached})"
             log "dispatch: Team task $COMMENT_ID no-op branch mismatch: $FAIL_REASON"
-            lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_pr_branch_mismatch expected=$PR_HEAD_BRANCH actual=$current_branch"
+            lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_pr_branch_mismatch expected=$PR_HEAD_BRANCH actual=${current_branch:-detached}"
           fi
         elif [ -z "$TEAM_TASK_BRANCH" ] || [ "$current_branch" != "$TEAM_TASK_BRANCH" ]; then
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
-          FAIL_REASON="Team task did not remain on its daemon-prepared branch (expected $TEAM_TASK_BRANCH, got $current_branch)"
+          FAIL_REASON="Team task did not remain on its daemon-prepared branch (expected $TEAM_TASK_BRANCH, got ${current_branch:-detached})"
           log "dispatch: Team task $COMMENT_ID no-op branch mismatch: $FAIL_REASON"
-          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_task_branch_mismatch expected=$TEAM_TASK_BRANCH actual=$current_branch"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_task_branch_mismatch expected=$TEAM_TASK_BRANCH actual=${current_branch:-detached}"
         else
           local team_base_ref team_merge_base team_ahead_commits team_branch_has_delta
           team_base_ref="refs/remotes/origin/$INITIAL_BASE_BRANCH"
@@ -3982,9 +3975,6 @@ else
 
           if [ "$SUCCESS" = "true" ] && [ "$team_branch_has_delta" = "false" ]; then
             if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
-              # Todo completion is delivered through its task-source status
-              # update, not a GitHub issue comment. The normal provider update
-              # still runs after this verified no-op completion decision.
               already_satisfied="true"
               log "dispatch: Team Todo task $COMMENT_ID accepted as no-op on $TEAM_TASK_BRANCH; no empty PR required"
               lc_log "TEAM_NO_REPO_CHANGE" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE branch=$TEAM_TASK_BRANCH base=$INITIAL_BASE_BRANCH"
@@ -4055,10 +4045,8 @@ else
           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
         fi
       fi
-    elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
-      # A TASK_DONE from an IMPLEMENT task is only informational when the agent
-      # genuinely made no repository changes. Keep this explicit so issuebody:*
-      # tasks cannot accidentally bypass the repository/PR verification above.
+
+    else
       log "dispatch: task $COMMENT_ID made no repository changes; PR/branch not required"
       lc_log "NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
     fi
