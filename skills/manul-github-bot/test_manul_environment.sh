@@ -94,10 +94,14 @@ else
   ok "Bootstrap leaves provider binaries/configuration and source paths to ~/.zshrc"
 fi
 
-if grep -qE '^(FITEO_BASE_URL|FITEO_MANUL_PAT|FITEO_MANUL_SHARE_USER_ID|CUSTOM_JIRA_USER|CUSTOM_JIRA_PASSWORD)=' "$ENV_FILE"; then
-  fail "Bootstrap duplicated environment variables already supplied by the operator's Zsh"
+if grep -qE '^(CUSTOM_JIRA_USER|CUSTOM_JIRA_PASSWORD)=' "$ENV_FILE"; then
+  fail "Bootstrap persisted arbitrary operator integration credentials"
+elif ! grep -qx 'FITEO_BASE_URL=https://fiteo-test.example' "$ENV_FILE" ||
+     ! grep -qx 'FITEO_MANUL_PAT=fiteo-test-pat' "$ENV_FILE" ||
+     ! grep -qx 'FITEO_MANUL_SHARE_USER_ID=1' "$ENV_FILE"; then
+  fail "Bootstrap did not persist the allowlisted Manul Fiteo integration values"
 else
-  ok "Bootstrap does not duplicate Zsh-owned integration credentials"
+  ok "Bootstrap persists allowlisted Manul Fiteo values but not arbitrary operator credentials"
 fi
 
 if grep -q 'UNSAFE_SECRET' "$ENV_FILE"; then
@@ -182,13 +186,14 @@ FITEO_PAT=old-operator-pat
 FITEO_MANUL_SHARE_USER_ID=99
 MANUL_SHARE_ENV
 chmod 600 "$SHARE_ONLY/.env"
-SHARE_ONLY_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
-if grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
+SHARE_ONLY_ENV_FILE="$(FITEO_MANUL_SHARE_USER_ID=1 env -u FITEO_BASE_URL -u FITEO_MANUL_PAT -u FITEO_PAT bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$SHARE_ONLY")"
+if grep -qx 'FITEO_MANUL_SHARE_USER_ID=1' "$SHARE_ONLY_ENV_FILE" &&
+   ! grep -qx 'FITEO_MANUL_SHARE_USER_ID=99' "$SHARE_ONLY_ENV_FILE" &&
    grep -qx 'EXISTING_OPERATOR_SETTING=preserve-me' "$SHARE_ONLY_ENV_FILE" &&
    ! grep -q '^FITEO_PAT=' "$SHARE_ONLY_ENV_FILE"; then
-  ok "Bootstrap preserves Manul-owned fallbacks and removes retired operator credentials"
+  ok "Bootstrap refreshes the share recipient independently and removes retired operator credentials"
 else
-  fail "Bootstrap changed existing Manul fallbacks unexpectedly"
+  fail "Bootstrap did not safely refresh the Manul share recipient"
 fi
 if (
   export FITEO_MANUL_SHARE_USER_ID=1
@@ -217,7 +222,7 @@ OPENCLAW_STATE_DIR="/installer/current/state"
 OPENCLAW_CONFIG_PATH="/installer/current/config.json"
 OPENCODE_CONFIG="/installer/current/opencode.json"
 export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
-ENV_FILE2="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE")"
+ENV_FILE2="$(env -u FITEO_BASE_URL -u FITEO_MANUL_PAT -u FITEO_MANUL_SHARE_USER_ID bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE")"
 
 if (
   ! grep -qE '^(OPENCLAW_STATE_DIR|OPENCODE_API_KEY|LITELLM_MASTER_KEY)=' "$ENV_FILE2" &&
@@ -285,8 +290,8 @@ else
 fi
 
 
-# Existing Manul Fiteo fallback credentials are preserved; the live Zsh
-# environment supersedes them for this invocation without writing duplicates.
+# Current Manul Fiteo integration values refresh the unattended fallback;
+# the operator's unrelated FITEO_PAT is never persisted.
 PRESERVE_FITEO="$TMP/preserve-fiteo"
 mkdir -p "$PRESERVE_FITEO"
 cat > "$PRESERVE_FITEO/.env" <<'EOF'
@@ -301,14 +306,14 @@ FITEO_MANUL_SHARE_USER_ID="1"
 export FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID
 FITEO_ENV_FILE="$(bash -c 'source "$1/manul-env.sh"; manul_env_bootstrap "$2"' _ "$SCRIPT_DIR" "$PRESERVE_FITEO")"
 if (
-  grep -qx 'FITEO_BASE_URL=https://old-fiteo.example' "$FITEO_ENV_FILE" &&
-  grep -qx 'FITEO_MANUL_PAT=old-manul-pat' "$FITEO_ENV_FILE" &&
-  ! grep -q '^FITEO_PAT=' "$FITEO_ENV_FILE" &&
-  ! grep -q 'new-fiteo.example' "$FITEO_ENV_FILE"
+  grep -qx 'FITEO_BASE_URL=https://new-fiteo.example' "$FITEO_ENV_FILE" &&
+  grep -qx 'FITEO_MANUL_PAT=new-manul-fiteo-pat' "$FITEO_ENV_FILE" &&
+  grep -qx 'FITEO_MANUL_SHARE_USER_ID=1' "$FITEO_ENV_FILE" &&
+  ! grep -q '^FITEO_PAT=' "$FITEO_ENV_FILE"
 ); then
-  ok "Bootstrap retains only the manually-managed Fiteo fallback"
+  ok "Bootstrap refreshes allowlisted Manul Fiteo values without persisting the operator PAT"
 else
-  fail "Bootstrap duplicated Zsh Fiteo values or retained the operator PAT"
+  fail "Bootstrap did not refresh the Manul Fiteo fallback safely"
 fi
 if (
   source "$SCRIPT_DIR/manul-env.sh"
