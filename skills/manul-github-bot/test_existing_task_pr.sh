@@ -561,6 +561,25 @@ if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false"
   [ "$VERIFIED_EXISTING_PR_BRANCH" = "$TEAM_BRANCH" ]
   [ "$VERIFIED_EXISTING_PR_URL" = "https://github.com/test/repo/pull/82" ]
   echo "PASS: resumes the existing PR by the stable Team conversation branch"
+
+# A stable Team PR's verified GitHub base is authoritative even when the
+# repository's preferred base changed after that PR was created.
+git -C "$WORKDIR" push -q origin "$INITIAL_BASE_SHA:refs/heads/develop"
+jq -cn --arg url "https://github.com/test/repo/pull/83" \
+  --arg branch "$TEAM_BRANCH" --arg sha "$PR_HEAD_SHA" \
+  '[{number:83,url:$url,state:"OPEN",baseRefName:"develop",headRefName:$branch,body:"Team workflow checkpoint",headRefOid:$sha}]' \
+  >"$FAKE_GH_PR_LIST"
+VERIFIED_EXISTING_PR_BRANCH=""
+VERIFIED_EXISTING_PR_URL=""
+VERIFIED_EXISTING_PR_BASE=""
+if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" "$TEAM_BRANCH"; then
+  [ "$VERIFIED_EXISTING_PR_BRANCH" = "$TEAM_BRANCH" ]
+  [ "$VERIFIED_EXISTING_PR_BASE" = "develop" ]
+  echo "PASS: exact stable Team PR retains its GitHub-verified base after policy changes"
+else
+  echo "FAIL: stable Team PR with its previously selected base was not recovered" >&2
+  exit 1
+fi
 else
   echo "FAIL: did not recover the existing PR from its stable Team branch" >&2
   exit 1
