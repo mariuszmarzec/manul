@@ -68,7 +68,7 @@ OUTPUT="$(
   MANUL_TEST_PATH_PREFIX="$TEST_ROOT/operator-bin" \
   ZSH_BIN="$TEST_ROOT/bin/fake-zsh" \
   bash "$BOOTSTRAP" "$TEST_ROOT/target.sh" "argument with spaces" second
-) 2>"$STDERR_FILE"
+)" 2>"$STDERR_FILE"
 EXPECTED_OUTPUT="$(printf 'ZSHRC_NOTICE\nTARGET_OK:from-user-zshrc:console-key-from-user-zshrc')"
 [ "$OUTPUT" = "$EXPECTED_OUTPUT" ] \
   && ok "Bootstrap loads ~/.zshrc, filters SSH status chatter, and preserves other stdout" \
