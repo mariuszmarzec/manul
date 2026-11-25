@@ -1155,6 +1155,45 @@ fi
 echo "[OK] Team no-op is accepted on its reserved branch with no empty PR"
 
 echo ""
+echo "=== Test TEAM-TODO-NOOP: Todo Team no-op completes without a GitHub issue comment ==="
+WORKDIR_TEAM_TODO="$TEST_TMPDIR/workdir-team-todo"
+ORIGIN_TEAM_TODO="$TEST_TMPDIR/origin-team-todo.git"
+mkdir -p "$WORKDIR_TEAM_TODO"
+git init -q "$WORKDIR_TEAM_TODO"
+git -C "$WORKDIR_TEAM_TODO" symbolic-ref HEAD refs/heads/main
+git -C "$WORKDIR_TEAM_TODO" config user.email test@example.com
+git -C "$WORKDIR_TEAM_TODO" config user.name test
+printf 'Todo Team base\n' >"$WORKDIR_TEAM_TODO/README.md"
+git -C "$WORKDIR_TEAM_TODO" add README.md
+git -C "$WORKDIR_TEAM_TODO" commit -qm "Todo Team base"
+INITIAL_HEAD_TEAM_TODO="$(git -C "$WORKDIR_TEAM_TODO" rev-parse HEAD)"
+git init -q --bare "$ORIGIN_TEAM_TODO"
+git -C "$WORKDIR_TEAM_TODO" remote add origin "$ORIGIN_TEAM_TODO"
+git -C "$WORKDIR_TEAM_TODO" push -q -u origin main
+TEAM_BRANCH_TODO="feature/team-0123456789ab"
+git -C "$WORKDIR_TEAM_TODO" checkout -qb "$TEAM_BRANCH_TODO"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='TEAM_TODO_NOOP';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_TODO_NOOP','test/repo',0,'fiteo-todo://task/116715','user','test','Todo Team no-op','running',1,$BASHPID,'TEAM');" 2>/dev/null
+TEAM_PR_COUNT_BEFORE="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
+STDOUT_FILE="$TEST_TMPDIR/stdout-team-todo-noop.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+TASK_ACTION="TEAM"
+DEFAULT_BRANCH="main"
+evaluate_task_completion "test/repo" "0" "TEAM_TODO_NOOP" "TEAM_TODO_NOOP" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_TODO" "" "$INITIAL_HEAD_TEAM_TODO" "$TEAM_BRANCH_TODO" "main" "" "" "" "" "implementation" "todo_remote_mcp" "repository" "$TEAM_BRANCH_TODO"
+TEAM_PR_COUNT_AFTER="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
+if [ "$COMPLETION_SUCCESS" != "true" ] || [ "$TEAM_PR_COUNT_AFTER" != "$TEAM_PR_COUNT_BEFORE" ]; then
+  echo "FAIL: Todo Team no-op should complete without a GitHub comment or empty PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
+  tail -n 70 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+echo "[OK] Todo Team no-op completes through its provider path without an empty PR"
+
+
+echo ""
 echo "=== Test TEAM-BASE-GUARD: Team writes on main are rejected ==="
 WORKDIR_TEAM_BASE="$TEST_TMPDIR/workdir-team-base"
 ORIGIN_TEAM_BASE="$TEST_TMPDIR/origin-team-base.git"
