@@ -3850,6 +3850,7 @@ evaluate_task_completion() {
   if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
     repo_changed="false"
     if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
+    log "dispatch: completion preflight task=$COMMENT_ID action=$TASK_ACTION source=$TASK_SOURCE_TYPE branch=$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo detached) reservedTeamBranch=$TEAM_TASK_BRANCH repoChanged=$repo_changed base=$INITIAL_BASE_BRANCH"
     if [ "$repo_changed" = "true" ]; then
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ]; then
@@ -3936,6 +3937,7 @@ else
          fi
        fi
      elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]; then
+      log "dispatch: completion no-diff path task=$COMMENT_ID action=$TASK_ACTION"
       local already_satisfied="false"
       current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
 
