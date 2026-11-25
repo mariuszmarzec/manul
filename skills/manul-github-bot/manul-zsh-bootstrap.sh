@@ -53,15 +53,30 @@ fi
 #
 # A user's ~/.zshrc may start ssh-agent and add keys. Hide only those routine
 # status lines; keep all other startup diagnostics and Manul output visible.
+# Capture stderr in a private temporary file so filtering completes before this
+# process exits. Process substitution here is asynchronous and can write to a
+# restored parent stderr descriptor after the caller's redirection has ended.
+umask 077
+stderr_file="$(mktemp "${TMPDIR:-/tmp}/manul-zsh-bootstrap.stderr.XXXXXX")" || {
+    echo "ERROR: could not create a private temporary file for Zsh startup diagnostics" >&2
+    exit 1
+}
+trap 'rm -f -- "$stderr_file"' EXIT
+
 set +e
 "$ZSH_EXECUTABLE" -ic '
     export MANUL_ZSH_ENV_READY=1
     exec "$@"
-' manul-zsh-bootstrap "$@" \
-    2> >(sed -E '/^Agent pid [0-9]+$/d; /^Identity added: /d' >&2) \
+' manul-zsh-bootstrap "$@" 2>"$stderr_file" \
     | sed -E '/^Agent pid [0-9]+$/d; /^Identity added: /d'
 pipeline_status=("${PIPESTATUS[@]}")
 set -e
+
+if ! sed -E '/^Agent pid [0-9]+$/d; /^Identity added: /d' "$stderr_file" >&2; then
+    echo "ERROR: could not forward filtered Zsh startup diagnostics" >&2
+    exit 1
+fi
+
 if [ "${pipeline_status[0]}" -ne 0 ]; then
     exit "${pipeline_status[0]}"
 fi
