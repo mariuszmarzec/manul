@@ -940,11 +940,23 @@ workspace_prepare_team_task_branch() {
     fi
   fi
 
-  local current_branch dirty local_sha
+  local base_config_key="branch.$branch.manul-base"
+  local recorded_base
+  recorded_base="$(git -C "$workdir" config --local --get "$base_config_key" 2>/dev/null || true)"
+  if [ -n "$recorded_base" ] && [ "$recorded_base" != "$base_branch" ]; then
+    echo "workspace_prepare_team_task_branch: stable branch '$branch' is pinned to base '$recorded_base', not '$base_branch'; refusing to switch bases" >&2
+    return 1
+  fi
+
+  local current_branch dirty local_sha branch_created="false"
   current_branch="$(git -C "$workdir" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
   dirty="$(git -C "$workdir" status --porcelain 2>/dev/null || true)"
 
   if [ "$current_branch" = "$branch" ]; then
+    if [ -z "$recorded_base" ]; then
+      echo "workspace_prepare_team_task_branch: existing local Team branch '$branch' has no pinned base metadata; refusing to infer its original base" >&2
+      return 1
+    fi
     # This is the normal Team wake/resume path. Preserve the exact checkout and
     # local edits; only fast-forward when the remote is a strict descendant and
     # the worktree is clean.
@@ -977,6 +989,10 @@ workspace_prepare_team_task_branch() {
     fi
 
     if git -C "$workdir" show-ref --verify --quiet "refs/heads/$branch"; then
+      if [ -z "$recorded_base" ]; then
+        echo "workspace_prepare_team_task_branch: existing local Team branch '$branch' has no pinned base metadata; refusing to infer its original base" >&2
+        return 1
+      fi
       local_sha="$(git -C "$workdir" rev-parse --verify "refs/heads/$branch^{commit}" 2>/dev/null || true)"
       if [ -z "$local_sha" ] || ! git -C "$workdir" merge-base "$base_ref" "$local_sha" >/dev/null 2>&1; then
         echo "workspace_prepare_team_task_branch: existing local branch '$branch' is not verifiably based on '$base_branch'" >&2
@@ -999,6 +1015,10 @@ workspace_prepare_team_task_branch() {
         fi
       fi
     elif [ -n "$remote_sha" ]; then
+      if [ -z "$recorded_base" ]; then
+        echo "workspace_prepare_team_task_branch: remote Team branch '$branch' exists without pinned base metadata; refusing to infer its original base" >&2
+        return 1
+      fi
       if ! git -C "$workdir" merge-base "$base_ref" "$remote_sha" >/dev/null 2>&1; then
         echo "workspace_prepare_team_task_branch: remote task branch '$branch' is unrelated to base '$base_branch'" >&2
         return 1
@@ -1020,6 +1040,7 @@ workspace_prepare_team_task_branch() {
         echo "workspace_prepare_team_task_branch: could not create task branch '$branch' from '$base_branch'" >&2
         return 1
       fi
+      branch_created="true"
     fi
   fi
 
@@ -1029,6 +1050,16 @@ workspace_prepare_team_task_branch() {
   if [ "$current_branch" != "$branch" ] || [ -z "$final_head" ] ||
      ! git -C "$workdir" merge-base "$base_ref" "$final_head" >/dev/null 2>&1; then
     echo "workspace_prepare_team_task_branch: final branch/base verification failed (branch=${current_branch:-detached}, expected=$branch)" >&2
+    return 1
+  fi
+  if [ "$branch_created" = "true" ]; then
+    if ! git -C "$workdir" config --local "$base_config_key" "$base_branch"; then
+      echo "workspace_prepare_team_task_branch: could not persist base '$base_branch' for stable branch '$branch'" >&2
+      return 1
+    fi
+  fi
+  if [ "$(git -C "$workdir" config --local --get "$base_config_key" 2>/dev/null || true)" != "$base_branch" ]; then
+    echo "workspace_prepare_team_task_branch: final base metadata verification failed for '$branch'" >&2
     return 1
   fi
   if ! workspace_sync_submodules "$workdir"; then
