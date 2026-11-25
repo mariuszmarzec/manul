@@ -292,7 +292,7 @@ fi
 
 # The installer accepts any supported agent runtime and fails only when
 # none of OpenClaw, OpenCode, Codex CLI, or Claude Code is available.
-if grep -q 'for cmd in bash git gh jq sqlite3 curl crontab python3' "$SCRIPT_DIR/install-manul.sh"; then
+if grep -q 'for cmd in bash zsh git gh jq sqlite3 curl crontab python3' "$SCRIPT_DIR/install-manul.sh"; then
   ok "Installer requires core tools (bash git gh jq sqlite3 curl crontab python3)"
 else
   fail "Installer core-tool check is missing"
@@ -337,7 +337,7 @@ for _ts in task-source.sh task-source-github-issues.sh task-source-jira-tasks.sh
     fail "Installer does not declare $_ts (generic task-source adapter missing from runtime)"
   fi
 done
-grep -q 'for cmd in bash git gh jq sqlite3 curl crontab python3' "$SCRIPT_DIR/install-manul.sh" \
+grep -q 'for cmd in bash zsh git gh jq sqlite3 curl crontab python3' "$SCRIPT_DIR/install-manul.sh" \
   && ok "Installer validates Python required by core runtime paths" \
   || fail "Installer does not validate the core Python runtime dependency"
 
