@@ -143,6 +143,14 @@ TEAM_CHECKOUT="$(workspace_prepare_primary_checkout "$TEAM_ROOT" "test-owner/pri
 git -C "$TEAM_CHECKOUT" remote set-url origin "$REMOTE"
 check "Team dispatch prepares the stable branch before agent execution" workspace_prepare_team_task_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_ROOT" test-owner/primary
 check "Team dispatch is not left on the base branch" assert_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH"
+check "Team dispatch persists the selected base in Git metadata" test "$(git -C "$TEAM_CHECKOUT" config --local --get "branch.$TEAM_BRANCH.manul-base")" = "main"
+expect_team_base_switch_rejected() {
+  ! workspace_prepare_team_task_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH" develop "$TEAM_ROOT" test-owner/primary
+}
+check "Team wake rejects a different base instead of switching silently" expect_team_base_switch_rejected
+check "Team wake keeps the pinned base after a mismatch" test "$(git -C "$TEAM_CHECKOUT" config --local --get "branch.$TEAM_BRANCH.manul-base")" = "main"
+check "Team wake remains on the same branch after a base mismatch" assert_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH"
+
 printf 'committed Team checkpoint\n' > "$TEAM_CHECKOUT/team-checkpoint.txt"
 git -C "$TEAM_CHECKOUT" add team-checkpoint.txt
 git -C "$TEAM_CHECKOUT" commit -qm "Add Team checkpoint"
@@ -160,7 +168,13 @@ TEAM_FRESH_ROOT="$MANUL_WORKSPACE/ws-team-fresh"
 mkdir -p "$TEAM_FRESH_ROOT"
 TEAM_FRESH_CHECKOUT="$(workspace_prepare_primary_checkout "$TEAM_FRESH_ROOT" "test-owner/primary" "$CACHE")"
 git -C "$TEAM_FRESH_CHECKOUT" remote set-url origin "$REMOTE"
-check "Team retry can recover the existing remote task branch" workspace_prepare_team_task_branch "$TEAM_FRESH_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_FRESH_ROOT" test-owner/primary
+expect_unpinned_remote_team_branch_rejected() {
+  ! workspace_prepare_team_task_branch "$TEAM_FRESH_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_FRESH_ROOT" test-owner/primary
+}
+check "remote Team branch without base metadata is rejected" expect_unpinned_remote_team_branch_rejected
+check "unverified remote Team branch does not switch away from main" assert_branch "$TEAM_FRESH_CHECKOUT" main
+git -C "$TEAM_FRESH_CHECKOUT" config --local "branch.$TEAM_BRANCH.manul-base" main
+check "restored Team workspace metadata allows exact remote branch recovery" workspace_prepare_team_task_branch "$TEAM_FRESH_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_FRESH_ROOT" test-owner/primary
 check "Team retry checks out the same stable remote branch" assert_branch "$TEAM_FRESH_CHECKOUT" "$TEAM_BRANCH"
 check "Team retry recovers the pushed checkpoint" assert_file "$TEAM_FRESH_CHECKOUT/team-checkpoint.txt"
 
