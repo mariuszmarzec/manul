@@ -2955,6 +2955,7 @@ pr_auto_create() {
 # completion evaluator use the same independently verified PR identity.
 VERIFIED_EXISTING_PR_BRANCH=""
 VERIFIED_EXISTING_PR_URL=""
+VERIFIED_EXISTING_PR_BASE=""
 verify_existing_task_pr() {
   local repo="$1" comment_id="$2" workdir="$3" initial_base_branch="$4"
   local allow_prior_urls="${5:-true}" expected_team_branch="${6:-}"
@@ -2963,6 +2964,7 @@ verify_existing_task_pr() {
 
   VERIFIED_EXISTING_PR_BRANCH=""
   VERIFIED_EXISTING_PR_URL=""
+  VERIFIED_EXISTING_PR_BASE=""
   safe_comment_id="$(sql_escape "$comment_id")"
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   issue_num="$(printf '%s' "$comment_url" | grep -oE '/(issues|pull)/[0-9]+' | grep -oE '[0-9]+' | head -n 1)"
@@ -3029,7 +3031,19 @@ verify_existing_task_pr() {
   VERIFIED_EXISTING_PR_BRANCH="$(jq -r '.headRefName // empty' <<<"$verified")"
   VERIFIED_EXISTING_PR_URL="$(jq -r '.url // empty' <<<"$verified")"
   verified_head_sha="$(jq -r '.headRefOid // empty' <<<"$verified")"
-  if [ "$verified_base" != "$initial_base_branch" ] ||
+  local team_base_override="false"
+  if [ "$verified_base" != "$initial_base_branch" ] &&
+     [ -n "$expected_team_branch" ] &&
+     [ "$VERIFIED_EXISTING_PR_BRANCH" = "$expected_team_branch" ] &&
+     git check-ref-format --branch "$verified_base" >/dev/null 2>&1; then
+    local remote_base_sha
+    remote_base_sha="$(git -C "$workdir" ls-remote --heads origin "$verified_base" 2>/dev/null | awk 'NR == 1 {print $1}')"
+    if [ -n "$remote_base_sha" ]; then
+      team_base_override="true"
+    fi
+  fi
+
+  if { [ "$verified_base" != "$initial_base_branch" ] && [ "$team_base_override" != "true" ]; } ||
      [ -z "$VERIFIED_EXISTING_PR_BRANCH" ] ||
      [ "$VERIFIED_EXISTING_PR_BRANCH" = "$verified_base" ] ||
      [ -z "$verified_head_sha" ]; then
@@ -3049,7 +3063,8 @@ verify_existing_task_pr() {
     return 2
   fi
 
-  log "verify_existing_task_pr: verified unique open PR $VERIFIED_EXISTING_PR_URL for task=$comment_id branch=$VERIFIED_EXISTING_PR_BRANCH base=$initial_base_branch"
+  VERIFIED_EXISTING_PR_BASE="$verified_base"
+  log "verify_existing_task_pr: verified unique open PR $VERIFIED_EXISTING_PR_URL for task=$comment_id branch=$VERIFIED_EXISTING_PR_BRANCH base=$verified_base"
   return 0
 }
 
@@ -5165,13 +5180,35 @@ REPORT_ONLY_PROMPT
              handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior Team PR was identified, but its canonical URL did not contain a valid PR number. Refusing to create another PR." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_recovery"
              return 0
            fi
-           log "dispatch: resuming Team PR #$TASK_PR_NUMBER on verified branch $PR_HEAD_BRANCH for conversation $CONVERSATION_ID"
+           if [ "$PR_HEAD_BRANCH" = "$TEAM_TASK_BRANCH" ]; then
+             base_branch="$VERIFIED_EXISTING_PR_BASE"
+             if ! git -C "$WORKDIR" fetch origin "$base_branch" --quiet 2>>"$LOG" ||
+                ! git -C "$WORKDIR" show-ref --verify --quiet "refs/remotes/origin/$base_branch"; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "The existing Team PR base '$base_branch' could not be refreshed or verified; refusing to resume on another base." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_base"
+               return 0
+             fi
+             local team_pr_base_key="branch.$PR_HEAD_BRANCH.manul-base"
+             local recorded_team_pr_base
+             recorded_team_pr_base="$(git -C "$WORKDIR" config --local --get "$team_pr_base_key" 2>/dev/null || true)"
+             if [ -n "$recorded_team_pr_base" ] && [ "$recorded_team_pr_base" != "$base_branch" ]; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Existing Team PR branch '$PR_HEAD_BRANCH' is pinned to base '$recorded_team_pr_base', but GitHub reports '$base_branch'; refusing to switch bases." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_base_mismatch"
+               return 0
+             fi
+           fi
+           log "dispatch: resuming Team PR #$TASK_PR_NUMBER on verified branch $PR_HEAD_BRANCH for conversation $CONVERSATION_ID (base=$base_branch)"
            if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" "$workspace_path" "$REPO" 2>>"$LOG"; then
              handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "The existing Team PR head branch '$PR_HEAD_BRANCH' could not be prepared safely. The prior checkout was preserved; no agent was started." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_recovery"
              return 0
            fi
            local recovered_team_pr_branch
            recovered_team_pr_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || true)"
+           if [ "$PR_HEAD_BRANCH" = "$TEAM_TASK_BRANCH" ]; then
+             local team_pr_base_key="branch.$PR_HEAD_BRANCH.manul-base"
+             if ! git -C "$WORKDIR" config --local "$team_pr_base_key" "$base_branch"; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not persist the verified PR base '$base_branch' for stable Team branch '$PR_HEAD_BRANCH'." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_base_persist"
+               return 0
+             fi
+           fi
            if [ "$recovered_team_pr_branch" != "$PR_HEAD_BRANCH" ]; then
              handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Existing Team PR branch verification failed (expected '$PR_HEAD_BRANCH', got '$recovered_team_pr_branch'). Refusing to continue on an unverified branch." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_recovery"
              return 0
