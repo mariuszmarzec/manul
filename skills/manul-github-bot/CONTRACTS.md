@@ -730,7 +730,8 @@ secrets are never copied into `~/.manul/.env`, task artifacts or logs.
 
 Manul also checks every MCP entry it creates in the temporary OpenCode overlay.
 An entry that is not reported as connected is removed from that task overlay
-before the agent starts. The aggregate `opencode mcp list` exit code is not
+before the agent starts, and its corresponding Manul-owned URL/token variables
+are cleared from the agent process environment. The aggregate `opencode mcp list` exit code is not
 used as a global gate: one unrelated operator-owned server being offline does
 not block the task. Operator-owned MCP entries other than Caracal are never
 removed or rewritten by Manul. OpenCode continues to load the operator's JSON
