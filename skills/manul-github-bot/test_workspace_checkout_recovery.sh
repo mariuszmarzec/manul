@@ -132,10 +132,10 @@ check "PR replacement is clean" assert_clean "$PR_CHECKOUT"
 # Team parent branch identity is derived from the stable logical conversation,
 # so new wake comments and execution attempts resolve to the same branch.
 TEAM_CONTEXT="github_issues:test-owner/primary#82"
-TEAM_BRANCH="$(workspace_team_task_branch_name 82 "$TEAM_CONTEXT")"
-TEAM_BRANCH_AGAIN="$(workspace_team_task_branch_name 82 "$TEAM_CONTEXT")"
+TEAM_BRANCH="$(workspace_team_task_branch_name "$TEAM_CONTEXT")"
+TEAM_BRANCH_AGAIN="$(workspace_team_task_branch_name "$TEAM_CONTEXT")"
 check "Team branch name is stable for the same logical conversation" test "$TEAM_BRANCH" = "$TEAM_BRANCH_AGAIN"
-check "Team branch name is scoped and ref-safe" bash -c '[[ "$1" =~ ^feature/team-82-[0-9a-f]{12}$ ]]' _ "$TEAM_BRANCH"
+check "Team branch name is scoped and ref-safe" bash -c '[[ "$1" =~ ^feature/team-[0-9a-f]{12}$ ]]' _ "$TEAM_BRANCH"
 
 TEAM_ROOT="$MANUL_WORKSPACE/ws-team-parent"
 mkdir -p "$TEAM_ROOT"
@@ -170,7 +170,7 @@ TEAM_DIRTY_ROOT="$MANUL_WORKSPACE/ws-team-dirty-base"
 mkdir -p "$TEAM_DIRTY_ROOT"
 TEAM_DIRTY_CHECKOUT="$(workspace_prepare_primary_checkout "$TEAM_DIRTY_ROOT" "test-owner/primary" "$CACHE")"
 git -C "$TEAM_DIRTY_CHECKOUT" remote set-url origin "$REMOTE"
-TEAM_DIRTY_BRANCH="$(workspace_team_task_branch_name 82 "github_issues:test-owner/primary#82-dirty")"
+TEAM_DIRTY_BRANCH="$(workspace_team_task_branch_name "github_issues:test-owner/primary#82-dirty")"
 printf 'operator/base content to preserve\n' > "$TEAM_DIRTY_CHECKOUT/preserve-me.txt"
 expect_team_dirty_base_rejected() {
   ! workspace_prepare_team_task_branch "$TEAM_DIRTY_CHECKOUT" "$TEAM_DIRTY_BRANCH" main "$TEAM_DIRTY_ROOT" test-owner/primary
