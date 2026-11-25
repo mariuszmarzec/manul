@@ -63,6 +63,7 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
 fi
 if [ "${1:-}" = "run" ]; then
   printf '%s' "${OPENCODE_CONFIG_CONTENT:-}" >"${MOCK_CARACAL_PROOF_FILE}.overlay"
+  printf 'fiteo_pat=%s\n' "${FITEO_MANUL_PAT:-<unset>}" >>"$MOCK_CARACAL_PROOF_FILE"
   if [ "${MOCK_CARACAL_MODE:-connected}" = "connected" ]; then
     if [ "${CARACAL_MCP_URL:-}" != "http://127.0.0.1:3500/mcp" ] ||
        [ "${CARACAL_ACCESS_TOKEN:-}" != "fixture-caracal-token" ]; then
@@ -134,6 +135,18 @@ grep -Eq '^command=mcp list([[:space:]]|$)' "$PROOF" || fail "adapter did not ch
 grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent did not start after pruning unreachable Manul MCP"
 jq -e '.mcp.servers["manul-fiteo"] == null' "$PROOF.overlay" >/dev/null || fail "unreachable Manul Fiteo MCP was not removed from task overlay"
 ! printf '%s' "$out" | grep -Fq 'fixture-fiteo-pat' || fail "Fiteo PAT leaked into adapter result"
+[ "$(grep -c '^fiteo_pat=<unset>
+pass "Manul removes unreachable Manul-owned MCP entries without changing operator config"
+
+: >"$PROOF"
+mv "$PROVIDER" "$PROVIDER.disabled"
+out="$(run_adapter caracal-provider-missing provider-missing)" || true
+[ "$(printf '%s' "$out" | jq -r '.status')" = "COMPLETED" ] || fail "missing optional Caracal provider blocked agent startup: $out"
+[ "$(grep -c '^command=run([[:space:]]|$)' "$PROOF")" -eq 1 ] || fail "OpenCode should run without probing unavailable Caracal provider"
+jq -e '.mcp.servers["caracal-rag"].disabled == true' "$PROOF.overlay" >/dev/null || fail "missing Caracal provider did not disable it in task overlay"
+pass "Manul continues safely when configured Caracal provider is unavailable"
+echo "Caracal/OpenCode MCP preflight tests: passed"
+ "$PROOF")" -eq 1 ] || fail "unreachable Manul Fiteo token remained in the agent environment"
 rm -f "${TMP}/runtime/.env"
 pass "Manul removes unreachable Manul-owned MCP entries without changing operator config"
 
