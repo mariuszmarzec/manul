@@ -230,6 +230,9 @@ else
   fail "Bootstrap retained provider settings or removed Manul integration fallbacks"
 fi
 if (
+  # This scenario verifies the Fiteo fallback, not the exported values from
+  # the earlier fixture. Keep provider-owned Zsh exports in place.
+  unset FITEO_MANUL_PAT FITEO_BASE_URL
   source "$SCRIPT_DIR/manul-env.sh"
   manul_env_load "$PRESERVE"
   [ "$OPENCLAW_STATE_DIR" = "/installer/current/state" ] &&
@@ -243,7 +246,7 @@ else
   fail "Provider exports or Manul integration fallbacks were not loaded correctly"
 fi
 if (
-  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG
+  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCODE_CONFIG FITEO_MANUL_PAT FITEO_BASE_URL
   source "$ENV_FILE2"
   [ -z "${OPENCLAW_STATE_DIR:-}" ] &&
   [ "$OPENCODE_CONFIG" = "/operator/chosen/opencode.json" ] &&
