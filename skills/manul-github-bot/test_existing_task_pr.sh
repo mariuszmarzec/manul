@@ -558,8 +558,14 @@ jq -cn --arg url "https://github.com/test/repo/pull/82" \
 VERIFIED_EXISTING_PR_BRANCH=""
 VERIFIED_EXISTING_PR_URL=""
 if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" "$TEAM_BRANCH"; then
-  [ "$VERIFIED_EXISTING_PR_BRANCH" = "$TEAM_BRANCH" ]
-  [ "$VERIFIED_EXISTING_PR_URL" = "https://github.com/test/repo/pull/82" ]
+  if [ "$VERIFIED_EXISTING_PR_BRANCH" != "$TEAM_BRANCH" ]; then
+    echo "FAIL: Team PR branch mismatch (expected=$TEAM_BRANCH actual=$VERIFIED_EXISTING_PR_BRANCH)" >&2
+    exit 1
+  fi
+  if [ "$VERIFIED_EXISTING_PR_URL" != "https://github.com/test/repo/pull/82" ]; then
+    echo "FAIL: Team PR URL mismatch (expected=https://github.com/test/repo/pull/82 actual=$VERIFIED_EXISTING_PR_URL)" >&2
+    exit 1
+  fi
   echo "PASS: resumes the existing PR by the stable Team conversation branch"
 else
   echo "FAIL: did not recover the existing PR from its stable Team branch" >&2
