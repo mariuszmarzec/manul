@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify Caracal provider refresh and MCP readiness in Manul's OpenCode adapter.
+# Verify task-scoped Caracal fallback and pruning of unreachable Manul MCPs.
 # This fixture is hermetic: it never reads the operator's live provider or config.
 
 set -euo pipefail
@@ -37,7 +37,7 @@ cat >"$CONFIG" <<'JSONC'
 }
 JSONC
 cat >"$PROVIDER" <<'PROVIDER'
-if [ "${CARACAL_RESOLVE_LIVE:-}" != "1" ]; then
+if [ "$CARACAL_RESOLVE_LIVE" != "1" ]; then
   echo "CARACAL_RESOLVE_LIVE was not set by the runtime loader" >&2
   return 1
 fi
@@ -111,7 +111,7 @@ grep -Fq 'command=run' "$PROOF" || fail "adapter did not start the model after C
 [ ! -e "$TMP/runtime/.env" ] || ! grep -Fq 'fixture-caracal-token' "$TMP/runtime/.env" || fail "Caracal token was persisted in Manul runtime environment"
 [ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_HASH" ] || fail "operator's static OpenCode config was modified"
 ! printf '%s' "$out" | grep -Fq 'fixture-caracal-token' || fail "Caracal token leaked into adapter result"
-pass "Manul refreshes Caracal provider env per task, verifies connection, and keeps credentials process-scoped"
+pass "connected Caracal remains available to the agent with process-scoped credentials"
 
 : >"$PROOF"
 out="$(run_adapter caracal-disconnected disconnected)"
@@ -122,7 +122,7 @@ grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent did not start aft
 jq -e '.mcp.servers["caracal-rag"].disabled == true' "${PROOF}.overlay" >/dev/null || fail "Caracal was not disabled in task overlay"
 [ "$(grep -c '^token=<unset>$' "$PROOF")" -eq 1 ] || fail "Caracal token was not cleared before agent process"
 [ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_HASH" ] || fail "operator OpenCode config changed after disconnected preflight"
-pass "Manul disables disconnected Caracal only in task overlay and continues agent startup"
+pass "disconnected Caracal is disabled only for this task and does not block agent startup"
 
 : >"$PROOF"
 cat >"${TMP}/runtime/.env" <<'FITEO'
@@ -135,26 +135,19 @@ grep -Eq '^command=mcp list([[:space:]]|$)' "$PROOF" || fail "adapter did not ch
 grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent did not start after pruning unreachable Manul MCP"
 jq -e '.mcp.servers["manul-fiteo"] == null' "$PROOF.overlay" >/dev/null || fail "unreachable Manul Fiteo MCP was not removed from task overlay"
 ! printf '%s' "$out" | grep -Fq 'fixture-fiteo-pat' || fail "Fiteo PAT leaked into adapter result"
-[ "$(grep -c '^fiteo_pat=<unset>
-pass "Manul removes unreachable Manul-owned MCP entries without changing operator config"
+[ "$(grep -c '^fiteo_pat=<unset>$' "$PROOF")" -eq 1 ] || fail "unreachable Manul Fiteo token remained in agent environment"
+rm -f "$TMP/runtime/.env"
+[ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_HASH" ] || fail "operator OpenCode config changed after pruning Manul MCP"
+pass "unreachable Manul-owned MCP is removed from the task overlay and its PAT is cleared"
 
 : >"$PROOF"
 mv "$PROVIDER" "$PROVIDER.disabled"
-out="$(run_adapter caracal-provider-missing provider-missing)" || true
+out="$(run_adapter caracal-provider-missing provider-missing)"
 [ "$(printf '%s' "$out" | jq -r '.status')" = "COMPLETED" ] || fail "missing optional Caracal provider blocked agent startup: $out"
-[ "$(grep -c '^command=run([[:space:]]|$)' "$PROOF")" -eq 1 ] || fail "OpenCode should run without probing unavailable Caracal provider"
+! grep -Fq 'command=mcp list' "$PROOF" || fail "adapter probed Caracal despite missing provider"
+grep -Fq 'command=run' "$PROOF" || fail "OpenCode did not run without the optional Caracal provider"
 jq -e '.mcp.servers["caracal-rag"].disabled == true' "$PROOF.overlay" >/dev/null || fail "missing Caracal provider did not disable it in task overlay"
-pass "Manul continues safely when configured Caracal provider is unavailable"
-echo "Caracal/OpenCode MCP preflight tests: passed"
- "$PROOF")" -eq 1 ] || fail "unreachable Manul Fiteo token remained in the agent environment"
-rm -f "${TMP}/runtime/.env"
-pass "Manul removes unreachable Manul-owned MCP entries without changing operator config"
+[ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_HASH" ] || fail "operator OpenCode config changed when Caracal provider was missing"
+pass "missing Caracal provider disables only the task-scoped entry and does not block agent startup"
 
-: >"$PROOF"
-mv "$PROVIDER" "$PROVIDER.disabled"
-out="$(run_adapter caracal-provider-missing provider-missing)" || true
-[ "$(printf '%s' "$out" | jq -r '.status')" = "COMPLETED" ] || fail "missing optional Caracal provider blocked agent startup: $out"
-[ "$(grep -c '^command=run([[:space:]]|$)' "$PROOF")" -eq 1 ] || fail "OpenCode should run without probing unavailable Caracal provider"
-jq -e '.mcp.servers["caracal-rag"].disabled == true' "$PROOF.overlay" >/dev/null || fail "missing Caracal provider did not disable it in task overlay"
-pass "Manul continues safely when configured Caracal provider is unavailable"
 echo "Caracal/OpenCode MCP preflight tests: passed"
