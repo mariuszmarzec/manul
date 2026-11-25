@@ -10,7 +10,9 @@
 #   ~/.manul/.env
 #
 # Bootstrap creates/validates this private fallback file and removes retired
-# credentials. It never copies active shell variables into a second file.
+# credentials. It persists only the allowlisted Manul-owned Fiteo integration
+# values; the operator's own FITEO_PAT and host/provider credentials are never
+# copied into this file.
 
 manul_env_file() {
   local runtime_dir="${1:-${MANUL_DIR:-$HOME/.manul}}"
@@ -61,6 +63,79 @@ manul_env_load() {
   set +a
 }
 
+manul_env_persist_integration_values() {
+  local runtime_dir="${1:?runtime directory required}"
+  local env_file="${2:?environment file required}"
+  local values_file refreshed_file refresh_names=""
+  local var_name var_value
+
+  values_file="$(mktemp "$runtime_dir/.env-values.XXXXXX")" || return 1
+  for var_name in FITEO_BASE_URL FITEO_MANUL_PAT MANUL_USER_ID FITEO_MANUL_SHARE_USER_ID; do
+    case "$var_name" in
+      FITEO_BASE_URL) var_value="${FITEO_BASE_URL:-}" ;;
+      FITEO_MANUL_PAT) var_value="${FITEO_MANUL_PAT:-}" ;;
+      MANUL_USER_ID) var_value="${MANUL_USER_ID:-}" ;;
+      FITEO_MANUL_SHARE_USER_ID) var_value="${FITEO_MANUL_SHARE_USER_ID:-}" ;;
+    esac
+    [ -n "$var_value" ] || continue
+
+    # Persist only values valid for the remote Fiteo integration. Never write
+    # multiline values into a shell environment file.
+    case "$var_name" in
+      FITEO_BASE_URL)
+        [[ "$var_value" =~ ^https?://[^[:space:][:cntrl:]]+$ ]] || continue
+        ;;
+      MANUL_USER_ID|FITEO_MANUL_SHARE_USER_ID)
+        [[ "$var_value" =~ ^[1-9][0-9]*$ ]] || continue
+        ;;
+    esac
+    if [[ "$var_value" == *$'\n'* || "$var_value" == *$'\r'* ]]; then
+      continue
+    fi
+
+    printf '%s=%q\n' "$var_name" "$var_value" >> "$values_file" || {
+      rm -f -- "$values_file"
+      return 1
+    }
+    refresh_names="${refresh_names:+$refresh_names }$var_name"
+  done
+
+  if [ ! -s "$values_file" ]; then
+    rm -f -- "$values_file"
+    return 0
+  fi
+
+  refreshed_file="$(mktemp "$runtime_dir/.env.XXXXXX")" || {
+    rm -f -- "$values_file"
+    return 1
+  }
+  if ! awk -v refresh_names="$refresh_names" '
+    BEGIN {
+      count = split(refresh_names, names, " ")
+    }
+    {
+      candidate = $0
+      sub(/^[[:space:]]*/, "", candidate)
+      sub(/^export[[:space:]]+/, "", candidate)
+      for (i = 1; i <= count; i++) {
+        prefix = names[i] "="
+        if (index(candidate, prefix) == 1) next
+      }
+      print
+    }
+  ' "$env_file" > "$refreshed_file"; then
+    rm -f -- "$values_file" "$refreshed_file"
+    return 1
+  fi
+  if ! cat "$values_file" >> "$refreshed_file"; then
+    rm -f -- "$values_file" "$refreshed_file"
+    return 1
+  fi
+  rm -f -- "$values_file"
+  chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
+  mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
+}
+
 manul_env_bootstrap() {
   local runtime_dir="${1:?runtime directory required}"
   local env_file
@@ -78,8 +153,8 @@ manul_env_bootstrap() {
 # Manul integration environment.
 #
 # Operator PATH, provider configuration, API keys and tool settings come
-# directly from the operator's ~/.zshrc. This file is only for Manul-specific
-# values intentionally managed here. Existing entries are preserved.
+# directly from the operator's ~/.zshrc. This file stores only Manul-owned
+# integration fallbacks such as the dedicated Fiteo URL, PAT and share IDs.
 EOF
     then
       return 1
@@ -104,6 +179,14 @@ EOF
     chmod 600 "$refreshed_file" || { rm -f -- "$refreshed_file"; return 1; }
     mv -- "$refreshed_file" "$env_file" || { rm -f -- "$refreshed_file"; return 1; }
   fi
+
+  # Persist only the allowlisted Manul-owned Fiteo values needed by unattended
+  # poller/watchdog tasks. A pre-existing PAT remains when it is not in this
+  # shell; the operator's FITEO_PAT is removed above and never copied.
+  manul_env_persist_integration_values "$runtime_dir" "$env_file" || {
+    echo "ERROR: could not persist Manul-owned integration values." >&2
+    return 1
+  }
 
   chmod 600 "$env_file" || return 1
   if ! bash -n "$env_file" >/dev/null 2>&1; then
