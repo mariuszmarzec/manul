@@ -1152,6 +1152,14 @@ if isinstance(mcp, dict):
     if not mcp: config.pop("mcp", None)
 path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8")
 PY_REMOVE_MANUL_MCP
+    case "$1" in
+        manul-fiteo)
+            unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID
+            ;;
+        manul-todo-local)
+            unset TODO_LOCAL_MCP_URL TODO_LOCAL_MCP_AVAILABLE TODO_LOCAL_MCP_CONNECTED
+            ;;
+    esac
 }
 
 _opencode_mcp_is_connected() {
