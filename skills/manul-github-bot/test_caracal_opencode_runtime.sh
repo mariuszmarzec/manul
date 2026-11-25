@@ -54,7 +54,7 @@ printf 'resolve_live=%s\n' "${CARACAL_RESOLVE_LIVE:-unset}" >>"$MOCK_CARACAL_PRO
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   if [ "${MOCK_CARACAL_MODE:-connected}" = "connected" ]; then
     echo "caracal-rag connected"
-    echo "fiteo disconnected"
+    echo "manul-fiteo disconnected"
   else
     echo "caracal-rag disconnected"
   fi
@@ -62,9 +62,15 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
   exit 1
 fi
 if [ "${1:-}" = "run" ]; then
-  if [ "${CARACAL_MCP_URL:-}" != "http://127.0.0.1:3500/mcp" ] ||
-     [ "${CARACAL_ACCESS_TOKEN:-}" != "fixture-caracal-token" ]; then
-    echo "Caracal provider values did not reach the model process" >&2
+  printf '%s' "${OPENCODE_CONFIG_CONTENT:-}" >"${MOCK_CARACAL_PROOF_FILE}.overlay"
+  if [ "${MOCK_CARACAL_MODE:-connected}" = "connected" ]; then
+    if [ "${CARACAL_MCP_URL:-}" != "http://127.0.0.1:3500/mcp" ] ||
+       [ "${CARACAL_ACCESS_TOKEN:-}" != "fixture-caracal-token" ]; then
+      echo "Caracal provider values did not reach the model process" >&2
+      exit 66
+    fi
+  elif [ -n "${CARACAL_MCP_URL:-}" ] || [ -n "${CARACAL_ACCESS_TOKEN:-}" ]; then
+    echo "disabled Caracal credentials leaked into the model process" >&2
     exit 66
   fi
   printf '%s\n' '{"type":"text","timestamp":1,"sessionID":"ses-caracal","part":{"type":"text","text":"TASK_DONE caracal runtime verified"}}'
@@ -107,18 +113,35 @@ grep -Fq 'command=run' "$PROOF" || fail "adapter did not start the model after C
 pass "Manul refreshes Caracal provider env per task, verifies connection, and keeps credentials process-scoped"
 
 : >"$PROOF"
-out="$(run_adapter caracal-disconnected disconnected)" || true
-[ "$(printf '%s' "$out" | jq -r '.status')" = "FAILED" ] || fail "disconnected Caracal did not fail closed: $out"
-[ "$(printf '%s' "$out" | jq -r '.failure_code')" = "PRE_EXECUTION_FAILURE" ] || fail "disconnected Caracal failure code is missing: $out"
-! grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent started despite a disconnected mandatory Caracal MCP"
-pass "Manul blocks model startup when configured Caracal MCP is disconnected"
+out="$(run_adapter caracal-disconnected disconnected)"
+[ "$(printf '%s' "$out" | jq -r '.status')" = "COMPLETED" ] || fail "agent did not continue without disconnected Caracal: $out"
+[ "$(printf '%s' "$out" | jq -r '.failure_code // empty')" = "" ] || fail "disconnected optional Caracal left a failure code: $out"
+grep -Eq '^command=mcp list([[:space:]]|$)' "$PROOF" || fail "adapter did not perform OpenCode MCP reachability check"
+grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent did not start after Caracal was disabled"
+jq -e '.mcp.servers["caracal-rag"].disabled == true' "${PROOF}.overlay" >/dev/null || fail "Caracal was not disabled in task overlay"
+[ "$(grep -c '^token=<unset>$' "$PROOF")" -eq 1 ] || fail "Caracal token was not cleared before agent process"
+[ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_HASH" ] || fail "operator OpenCode config changed after disconnected preflight"
+pass "Manul disables disconnected Caracal only in task overlay and continues agent startup"
+
+: >"$PROOF"
+cat >"${TMP}/runtime/.env" <<'FITEO'
+FITEO_BASE_URL=http://127.0.0.1:4600
+FITEO_MANUL_PAT=fixture-fiteo-pat
+FITEO
+out="$(run_adapter manul-mcp-disconnected connected)"
+[ "$(printf '%s' "$out" | jq -r '.status')" = "COMPLETED" ] || fail "unreachable Manul MCP blocked agent startup: $out"
+grep -Eq '^command=mcp list([[:space:]]|$)' "$PROOF" || fail "adapter did not check generated MCP connectivity"
+grep -Eq '^command=run([[:space:]]|$)' "$PROOF" || fail "agent did not start after pruning unreachable Manul MCP"
+jq -e '.mcp.servers["manul-fiteo"] == null' "$PROOF.overlay" >/dev/null || fail "unreachable Manul Fiteo MCP was not removed from task overlay"
+! printf '%s' "$out" | grep -Fq 'fixture-fiteo-pat' || fail "Fiteo PAT leaked into adapter result"
+rm -f "${TMP}/runtime/.env"
+pass "Manul removes unreachable Manul-owned MCP entries without changing operator config"
 
 : >"$PROOF"
 mv "$PROVIDER" "$PROVIDER.disabled"
-out="$(run_adapter caracal-provider-missing connected)" || true
-[ "$(printf '%s' "$out" | jq -r '.status')" = "FAILED" ] || fail "missing Caracal provider did not fail: $out"
-[ "$(printf '%s' "$out" | jq -r '.failure_code')" = "PRE_EXECUTION_FAILURE" ] || fail "missing provider failure code is missing: $out"
-[ ! -s "$PROOF" ] || fail "OpenCode was invoked without the configured Caracal provider"
-pass "Manul fails with an actionable preflight error when the configured provider is missing"
-
-echo "Caracal OpenCode runtime tests: passed"
+out="$(run_adapter caracal-provider-missing provider-missing)" || true
+[ "$(printf '%s' "$out" | jq -r '.status')" = "COMPLETED" ] || fail "missing optional Caracal provider blocked agent startup: $out"
+[ "$(grep -c '^command=run([[:space:]]|$)' "$PROOF")" -eq 1 ] || fail "OpenCode should run without probing unavailable Caracal provider"
+jq -e '.mcp.servers["caracal-rag"].disabled == true' "$PROOF.overlay" >/dev/null || fail "missing Caracal provider did not disable it in task overlay"
+pass "Manul continues safely when configured Caracal provider is unavailable"
+echo "Caracal/OpenCode MCP preflight tests: passed"
