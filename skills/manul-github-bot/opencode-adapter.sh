@@ -1152,6 +1152,8 @@ if isinstance(mcp, dict):
     if not mcp: config.pop("mcp", None)
 path.write_text(json.dumps(config, separators=(",", ":")) + "\n", encoding="utf-8")
 PY_REMOVE_MANUL_MCP
+    local removal_status=$?
+    [ "$removal_status" -eq 0 ] || return "$removal_status"
     case "$1" in
         manul-fiteo)
             unset FITEO_BASE_URL FITEO_MANUL_PAT FITEO_MANUL_SHARE_USER_ID
@@ -1233,7 +1235,9 @@ if [ "$_mcp_probe_required" = "1" ]; then
                 _opencode_refresh_task_overlay
                 log "Removed unreachable Manul-managed MCP '$_manul_mcp_name' from task overlay"
             else
-                log "WARN: could not remove unreachable Manul-managed MCP '$_manul_mcp_name'; continuing without failing task"
+                jq -cn --arg task_id "$OPT_TASK_ID" --arg name "$_manul_mcp_name" \
+                    '{status:"FAILED",task_id:$task_id,exit_code:65,summary:("Unable to safely remove unreachable Manul-managed MCP from task overlay: " + $name),failure_code:"PRE_EXECUTION_FAILURE",diagnostics:{stage:"mcp_overlay_prune",agent_started:false}}'
+                exit 65
             fi
         fi
     done
