@@ -890,7 +890,7 @@ workspace_team_task_branch_name() {
 
   digest="$(printf '%s' "$conversation_id" | git hash-object --stdin 2>/dev/null)" || return 1
   [[ "$digest" =~ ^[0-9a-f]{40,64}$ ]] || return 1
-  printf 'feature/team-%s-%s\n' "$issue_number" "\${digest:0:12}"
+  printf 'feature/team-%s-%s\n' "$issue_number" "${digest:0:12}"
 }
 
 # Prepare the daemon-owned branch before a Team agent can write anything.
@@ -899,7 +899,7 @@ workspace_team_task_branch_name() {
 # across every parent wake/resume. It never resets or cleans a dirty checkout.
 workspace_prepare_team_task_branch() {
   local workdir="$1" branch="$2" base_branch="$3"
-  local workspace_root="\${4:-}" repository="\${5:-}"
+  local workspace_root="${4:-}" repository="${5:-}"
   [ -n "$workdir" ] && [ -n "$branch" ] && [ -n "$base_branch" ] || return 1
   git check-ref-format --branch "$branch" >/dev/null 2>&1 || return 1
   git check-ref-format --branch "$base_branch" >/dev/null 2>&1 || return 1
@@ -1029,7 +1029,7 @@ workspace_prepare_team_task_branch() {
   final_head="$(git -C "$workdir" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
   if [ "$current_branch" != "$branch" ] || [ -z "$final_head" ] ||
      ! git -C "$workdir" merge-base "$base_ref" "$final_head" >/dev/null 2>&1; then
-    echo "workspace_prepare_team_task_branch: final branch/base verification failed (branch=\${current_branch:-detached}, expected=$branch)" >&2
+    echo "workspace_prepare_team_task_branch: final branch/base verification failed (branch=${current_branch:-detached}, expected=$branch)" >&2
     return 1
   fi
   if ! workspace_sync_submodules "$workdir"; then
