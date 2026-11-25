@@ -1130,7 +1130,7 @@ git -C "$WORKDIR_TEAM_NOOP" push -q -u origin main
 TEAM_BRANCH_NOOP="feature/team-65-0123456789ab"
 git -C "$WORKDIR_TEAM_NOOP" checkout -qb "$TEAM_BRANCH_NOOP"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='TEAM_NOOP';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_NOOP','test/repo',65,'https://github.com/test/repo/issues/65#issuecomment-1065','user','test','Team workflow no-op','running',1,$,'TEAM');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_NOOP','test/repo',65,'https://github.com/test/repo/issues/65#issuecomment-1065','user','test','Team workflow no-op','running',1,$BASHPID,'TEAM');" 2>/dev/null
 TEAM_PR_COUNT_BEFORE="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
 STDOUT_FILE="$TEST_TMPDIR/stdout-team-noop.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
@@ -1169,7 +1169,7 @@ printf 'forbidden direct write\n' >>"$WORKDIR_TEAM_BASE/README.md"
 git -C "$WORKDIR_TEAM_BASE" add README.md
 git -C "$WORKDIR_TEAM_BASE" commit -qm "forbidden Team write on main"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='TEAM_BASE_GUARD';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_BASE_GUARD','test/repo',67,'https://github.com/test/repo/issues/67#issuecomment-1067','user','test','Team must not modify main','running',1,$,'TEAM');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_BASE_GUARD','test/repo',67,'https://github.com/test/repo/issues/67#issuecomment-1067','user','test','Team must not modify main','running',1,$BASHPID,'TEAM');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdout-team-base.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
@@ -1208,7 +1208,7 @@ git -C "$WORKDIR_TEAM_CODE" add implementation.txt
 git -C "$WORKDIR_TEAM_CODE" commit -qm "implement Team change"
 git -C "$WORKDIR_TEAM_CODE" push -q -u origin "$TEAM_BRANCH_CODE"
 sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='TEAM_CODE';" 2>/dev/null
-sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_CODE','test/repo',68,'https://github.com/test/repo/issues/68#issuecomment-1068','user','test','Team implementation change','running',1,$,'TEAM');" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_CODE','test/repo',68,'https://github.com/test/repo/issues/68#issuecomment-1068','user','test','Team implementation change','running',1,$BASHPID,'TEAM');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdout-team-code.txt"
 echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""
