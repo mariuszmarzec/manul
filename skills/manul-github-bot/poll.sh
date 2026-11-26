@@ -1344,10 +1344,70 @@ queue_normalized_source_task() {
   issue_number="$(sql_num "$issue_number")"
   issue_number="${issue_number:-0}"
   source_context="$(printf "%s" "$task_json" | jq -c '{execution:(.execution // {kind:"repository"}),metadata:(.metadata // {})}')"
-  if sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context,action) VALUES('$(sql_escape "$task_id")','$(sql_escape "$repo")',${issue_number},'$(sql_escape "$source_url")','task-source','','$(sql_escape "$normalized_prompt")','queued','$(sql_escape "$created")',NULL,NULL,'$(sql_escape "$source_conversation_id")','$(sql_escape "$task_id")','$(sql_escape "$source_type")','$(sql_escape "$source_id")','$(sql_escape "$source_url")','$(sql_escape "$title")','$(sql_escape "$updated")','$(sql_escape "$source_context")','$(sql_escape "$source_action")'); SELECT changes();" 2>>"$LOG" | tail -1 | grep -q "^1$"; then
-    NEW=$((NEW + 1))
-    log "queued task source $source_type:$source_id"
+
+  # Provider task IDs may change when their representation/fingerprint changes.
+  # Deduplicate the logical work target, not just the provider event ID. BEGIN
+  # IMMEDIATE serializes competing pollers before the active-task lookup, so
+  # two different sources cannot both enqueue work for the same repo/issue.
+  local source_dedup_id="$source_id"
+  case "$source_type" in
+    todo_local_mcp|todo_remote_mcp) source_dedup_id="${source_id%%@*}" ;;
+  esac
+  local safe_repo safe_source_type safe_source_dedup_id inserted_count insert_rc
+  safe_repo="$(sql_escape "$repo")"
+  safe_source_type="$(sql_escape "$source_type")"
+  safe_source_dedup_id="$(sql_escape "$source_dedup_id")"
+  inserted_count="$(sqlite3 -bail "$DB" <<SQL 2>>"$LOG"
+.timeout 5000
+BEGIN IMMEDIATE;
+INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context,action) SELECT '$(sql_escape "$task_id")','$safe_repo',${issue_number},'$(sql_escape "$source_url")','task-source','','$(sql_escape "$normalized_prompt")','queued','$(sql_escape "$created")',NULL,NULL,'$(sql_escape "$source_conversation_id")','$(sql_escape "$task_id")','$safe_source_type','$(sql_escape "$source_id")','$(sql_escape "$source_url")','$(sql_escape "$title")','$(sql_escape "$updated")','$(sql_escape "$source_context")','$(sql_escape "$source_action")'
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM processed_comments AS active
+  WHERE active.status IN ('queued','running','blocked_user','waiting_children','delivery_pending')
+    AND (
+      (
+        ${issue_number} > 0
+        AND '$safe_repo' != ''
+        AND lower(COALESCE(active.repository,'')) = lower('$safe_repo')
+        AND COALESCE(active.issueNumber,0) = ${issue_number}
+      )
+      OR (
+        '$safe_source_type' IN ('todo_local_mcp','todo_remote_mcp')
+        AND active.taskSourceType IN ('todo_local_mcp','todo_remote_mcp')
+        AND active.taskSourceType != '$safe_source_type'
+        AND (
+          CASE
+            WHEN instr(COALESCE(active.taskSourceId,''),'@') > 0
+              THEN substr(active.taskSourceId,1,instr(active.taskSourceId,'@')-1)
+            ELSE COALESCE(active.taskSourceId,'')
+          END
+        ) = '$safe_source_dedup_id'
+      )
+    )
+);
+SELECT changes();
+COMMIT;
+SQL
+)"
+  insert_rc=$?
+  if [ "$insert_rc" -ne 0 ]; then
+    log "ERROR: failed to atomically queue task source $source_type:$source_id (sqlite rc=$insert_rc)"
+    return 0
   fi
+  inserted_count="${inserted_count##*$'\n'}"
+  case "$inserted_count" in
+    1)
+      NEW=$((NEW + 1))
+      log "queued task source $source_type:$source_id"
+      ;;
+    0)
+      log "deduplicated task source $source_type:$source_id; an active task already owns this work target or source identity"
+      ;;
+    *)
+      log "ERROR: unexpected queue result for task source $source_type:$source_id (changes=${inserted_count:-empty})"
+      ;;
+  esac
 }
 poll_all_task_sources() {
   local source_json type task_json source_poll_json provider_output provider_rc candidate_count

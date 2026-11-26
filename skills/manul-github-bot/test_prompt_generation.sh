@@ -388,6 +388,10 @@ if assert_file_contains "completion forbidden with user decision" "$WORK/prompt.
 if assert_file_contains "generated prompt requires an explicit final completion marker" "$WORK/prompt.md" 'make the final assistant output exactly one line: `TASK_DONE` or `TASK_DONE <one-sentence summary>`'; then :; else :; fi
 if assert_file_contains "production prompt has mandatory completion-marker protocol" "$SCRIPT_DIR/manul-daemon.sh" "Completion-marker protocol (mandatory)"; then :; else :; fi
 if assert_file_contains "VERIFY tasks receive an explicit report-only boundary" "$SCRIPT_DIR/manul-daemon.sh" "This task was explicitly submitted as VERIFY or INVESTIGATE. It is a report-only task:"; then :; else :; fi
+if assert_file_contains "production prompt preserves VERIFY action across handoffs" "$SCRIPT_DIR/manul-daemon.sh" 'When `Task Action` is `VERIFY`:'; then :; else :; fi
+if assert_file_contains "production evaluator forces report-only mode for VERIFY" "$SCRIPT_DIR/manul-daemon.sh" 'if [ "$TASK_ACTION" = "VERIFY" ]; then DELIVERY_MODE="comment_only"; fi'; then :; else :; fi
+if assert_file_contains "orchestrator treats VERIFY as report-only" "$SCRIPT_DIR/orchestrator.prompt.md" '`VERIFY` means report-only work'; then :; else :; fi
+if assert_file_contains "canonical contract preserves VERIFY across retries and handoffs" "$SCRIPT_DIR/CONTRACTS.md" 'must remain `VERIFY` across retries'; then :; else :; fi
 if assert_file_contains "PR recovery refuses to create a duplicate branch or PR" "$SCRIPT_DIR/manul-daemon.sh" "Refusing to create a duplicate PR"; then :; else :; fi
 if assert_file_contains "standalone PR metadata contains a stable task id" "$SCRIPT_DIR/manul-daemon.sh" "manul-task:__COMMENT_ID__"; then :; else :; fi
 if assert_file_contains "retry prompt reuses a verified existing PR branch" "$SCRIPT_DIR/manul-daemon.sh" "resuming the existing PR #__TASK_PR_NUMBER__"; then :; else :; fi

@@ -186,6 +186,21 @@ without accepting a previous attempt's result or creating duplicate comments.
 
 Delivery mode is explicit. `VERIFY` tasks are report-only: successful execution, a verified non-empty result comment with the exact task/attempt marker, and an unchanged repository are sufficient; no branch, commit, or PR are required. `IMPLEMENT` tasks normally retain branch/commit/PR validation even when status or progress comments have been posted. The presence of a comment alone never selects report-only delivery.
 
+The persisted `Task Action` is an immutable execution contract from source
+normalization through completion. `VERIFY` must remain `VERIFY` across retries,
+runtime continuations, resumed prompts, and every handoff; the daemon must use
+the persisted action even if a caller supplies a conflicting generic delivery
+mode. Never infer or change the action from natural-language issue text.
+
+A `VERIFY` task is strictly read-only: it may inspect repositories and run
+read-only validation, but must not edit files, create or switch implementation
+branches, commit, push, create/update PRs, or hand work to an implementation
+agent. Report discovered fixes and recommend a separate `IMPLEMENT` task
+instead. A `VERIFY` task is complete only after successful read-only execution,
+an unchanged repository, and one independently verified non-empty result
+comment with the exact task/attempt marker. Only then may the daemon publish
+the terminal `TASK_DONE` lifecycle event.
+
 There is one narrowly-scoped informational exception for GitHub-sourced `IMPLEMENT` tasks: when the agent reports `TASK_DONE`, remains on the base/default branch, makes no repository changes, and publishes exactly one non-empty result comment carrying the exact current task/attempt marker, the task is accepted as comment-only delivery without a PR. The daemon first requires a non-empty current branch name, a valid current `HEAD`, and a resolvable initial commit baseline (detached HEAD is rejected), then checks repository cleanliness, verifies the marker, uniqueness, and meaningful user-facing body from the same comments read (or the already-confirmed marker-repair response), and sets a dedicated in-process `COMMENT_ONLY_DELIVERY` flag and emits the `IMPLEMENT_COMMENT_ONLY_DELIVERY` lifecycle event. Only this explicitly verified path skips PR-URL verification. A dirty base checkout, missing/stale/duplicate marker, empty result, or API uncertainty remains fail-closed; normal GitHub `IMPLEMENT` work still requires a verified PR and its canonical URL. This exception is separate from Todo `report_only` delivery and does not change the task's execution mode.
 
 The daemon may verify the final PR identity and repository cleanliness before accepting completion.
