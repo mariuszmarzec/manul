@@ -226,8 +226,8 @@ assert_eq "concurrent source pollers queue only one active task for the same rep
 # Completed history is retained but must not block a newly reopened work item.
 sqlite3 "$DB" "UPDATE processed_comments SET status='completed' WHERE lower(repository)=lower('owner/issues') AND issueNumber=77;"
 reopened_todo_task="$(jq -cn '{
-  taskSourceType:"todo_remote_mcp", taskSourceId:"task-77@fingerprint",
-  taskSourceUrl:"fiteo-todo://task/task-77@fingerprint",
+  taskSourceType:"todo_remote_mcp", taskSourceId:"77@fingerprint",
+  taskSourceUrl:"fiteo-todo://task/77@fingerprint",
   title:"Reopened shared target", body:"Reopened shared target", prompt:"Revisit shared target",
   createdAt:"2026-11-26T11:00:00Z", updatedAt:"2026-11-26T11:00:00Z",
   state:"OPEN", action:"IMPLEMENT",
