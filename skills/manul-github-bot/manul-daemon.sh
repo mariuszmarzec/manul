@@ -2689,7 +2689,7 @@ result_comment_body_has_content() {
   clean="$body"
   clean="${clean//"$marker"/}"
   clean="${clean//— manul 🐈/}"
-  clean="${clean//\\\\n/}"
+  clean="${clean//\\n/}"
   clean="$(printf '%s' "$clean" | tr -d '[:space:]')"
   [ -n "$clean" ]
 }
