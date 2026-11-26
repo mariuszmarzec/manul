@@ -1003,116 +1003,7 @@ export TODO_MCP_FIXTURE="$TEST_DIR/local-completed-report.json"
 LOCAL_COMPLETED_SOURCE="$(todo_source_local_config "$LOCAL_SOURCE")"
 local_completed_root="$(jq -c '.[0]' "$TODO_MCP_FIXTURE")"
 local_completed_id="503@$(todo_task_fingerprint "$local_completed_root")"
-local_completed_summary=
-# external-source comment. The parent share remains inherited; no child share
-# payload is added.
-cat > "$TEST_DIR/remote-update.json" <<'JSON'
-[
-  {"id":601,"ownerId":4,"description":"/manul Implement the remote service change","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
-]
-JSON
-export TODO_MCP_FIXTURE="$TEST_DIR/remote-update.json"
-REMOTE_UPDATE_SOURCE="$(todo_source_remote_config "$REMOTE_SOURCE")"
-remote_update_root="$(jq -c '.[0]' "$TODO_MCP_FIXTURE")"
-remote_update_id="601@$(todo_task_fingerprint "$remote_update_root")"
-remote_update_receipt="$(todo_task_publish_update "$REMOTE_UPDATE_SOURCE" todo_remote_mcp "$remote_update_id" failed $'Stage: task execution\n\nAgent failed while validating the implementation.')"
-remote_update_task_id="$(jq -r '.updateTaskId' <<<"$remote_update_receipt")"
-remote_update_description="$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")"
-assert_eq "remote failure update belongs to the source root" "601" "$(jq -r '.[0].subTasks[0].parentTaskId' "$TODO_MCP_FIXTURE")"
-assert_contains "remote failure update includes the reason" "$remote_update_description" "Agent failed while validating"
-assert_contains "remote failure update has a verifiable marker" "$(tail -n 1 <<<"$remote_update_description")" "status=failed"
-assert_eq "remote failure update remains OPEN" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "remote root stays OPEN after failure feedback" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "remote failure update preserves source identity" "0" "$(todo_task_still_current "$REMOTE_UPDATE_SOURCE" todo_remote_mcp "$remote_update_id"; echo $?)"
-remote_create_arguments="$(awk -F '\t' '$1 == "todo_create_task" {print $2; exit}' "$TODO_MCP_CALL_LOG")"
-printf '%s\n' "$remote_create_arguments" > "$TEST_DIR/remote-create-arguments.json"
-remote_create_has_shares="$(jq -r --arg field shares '.task | has($field)' "$TEST_DIR/remote-create-arguments.json")"
-assert_eq "remote update creation does not duplicate inherited parent shares" "false" "$remote_create_has_shares"
-: > "$TODO_MCP_CALL_LOG"
-remote_update_retry="$(todo_task_publish_update "$REMOTE_UPDATE_SOURCE" todo_remote_mcp "$remote_update_id" failed "A retry must reuse the verified child.")"
-assert_eq "remote failure update retry reuses its child" "$remote_update_task_id" "$(jq -r '.updateTaskId' <<<"$remote_update_retry")"
-assert_eq "remote failure update does not create a duplicate" "0" "$(grep -c '^todo_create_task' "$TODO_MCP_CALL_LOG" || true)"
-
-cat > "$TEST_DIR/local-update-create-failure.json" <<'JSON'
-[
-  {"id":502,"description":"/manul Implement local failure feedback","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
-]
-JSON
-export TODO_MCP_FIXTURE="$TEST_DIR/local-update-create-failure.json"
-failure_root="$(jq -c '.[0]' "$TODO_MCP_FIXTURE")"
-failure_source_id="502@$(todo_task_fingerprint "$failure_root")"
-export TODO_MCP_FAIL_CREATE=1
-local_update_failure_rc=0
-todo_task_publish_update "$LOCAL_UPDATE_SOURCE" todo_local_mcp "$failure_source_id" failed "Injected MCP create failure." >/dev/null 2>&1 || local_update_failure_rc=$?
-unset TODO_MCP_FAIL_CREATE
-assert_rc "local feedback creation failure is surfaced" "2" "$local_update_failure_rc"
-assert_eq "local feedback creation failure leaves root open" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "local feedback creation failure writes no fake child" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
-
-cat > "$TEST_DIR/remote-update-unreadable.json" <<'JSON'
-[
-  {"id":602,"ownerId":4,"description":"/manul Implement remote failure feedback","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[{"userId":"77","permission":"EDITOR_AND_VIEWER"}]}
-]
-JSON
-export TODO_MCP_FIXTURE="$TEST_DIR/remote-update-unreadable.json"
-unreadable_root="$(jq -c '.[0]' "$TODO_MCP_FIXTURE")"
-unreadable_source_id="602@$(todo_task_fingerprint "$unreadable_root")"
-export TODO_MCP_DROP_CHILD=1
-remote_update_unreadable_rc=0
-todo_task_publish_update "$REMOTE_UPDATE_SOURCE" todo_remote_mcp "$unreadable_source_id" failed "This update must be readable." >/dev/null 2>&1 || remote_update_unreadable_rc=$?
-unset TODO_MCP_DROP_CHILD
-assert_rc "remote feedback is rejected when the created child is absent from read-back" "1" "$remote_update_unreadable_rc"
-assert_eq "unreadable failure feedback does not complete the remote root" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
-assert_eq "unreadable failure feedback is not reported as a verified child" "0" "$(jq -r '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
-
-# Markdown remains compatible with the Todo UI renderer for multiline feedback.
-formatted_markdown="$(todo_task_markdown_format <<'MARKDOWN'
-## Summary
-First line
-Second line
-
-- one
-- two
-
-```kotlin
-val value = 1
-```
-MARKDOWN
-)"
-assert_contains "ordinary line breaks become hard Markdown breaks" "$formatted_markdown" $'First line  \nSecond line'
-assert_contains "Markdown list structure remains intact" "$formatted_markdown" $'- one  \n- two'
-assert_contains "fenced code block content is preserved" "$formatted_markdown" '```kotlin'
-assert_eq "single-line update text has no redundant trailing hard break" "Single-line status update." "$(printf '%s' 'Single-line status update.' | todo_task_markdown_format)"
-
-# ANSWER is a distinct no-repository task kind mapped to the audited operator-query runtime.
-agent_executor_source="$(cat "$SCRIPT_DIR/agent-executor.sh")"
-poll_source="$(cat "$SCRIPT_DIR/poll.sh")"
-assert_contains "agent executor maps ANSWER to tool-free operator_query" "$agent_executor_source" 'adapter_execution_kind="operator_query"'
-assert_contains "source poller accepts the explicit ANSWER action" "$poll_source" 'IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER|TEAM)'
-assert_contains "source poller accepts answer execution only for Todo and without a repository" "$poll_source" 'execution_kind" = "answer"'
-
-# Normal standalone operation must not need aicode to export helper paths.
-source "$SCRIPT_DIR/task-source.sh"
-SAVED_TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-}"
-SAVED_TODO_LOCAL_MCP_URL_HELPER="${TODO_LOCAL_MCP_URL_HELPER:-}"
-unset TODO_MCP_CLIENT TODO_LOCAL_MCP_URL_HELPER
-assert_eq "standalone poller resolves its bundled Todo MCP client by default" "$SCRIPT_DIR/todo-mcp-client.py" "$(task_source_todo_client_path)"
-assert_eq "standalone poller resolves its bundled endpoint resolver by default" "$SCRIPT_DIR/todo-local-mcp-url.sh" "$(task_source_todo_local_helper_path)"
-if task_source_shared_todo_client_available; then
-  ok "standalone poller finds the bundled MCP client without aicode"
-else
-  fail "standalone poller must find the bundled MCP client without aicode"
-fi
-if task_source_local_helper_available; then
-  ok "standalone poller finds the bundled endpoint resolver without aicode"
-else
-  fail "standalone poller must find the bundled endpoint resolver without aicode"
-fi
-TODO_MCP_CLIENT="$SAVED_TODO_MCP_CLIENT"
-TODO_LOCAL_MCP_URL_HELPER="$SAVED_TODO_LOCAL_MCP_URL_HELPER"
-echo "Results: $PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ]
-**Status:** COMPLETED\n\n**Wynik review:** REQUEST_CHANGES\n\nZnaleziono dwa problemy wymagające poprawy.'
+local_completed_summary="**Status:** COMPLETED - REQUEST_CHANGES - Found two review issues."
 local_completed_receipt="$(todo_task_publish_update "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id" completed "$local_completed_summary")"
 local_completed_child_id="$(jq -r '.updateTaskId' <<<"$local_completed_receipt")"
 local_completed_description="$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")"
@@ -1122,16 +1013,14 @@ assert_contains "completed report has a verifiable marker" "$local_completed_des
 assert_contains "completed report has a clear heading" "$local_completed_description" "Raport wykonania"
 assert_eq "completed report remains OPEN until tree completion" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
 assert_eq "completed report marker preserves the source fingerprint" "0" "$(todo_task_still_current "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id"; echo $?)"
-
 jq '.[0].subTasks[0].isToDo = false' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-completed-report-child-done.json"
 export TODO_MCP_FIXTURE="$TEST_DIR/local-completed-report-child-done.json"
-local_completed_retry="$(todo_task_publish_update "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id" completed "Retry must reuse the same report.")"
+local_completed_retry="$(todo_task_publish_update "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id" completed "$local_completed_summary")"
 assert_eq "completed report retry reuses the original child ID" "$local_completed_child_id" "$(jq -r '.updateTaskId' <<<"$local_completed_retry")"
 assert_eq "completed report retry creates no duplicate" "1" "$(jq '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
-
 jq '.[0].isToDo = false' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-completed-report-tree-done.json"
 export TODO_MCP_FIXTURE="$TEST_DIR/local-completed-report-tree-done.json"
-local_completed_final_retry="$(todo_task_publish_update "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id" completed "Retry after whole-tree completion.")"
+local_completed_final_retry="$(todo_task_publish_update "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id" completed "$local_completed_summary")"
 assert_eq "completed report retry succeeds after whole-tree completion" "$local_completed_child_id" "$(jq -r '.updateTaskId' <<<"$local_completed_final_retry")"
 
 # A terminal remote failure is also a verified OPEN child, not a suppressed
