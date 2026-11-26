@@ -1764,7 +1764,7 @@ MOCK
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id optional-mcp --prompt "$tmp/prompt" \
       --workspace "$workspace" --agent coder --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
-  assert_json_status "$out" "COMPLETED" "OpenCode starts with an optional Manul Fiteo MCP overlay"
+  assert_json_status "$out" "COMPLETED" "OpenCode starts with an optional Manul Fiteo MCP overlay" "$tmp/stderr"
   if [ "$(printf '%s' "$out" | jq -r '.status // empty')" != "COMPLETED" ] && [ -f "$trace_file" ]; then
     echo "  mock invocation trace:" >&2
     cat "$trace_file" >&2
@@ -1878,7 +1878,7 @@ MOCK
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id project-tool-rule --prompt "$tmp/prompt" \
       --workspace "$workspace" --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
-  assert_json_status "$out" "COMPLETED" "OpenCode preserves an existing project tool rule"
+  assert_json_status "$out" "COMPLETED" "OpenCode preserves an existing project tool rule" "$tmp/stderr"
   if [ "$(printf '%s' "$out" | jq -r '.status // empty')" != "COMPLETED" ] && [ -f "$trace_file" ]; then
     echo "  mock invocation trace:" >&2
     cat "$trace_file" >&2
@@ -1930,7 +1930,7 @@ MOCK
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id todo-local --prompt "$tmp/prompt" \
       --workspace "$workspace" --agent coder --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
-  assert_json_status "$out" "COMPLETED" "OpenCode runs when optional Todo local MCP is injected"
+  assert_json_status "$out" "COMPLETED" "OpenCode runs when optional Todo local MCP is injected" "$tmp/stderr"
   if [ "$(printf '%s' "$out" | jq -r '.status // empty')" != "COMPLETED" ] && [ -f "$trace_file" ]; then
     echo "  mock invocation trace:" >&2
     cat "$trace_file" >&2
