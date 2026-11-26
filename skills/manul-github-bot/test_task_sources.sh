@@ -218,8 +218,8 @@ queue_normalized_source_task "$race_github_task" &
 race_github_pid=$!
 queue_normalized_source_task "$race_jira_task" &
 race_jira_pid=$!
-wait "$race_github_pid" || fail "GitHub source enqueue worker exited successfully"
-wait "$race_jira_pid" || fail "Jira source enqueue worker exited successfully"
+wait "$race_github_pid" || fail "GitHub source enqueue worker failed"
+wait "$race_jira_pid" || fail "Jira source enqueue worker failed"
 race_active_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE lower(repository)=lower('owner/issues') AND issueNumber=77 AND status IN ('queued','running','blocked_user','waiting_children','delivery_pending');")"
 assert_eq "concurrent source pollers queue only one active task for the same repo/issue" "1" "$race_active_count"
 
