@@ -1360,14 +1360,8 @@ queue_normalized_source_task() {
   inserted_count="$(sqlite3 -bail "$DB" <<SQL 2>>"$LOG"
 .timeout 5000
 BEGIN IMMEDIATE;
-INSERT OR IGNORE INTO processed_comments(
-  commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,
-  heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,
-  taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context,action
-)
-SELECT
-  '$(sql_escape "$task_id")','$safe_repo',${issue_number},'$(sql_escape "$source_url")','task-source','','$(sql_escape "$normalized_prompt")','queued','$(sql_escape "$created")',NULL,NULL,
-  '$(sql_escape "$source_conversation_id")','$(sql_escape "$task_id")','$safe_source_type','$(sql_escape "$source_id")','$(sql_escape "$source_url")','$(sql_escape "$title")','$(sql_escape "$updated")','$(sql_escape "$source_context")','$(sql_escape "$source_action")'
+INSERT OR IGNORE INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,createdAt,heartbeatAt,leaseExpiresAt,conversationId,baseId,taskSourceType,taskSourceId,taskSourceUrl,taskSourceTitle,taskSourceUpdatedAt,context,action)
+SELECT '$(sql_escape "$task_id")','$safe_repo',${issue_number},'$(sql_escape "$source_url")','task-source','','$(sql_escape "$normalized_prompt")','queued','$(sql_escape "$created")',NULL,NULL,'$(sql_escape "$source_conversation_id")','$(sql_escape "$task_id")','$safe_source_type','$(sql_escape "$source_id")','$(sql_escape "$source_url")','$(sql_escape "$title")','$(sql_escape "$updated")','$(sql_escape "$source_context")','$(sql_escape "$source_action")'
 WHERE NOT EXISTS (
   SELECT 1
   FROM processed_comments AS active
