@@ -1046,7 +1046,11 @@ assert_eq "remote root stays OPEN after failure feedback" "true" "$(jq -r '.[0].
 assert_eq "remote failure update preserves source identity" "0" "$(todo_task_still_current "$REMOTE_UPDATE_SOURCE" todo_remote_mcp "$remote_update_id"; echo $?)"
 remote_create_arguments="$(awk -F '\t' '$1 == "todo_create_task" {print $2; exit}' "$TODO_MCP_CALL_LOG")"
 printf '%s\n' "$remote_create_arguments" > "$TEST_DIR/remote-create-arguments.json"
-remote_create_has_shares="$(jq -r --arg field shares '.task | has($field)' "$TEST_DIR/remote-create-arguments.json")"
+if [[ "$remote_create_arguments" == *'"shares":'* ]]; then
+  remote_create_has_shares=true
+else
+  remote_create_has_shares=false
+fi
 assert_eq "remote update creation does not duplicate inherited parent shares" "false" "$remote_create_has_shares"
 : > "$TODO_MCP_CALL_LOG"
 remote_update_retry="$(todo_task_publish_update "$REMOTE_UPDATE_SOURCE" todo_remote_mcp "$remote_update_id" failed "A retry must reuse the verified child.")"
