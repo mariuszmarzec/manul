@@ -211,6 +211,8 @@ test_placeholder_no_duplicates_on_repoll() {
     bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator >/dev/null 2>&1 || true
   local first
   first="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;")"
+  local first_messages
+  first_messages="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM conversation_messages;")"
 
   local result
   result="$(MANUL_DIR="$MANUL_DIR" TEST_DIR="$TEST_DIR" PATH="$MOCK_GH:$PATH" \
@@ -220,7 +222,10 @@ test_placeholder_no_duplicates_on_repoll() {
   assert_eq "$TEST_NAME (second poll new=0)" "0" "$new_count"
   local second
   second="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;")"
-  assert_eq "$TEST_NAME (count unchanged)" "$first" "$second"
+  assert_eq "$TEST_NAME (task count unchanged)" "$first" "$second"
+  local second_messages
+  second_messages="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM conversation_messages;")"
+  assert_eq "$TEST_NAME (history sync remains idempotent)" "$first_messages" "$second_messages"
 
   cleanup
   unset TEST_DIR
