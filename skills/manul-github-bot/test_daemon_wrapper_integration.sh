@@ -196,6 +196,18 @@ if [[ "$1" == "api" ]]; then
                         # Test Y: pushed commit with canonical PR URL and task marker.
                         json_output='[{"id":1064,"body":"<!-- manul-task:COMMENT_Y:attempt:1 -->\\nPR: https://github.com/test/repo/pull/999","in_reply_to_id":null}]'
                         ;;
+                    65)
+                        # Team no-op: a valid non-empty result comment, no PR.
+                        json_output='[{"id":1065,"body":"<!-- manul-task:TEAM_NOOP:attempt:1 -->\nTeam coordination and final QA completed without repository changes — manul 🐈","in_reply_to_id":null}]'
+                        ;;
+                    67)
+                        # Team base-branch mutation must be rejected.
+                        json_output='[{"id":1067,"body":"<!-- manul-task:TEAM_BASE_GUARD:attempt:1 -->\nUnexpected base-branch mutation detected — manul 🐈","in_reply_to_id":null}]'
+                        ;;
+                    68)
+                        # Team code change: the final receipt includes the concrete PR URL.
+                        json_output='[{"id":1068,"body":"<!-- manul-task:TEAM_CODE:attempt:1 -->\nImplementation delivered. PR: https://github.com/test/repo/pull/999 — manul 🐈","in_reply_to_id":null}]'
+                        ;;
                     *)
                         json_output='[]'
                         ;;
@@ -1097,6 +1109,184 @@ if ! printf '%s' "$FINAL_COMMENT" | grep -qi "permission policy"; then
   exit 1
 fi
 echo "[OK] Test V: permission failure stops after first block and reports remediation"
+
+# ─── Team branch lifecycle regressions ───────────────────────────────────────
+echo ""
+echo "=== Test TEAM-NOOP: daemon-prepared branch permits a verified no-op without an empty PR ==="
+WORKDIR_TEAM_NOOP="$TEST_TMPDIR/workdir-team-noop"
+ORIGIN_TEAM_NOOP="$TEST_TMPDIR/origin-team-noop.git"
+mkdir -p "$WORKDIR_TEAM_NOOP"
+git init -q "$WORKDIR_TEAM_NOOP"
+git -C "$WORKDIR_TEAM_NOOP" symbolic-ref HEAD refs/heads/main
+git -C "$WORKDIR_TEAM_NOOP" config user.email test@example.com
+git -C "$WORKDIR_TEAM_NOOP" config user.name test
+printf 'team base\n' >"$WORKDIR_TEAM_NOOP/README.md"
+git -C "$WORKDIR_TEAM_NOOP" add README.md
+git -C "$WORKDIR_TEAM_NOOP" commit -qm "team base"
+INITIAL_HEAD_TEAM_NOOP="$(git -C "$WORKDIR_TEAM_NOOP" rev-parse HEAD)"
+git init -q --bare "$ORIGIN_TEAM_NOOP"
+git -C "$WORKDIR_TEAM_NOOP" remote add origin "$ORIGIN_TEAM_NOOP"
+git -C "$WORKDIR_TEAM_NOOP" push -q -u origin main
+TEAM_BRANCH_NOOP="feature/team-65-0123456789ab"
+git -C "$WORKDIR_TEAM_NOOP" checkout -qb "$TEAM_BRANCH_NOOP"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='TEAM_NOOP';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_NOOP','test/repo',65,'https://github.com/test/repo/issues/65#issuecomment-1065','user','test','Team workflow no-op','running',1,$BASHPID,'TEAM');" 2>/dev/null
+TEAM_PR_COUNT_BEFORE="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
+STDOUT_FILE="$TEST_TMPDIR/stdout-team-noop.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+TASK_ACTION="TEAM"
+DEFAULT_BRANCH="main"
+evaluate_task_completion "test/repo" "65" "TEAM_NOOP" "TEAM_NOOP" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_NOOP" "" "$INITIAL_HEAD_TEAM_NOOP" "$TEAM_BRANCH_NOOP" "main" "" "" "" "" "implementation" "" "repository" "$TEAM_BRANCH_NOOP" "$TASK_ACTION"
+TEAM_PR_COUNT_AFTER="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
+if [ "$COMPLETION_SUCCESS" != "true" ] || [ "$TEAM_PR_COUNT_AFTER" != "$TEAM_PR_COUNT_BEFORE" ]; then
+  echo "FAIL: verified Team no-op should complete without creating an empty PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
+  tail -n 70 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+if ! grep -q "skipping PR URL verification for verified comment-only delivery" "$LOG_FILE"; then
+  echo "FAIL: verified Team no-op did not use the comment-only result path" >&2
+  tail -n 70 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+echo "[OK] Team no-op is accepted on its reserved branch with no empty PR"
+
+echo ""
+echo "=== Test TEAM-TODO-NOOP: Todo Team no-op completes without a GitHub issue comment ==="
+# Keep the provider boundary hermetic while asserting the exact completion
+# request made by the production evaluator.
+TODO_COMPLETION_RECEIPT="$TEST_TMPDIR/todo-completion-receipt.txt"
+TASK_SOURCE_ID="116715"
+task_source_complete() {
+  [ "$2" = "todo_remote_mcp" ] && [ "$3" = "$TASK_SOURCE_ID" ] || return 1
+  printf '%s|%s\n' "$2" "$3" >"$TODO_COMPLETION_RECEIPT"
+  return 0
+}
+WORKDIR_TEAM_TODO="$TEST_TMPDIR/workdir-team-todo"
+ORIGIN_TEAM_TODO="$TEST_TMPDIR/origin-team-todo.git"
+mkdir -p "$WORKDIR_TEAM_TODO"
+git init -q "$WORKDIR_TEAM_TODO"
+git -C "$WORKDIR_TEAM_TODO" symbolic-ref HEAD refs/heads/main
+git -C "$WORKDIR_TEAM_TODO" config user.email test@example.com
+git -C "$WORKDIR_TEAM_TODO" config user.name test
+printf 'Todo Team base\n' >"$WORKDIR_TEAM_TODO/README.md"
+git -C "$WORKDIR_TEAM_TODO" add README.md
+git -C "$WORKDIR_TEAM_TODO" commit -qm "Todo Team base"
+INITIAL_HEAD_TEAM_TODO="$(git -C "$WORKDIR_TEAM_TODO" rev-parse HEAD)"
+git init -q --bare "$ORIGIN_TEAM_TODO"
+git -C "$WORKDIR_TEAM_TODO" remote add origin "$ORIGIN_TEAM_TODO"
+git -C "$WORKDIR_TEAM_TODO" push -q -u origin main
+TEAM_BRANCH_TODO="feature/team-0123456789ab"
+git -C "$WORKDIR_TEAM_TODO" checkout -qb "$TEAM_BRANCH_TODO"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='TEAM_TODO_NOOP';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_TODO_NOOP','test/repo',0,'fiteo-todo://task/116715','user','test','Todo Team no-op','running',1,$BASHPID,'TEAM');" 2>/dev/null
+TEAM_PR_COUNT_BEFORE="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
+STDOUT_FILE="$TEST_TMPDIR/stdout-team-todo-noop.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+TASK_ACTION="TEAM"
+DEFAULT_BRANCH="main"
+evaluate_task_completion "test/repo" "0" "TEAM_TODO_NOOP" "TEAM_TODO_NOOP" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_TODO" "" "$INITIAL_HEAD_TEAM_TODO" "$TEAM_BRANCH_TODO" "main" "" "" "" "" "implementation" "todo_remote_mcp" "repository" "$TEAM_BRANCH_TODO" "$TASK_ACTION"
+TEAM_PR_COUNT_AFTER="$(wc -l <"$FAKE_GH_STATE" | tr -d ' ')"
+if [ "$COMPLETION_SUCCESS" != "true" ] || [ "$TEAM_PR_COUNT_AFTER" != "$TEAM_PR_COUNT_BEFORE" ]; then
+  echo "FAIL: Todo Team no-op should complete without a GitHub comment or empty PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
+  tail -n 70 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+if [ "$(cat "$TODO_COMPLETION_RECEIPT" 2>/dev/null || true)" != "todo_remote_mcp|116715" ]; then
+  echo "FAIL: Todo Team no-op did not complete the expected source task" >&2
+  cat "$LOG_FILE" >&2
+  exit 1
+fi
+echo "[OK] Todo Team no-op completes through its provider path without an empty PR"
+
+
+echo ""
+echo "=== Test TEAM-BASE-GUARD: Team writes on main are rejected ==="
+WORKDIR_TEAM_BASE="$TEST_TMPDIR/workdir-team-base"
+ORIGIN_TEAM_BASE="$TEST_TMPDIR/origin-team-base.git"
+mkdir -p "$WORKDIR_TEAM_BASE"
+git init -q "$WORKDIR_TEAM_BASE"
+git -C "$WORKDIR_TEAM_BASE" symbolic-ref HEAD refs/heads/main
+git -C "$WORKDIR_TEAM_BASE" config user.email test@example.com
+git -C "$WORKDIR_TEAM_BASE" config user.name test
+printf 'team base guard\n' >"$WORKDIR_TEAM_BASE/README.md"
+git -C "$WORKDIR_TEAM_BASE" add README.md
+git -C "$WORKDIR_TEAM_BASE" commit -qm "team base guard"
+INITIAL_HEAD_TEAM_BASE="$(git -C "$WORKDIR_TEAM_BASE" rev-parse HEAD)"
+git init -q --bare "$ORIGIN_TEAM_BASE"
+git -C "$WORKDIR_TEAM_BASE" remote add origin "$ORIGIN_TEAM_BASE"
+git -C "$WORKDIR_TEAM_BASE" push -q -u origin main
+printf 'forbidden direct write\n' >>"$WORKDIR_TEAM_BASE/README.md"
+git -C "$WORKDIR_TEAM_BASE" add README.md
+git -C "$WORKDIR_TEAM_BASE" commit -qm "forbidden Team write on main"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='TEAM_BASE_GUARD';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_BASE_GUARD','test/repo',67,'https://github.com/test/repo/issues/67#issuecomment-1067','user','test','Team must not modify main','running',1,$BASHPID,'TEAM');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdout-team-base.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+TASK_ACTION="TEAM"
+evaluate_task_completion "test/repo" "67" "TEAM_BASE_GUARD" "TEAM_BASE_GUARD" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_BASE" "" "$INITIAL_HEAD_TEAM_BASE" "main" "main" "" "" "" "" "implementation" "" "repository" "feature/team-67-0123456789ab" "$TASK_ACTION"
+if [ "$COMPLETION_SUCCESS" = "true" ] || ! printf '%s' "$FAIL_REASON" | grep -q "base/default branch"; then
+  echo "FAIL: Team changed main but was not rejected (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
+  tail -n 70 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+echo "[OK] Team completion rejects writes that landed on main"
+
+echo ""
+echo "=== Test TEAM-CODE: code-changing Team work still requires a real PR ==="
+WORKDIR_TEAM_CODE="$TEST_TMPDIR/workdir-team-code"
+ORIGIN_TEAM_CODE="$TEST_TMPDIR/origin-team-code.git"
+mkdir -p "$WORKDIR_TEAM_CODE"
+git init -q "$WORKDIR_TEAM_CODE"
+git -C "$WORKDIR_TEAM_CODE" symbolic-ref HEAD refs/heads/main
+git -C "$WORKDIR_TEAM_CODE" config user.email test@example.com
+git -C "$WORKDIR_TEAM_CODE" config user.name test
+printf 'team implementation base\n' >"$WORKDIR_TEAM_CODE/README.md"
+git -C "$WORKDIR_TEAM_CODE" add README.md
+git -C "$WORKDIR_TEAM_CODE" commit -qm "team implementation base"
+INITIAL_HEAD_TEAM_CODE="$(git -C "$WORKDIR_TEAM_CODE" rev-parse HEAD)"
+git init -q --bare "$ORIGIN_TEAM_CODE"
+git -C "$WORKDIR_TEAM_CODE" remote add origin "$ORIGIN_TEAM_CODE"
+git -C "$WORKDIR_TEAM_CODE" push -q -u origin main
+TEAM_BRANCH_CODE="feature/team-68-0123456789ab"
+git -C "$WORKDIR_TEAM_CODE" checkout -qb "$TEAM_BRANCH_CODE"
+printf 'Team implementation change\n' >"$WORKDIR_TEAM_CODE/implementation.txt"
+git -C "$WORKDIR_TEAM_CODE" add implementation.txt
+git -C "$WORKDIR_TEAM_CODE" commit -qm "implement Team change"
+git -C "$WORKDIR_TEAM_CODE" push -q -u origin "$TEAM_BRANCH_CODE"
+sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='TEAM_CODE';" 2>/dev/null
+sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('TEAM_CODE','test/repo',68,'https://github.com/test/repo/issues/68#issuecomment-1068','user','test','Team implementation change','running',1,$BASHPID,'TEAM');" 2>/dev/null
+STDOUT_FILE="$TEST_TMPDIR/stdout-team-code.txt"
+echo "TASK_DONE" >"$STDOUT_FILE"
+COMPLETION_SUCCESS=""
+FINAL_COMMENT=""
+FAIL_REASON=""
+FAILURE_CODE=""
+TASK_ACTION="TEAM"
+DEFAULT_BRANCH="main"
+evaluate_task_completion "test/repo" "68" "TEAM_CODE" "TEAM_CODE" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_TEAM_CODE" "" "$INITIAL_HEAD_TEAM_CODE" "$TEAM_BRANCH_CODE" "main" "" "" "" "" "implementation" "" "repository" "$TEAM_BRANCH_CODE" "$TASK_ACTION"
+if [ "$COMPLETION_SUCCESS" != "true" ] || [ -z "$(sqlite3 "$DB" "SELECT COALESCE(prUrl,'') FROM processed_comments WHERE commentId='TEAM_CODE';" 2>/dev/null)" ]; then
+  echo "FAIL: code-changing Team task should be delivered through a verified PR (success=$COMPLETION_SUCCESS reason=$FAIL_REASON)" >&2
+  tail -n 80 "$LOG_FILE" >&2 || true
+  exit 1
+fi
+if ! grep -q "$TEAM_BRANCH_CODE main" "$FAKE_GH_STATE"; then
+  echo "FAIL: Team task PR was not created against main on its stable task branch" >&2
+  cat "$FAKE_GH_STATE" >&2
+  exit 1
+fi
+echo "[OK] code-changing Team work still requires and verifies a real PR"
 
 # ─── SUMMARY ──────────────────────────────────────────────────────────────────
 echo ""

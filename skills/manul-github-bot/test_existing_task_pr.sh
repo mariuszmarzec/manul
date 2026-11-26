@@ -369,7 +369,7 @@ fi
 # Assert that the real IMPLEMENT evaluator preserves strict PR validation,
 # while routing only the verified comment-only exception through its dedicated
 # finalization gate.
-evaluator_block="$(grep -F -A 95 'elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]' "$SCRIPT_DIR/manul-daemon.sh")"
+evaluator_block="$(grep -F -A 220 'if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]' "$SCRIPT_DIR/manul-daemon.sh")"
 grep -q 'verify_existing_task_pr' <<<"$evaluator_block"
 grep -Fq '[[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]' <<<"$evaluator_block"
 grep -q 'verify_merged_result_pr' <<<"$evaluator_block"
@@ -545,5 +545,58 @@ verify_required_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" || second_rc=$?
 [ "$(cat "$PUSH_COUNT_FILE")" = "1" ] || { echo "FAIL: retry re-pushed a branch already accepted by origin" >&2; exit 1; }
 jq -e 'length == 1 and .[0].headRefName == "feature/task-pr-ambiguous-create"' "$FAKE_GH_PR_LIST" >/dev/null
 echo "PASS: retry after accepted-but-client-error push/PR reuses remote branch and existing PR without duplicates"
+
+# Team resumes can start under a new issue-comment task ID. The stable branch
+# derived from the logical conversation is therefore an explicit PR correlation
+# signal; its head and base still have to match GitHub exactly.
+TEAM_BRANCH="feature/team-82-abcdef123456"
+"$REAL_GIT" -C "$WORKDIR" push -q origin "$PR_HEAD_SHA:refs/heads/$TEAM_BRANCH"
+jq -cn --arg url "https://github.com/test/repo/pull/82" \
+  --arg branch "$TEAM_BRANCH" --arg sha "$PR_HEAD_SHA" \
+  '[{number:82,url:$url,state:"OPEN",baseRefName:"main",headRefName:$branch,body:"Team workflow checkpoint",headRefOid:$sha}]' \
+  >"$FAKE_GH_PR_LIST"
+VERIFIED_EXISTING_PR_BRANCH=""
+VERIFIED_EXISTING_PR_URL=""
+if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" "$TEAM_BRANCH"; then
+  if [ "$VERIFIED_EXISTING_PR_BRANCH" != "$TEAM_BRANCH" ]; then
+    echo "FAIL: Team PR branch mismatch (expected=$TEAM_BRANCH actual=$VERIFIED_EXISTING_PR_BRANCH)" >&2
+    exit 1
+  fi
+  if [ "$VERIFIED_EXISTING_PR_URL" != "https://github.com/test/repo/pull/82" ]; then
+    echo "FAIL: Team PR URL mismatch (expected=https://github.com/test/repo/pull/82 actual=$VERIFIED_EXISTING_PR_URL)" >&2
+    exit 1
+  fi
+  echo "PASS: resumes the existing PR by the stable Team conversation branch"
+else
+  echo "FAIL: did not recover the existing PR from its stable Team branch" >&2
+  exit 1
+fi
+
+# A stable Team PR's verified GitHub base is authoritative even when the
+# repository's preferred base changed after that PR was created.
+"$REAL_GIT" -C "$WORKDIR" push -q origin "$INITIAL_BASE_SHA:refs/heads/develop"
+jq -cn --arg url "https://github.com/test/repo/pull/83" \
+  --arg branch "$TEAM_BRANCH" --arg sha "$PR_HEAD_SHA" \
+  '[{number:83,url:$url,state:"OPEN",baseRefName:"develop",headRefName:$branch,body:"Team workflow checkpoint",headRefOid:$sha}]' \
+  >"$FAKE_GH_PR_LIST"
+VERIFIED_EXISTING_PR_BRANCH=""
+VERIFIED_EXISTING_PR_URL=""
+VERIFIED_EXISTING_PR_BASE=""
+if verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" "$TEAM_BRANCH"; then
+  [ "$VERIFIED_EXISTING_PR_BRANCH" = "$TEAM_BRANCH" ]
+  [ "$VERIFIED_EXISTING_PR_BASE" = "develop" ]
+  echo "PASS: exact stable Team PR retains its GitHub-verified base after policy changes"
+else
+  echo "FAIL: stable Team PR with its previously selected base was not recovered" >&2
+  exit 1
+fi
+
+wrong_team_branch_rc=0
+verify_existing_task_pr "test/repo" "$CURRENT_TASK" "$WORKDIR" "main" "false" "feature/team-82-wrongbranch" || wrong_team_branch_rc=$?
+[ "$wrong_team_branch_rc" -eq 1 ] || {
+  echo "FAIL: expected a nonmatching Team branch to produce no PR candidate (rc=$wrong_team_branch_rc)" >&2
+  exit 1
+}
+echo "PASS: rejects an unrelated branch when recovering a Team PR"
 
 echo "All existing-task PR regression tests passed."

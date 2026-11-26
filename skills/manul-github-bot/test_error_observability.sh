@@ -200,12 +200,13 @@ test_pre_execution_failure_budget_wiring() {
   local preflight_line dispatch_line completion_line
 
   if ! grep -Fq 'failure_code:"PRE_EXECUTION_FAILURE"' "$adapter" ||
-     ! grep -Fq '_mcp_preflight_stage="caracal_mcp_preflight"' "$adapter" ||
-     ! grep -Fq 'agent_started:false' "$adapter"; then
-    fail "OpenCode Caracal preflight result lacks a structured pre-execution failure code"
+     ! grep -Fq '_opencode_mcp_is_connected()' "$adapter" ||
+     ! grep -Fq 'diagnostics:{stage:"caracal_mcp_preflight",agent_started:false}' "$adapter" ||
+     ! grep -Fq 'diagnostics:{stage:"mcp_overlay_prune",agent_started:false}' "$adapter"; then
+    fail "OpenCode MCP preflight cannot fail closed with a structured pre-execution failure"
     return
   fi
-  pass "OpenCode Caracal preflight reports a structured pre-execution failure"
+  pass "OpenCode Caracal and Manul MCP preflight failures are structured and fail closed"
 
   preflight_line="$(grep -nF 'if [ "$exec_failure_code" = "PRE_EXECUTION_FAILURE" ]; then' "$daemon" | head -n 1 | cut -d: -f1)"
   dispatch_line="$(grep -nF 'handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN"' "$daemon" | tail -n 1 | cut -d: -f1)"

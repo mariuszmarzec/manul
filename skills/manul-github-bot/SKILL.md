@@ -257,6 +257,8 @@ Manul execution workspaces. Every independently executable work item must be
 a separate root task to receive its own Manul workspace. Nested Todo subtasks
 remain ordered steps within one task and do not create separate executions.
 
+The Team parent is assigned one stable, daemon-prepared task branch before the Orchestrator starts. The branch is derived from the logical conversation identity, not from an individual wake comment or attempt, and is reused across child-completion wakeups and `/manul team resume`. The daemon must verify the checked-out branch before agent startup; the Orchestrator must keep all parent-level repository changes on that branch. If a verified PR already exists for the stable branch, resume that PR head instead of creating another branch or PR. A Team parent that makes no repository changes may finish with a verified non-empty result comment without creating an empty PR; any committed repository changes still require the normal verified PR delivery.
+
 The parent is event-driven, not a barrier over the full child set. When one
 logical work item reaches a terminal state across its tracker references, the
 coordinator wakes the parent even if sibling tasks are still running. Multiple

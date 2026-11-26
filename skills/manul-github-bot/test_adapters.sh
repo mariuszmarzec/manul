@@ -74,13 +74,30 @@ run_test() {
 }
 
 assert_json_status() {
-  local json="$1" expected="$2" label="$3"
-  local actual
+  local json="$1" expected="$2" label="$3" adapter_stderr_file="${4:-}"
+  local actual raw_log raw_stderr
   actual="$(printf '%s' "$json" | jq -r '.status // empty' 2>/dev/null || true)"
   if [ "$actual" = "$expected" ]; then
     ok "$label"
   else
     fail "$label (status=$actual output=$json)"
+    # Preserve the useful runtime evidence before the per-test temp directory
+    # is removed by its RETURN trap. The adapter already redacts persisted
+    # stderr; keep this diagnostic bounded so CI failures stay readable.
+    raw_log="$(printf '%s' "$json" | jq -r '.diagnostics.raw_log // empty' 2>/dev/null || true)"
+    raw_stderr="$(printf '%s' "$json" | jq -r '.diagnostics.raw_stderr // empty' 2>/dev/null || true)"
+    if [ -n "$adapter_stderr_file" ] && [ -f "$adapter_stderr_file" ]; then
+      echo "  adapter stderr tail ($adapter_stderr_file):" >&2
+      tail -n 60 "$adapter_stderr_file" >&2
+    fi
+    if [ -n "$raw_log" ] && [ -f "$raw_log" ]; then
+      echo "  runtime JSONL tail ($raw_log):" >&2
+      tail -n 40 "$raw_log" >&2
+    fi
+    if [ -n "$raw_stderr" ] && [ -f "$raw_stderr" ]; then
+      echo "  runtime stderr tail ($raw_stderr):" >&2
+      tail -n 40 "$raw_stderr" >&2
+    fi
   fi
 }
 
@@ -1701,10 +1718,11 @@ MOCK
 # ---------------------------------------------------------------------------
 # 10b. Optional Fiteo MCP uses a unique namespace and never gates execution
 test_opencode_optional_mcp_overlay() {
-  local tmp home workspace global_config before_hash out rc
+  local tmp home workspace global_config before_hash out rc trace_file
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   home="$tmp/home"
+  trace_file="$tmp/mock.trace"
   workspace="$home/.manul/workspace/ws-overlay"
   mkdir -p "$tmp/bin" "$home/.config/opencode" "$home/.manul" "$workspace"
   global_config="$home/.config/opencode/opencode.jsonc"
@@ -1724,6 +1742,11 @@ ENV
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+printf 'TRACE start %s\\n' "$*" >> "$MOCK_TRACE_FILE"
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'manul-fiteo connected'
+  exit 0
+fi
 [ "${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.jsonc" ] || exit 65
 jq -e '
   .mcp.servers["manul-fiteo"].type == "remote"
@@ -1741,11 +1764,15 @@ MOCK
   chmod +x "$tmp/bin/opencode"
   printf '%s\n' "Use Fiteo only if available" >"$tmp/prompt"
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCODE_CONFIG="$global_config" \
-    MOCK_OVERLAY_CHECK="$tmp/overlay-checked" MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" AGENT_RUNTIME=opencode \
+    MOCK_OVERLAY_CHECK="$tmp/overlay-checked" MOCK_TRACE_FILE="$trace_file" MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id optional-mcp --prompt "$tmp/prompt" \
       --workspace "$workspace" --agent coder --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
-  assert_json_status "$out" "COMPLETED" "OpenCode starts with an optional Manul Fiteo MCP overlay"
+  assert_json_status "$out" "COMPLETED" "OpenCode starts with an optional Manul Fiteo MCP overlay" "$tmp/stderr"
+  if [ "$(printf '%s' "$out" | jq -r '.status // empty')" != "COMPLETED" ] && [ -f "$trace_file" ]; then
+    echo "  mock invocation trace:" >&2
+    cat "$trace_file" >&2
+  fi
   [ -f "$tmp/overlay-checked" ] && ok "Manul Fiteo MCP uses its reserved unique server name" || fail "Manul Fiteo overlay was not passed to OpenCode"
   [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] \
     && ok "OpenCode adapter preserves operator JSONC" || fail "OpenCode adapter changed operator JSONC"
@@ -1811,10 +1838,11 @@ MOCK
 
 # A project tool rule that matches the native Fiteo MCP tool must not be shadowed.
 test_opencode_preserves_project_tool_rule() {
-  local tmp home workspace project global_config project_config before_hash out
+  local tmp home workspace project global_config project_config before_hash out trace_file
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   home="$tmp/home"
+  trace_file="$tmp/mock.trace"
   workspace="$home/.manul/workspace/ws-project-tool-rule"
   project="$workspace/repos/example/project"
   mkdir -p "$tmp/bin" "$home/.config/opencode" "$home/.manul" "$project/.opencode"
@@ -1836,6 +1864,11 @@ ENV
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+printf 'TRACE start %s\\n' "$*" >> "$MOCK_TRACE_FILE"
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'manul-fiteo connected'
+  exit 0
+fi
 jq -e '
   .mcp.servers["manul-fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
   and .tools["manul_fiteo_*"] == null
@@ -1849,11 +1882,15 @@ MOCK
     OPENCODE_CONFIG="$global_config" \
     MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" \
     MANUL_TASK_WORKSPACE_ROOT="$workspace" MANUL_TASK_WORKDIR="$project" \
-    AGENT_RUNTIME=opencode \
+    MOCK_TRACE_FILE="$trace_file" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id project-tool-rule --prompt "$tmp/prompt" \
       --workspace "$workspace" --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
-  assert_json_status "$out" "COMPLETED" "OpenCode preserves an existing project tool rule"
+  assert_json_status "$out" "COMPLETED" "OpenCode preserves an existing project tool rule" "$tmp/stderr"
+  if [ "$(printf '%s' "$out" | jq -r '.status // empty')" != "COMPLETED" ] && [ -f "$trace_file" ]; then
+    echo "  mock invocation trace:" >&2
+    cat "$trace_file" >&2
+  fi
   [ "$(sha256sum "$project_config" | awk '{print $1}')" = "$before_hash" ] \
     && ok "Project tool denial remains byte-identical" \
     || fail "Manul changed the project-owned tool rule"
@@ -1861,10 +1898,11 @@ MOCK
 
 # 10c. Local Todo MCP is optional and uses the helper exported by aicode.
 test_opencode_todo_local_mcp() {
-  local tmp home workspace global_config before_hash out
+  local tmp home workspace global_config before_hash out trace_file
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   home="$tmp/home"; workspace="$home/.manul/workspace/ws-todo"
+  trace_file="$tmp/mock.trace"
   mkdir -p "$tmp/bin" "$home/.config/opencode" "$home/.manul" "$workspace" "$tmp/shared"
   global_config="$home/.config/opencode/opencode.json"
   cat >"$global_config" <<'JSON'
@@ -1878,6 +1916,11 @@ HELPER
   cat >"$tmp/bin/opencode" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+printf 'TRACE start %s\\n' "$*" >> "$MOCK_TRACE_FILE"
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'manul-todo-local connected'
+  exit 0
+fi
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   printf '%s\n' '[{"id":"coder"}]'
   exit 0
@@ -1895,11 +1938,15 @@ MOCK
   echo "Use local Todo" >"$tmp/prompt"
   out="$(HOME="$home" PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" OPENCODE_CONFIG="$global_config" \
     TODO_MCP_CLIENT="$tmp/shared/todo-mcp-client.py" TODO_LOCAL_MCP_URL_HELPER="$tmp/shared/todo-local-mcp-url.sh" \
-    MOCK_OVERLAY_CHECK="$tmp/overlay-checked" MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" AGENT_RUNTIME=opencode \
+    MOCK_OVERLAY_CHECK="$tmp/overlay-checked" MOCK_TRACE_FILE="$trace_file" MANUL_DIR="$home/.manul" MANUL_WORKSPACE="$home/.manul/workspace" AGENT_RUNTIME=opencode \
     bash "$SCRIPT_DIR/opencode-adapter.sh" --task-id todo-local --prompt "$tmp/prompt" \
       --workspace "$workspace" --agent coder --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/stdout" --stderr-file "$tmp/stderr" 2>/dev/null)"
-  assert_json_status "$out" "COMPLETED" "OpenCode runs when optional Todo local MCP is injected"
+  assert_json_status "$out" "COMPLETED" "OpenCode runs when optional Todo local MCP is injected" "$tmp/stderr"
+  if [ "$(printf '%s' "$out" | jq -r '.status // empty')" != "COMPLETED" ] && [ -f "$trace_file" ]; then
+    echo "  mock invocation trace:" >&2
+    cat "$trace_file" >&2
+  fi
   [ -f "$tmp/overlay-checked" ] && ok "Manul local Todo MCP is exposed through its unique namespace" || fail "Manul Todo overlay missing"
   [ "$(sha256sum "$global_config" | awk '{print $1}')" = "$before_hash" ] \
     && ok "Operator todo-local MCP entry remains untouched" || fail "Operator todo-local MCP entry changed"

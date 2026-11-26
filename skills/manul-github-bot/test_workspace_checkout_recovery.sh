@@ -46,6 +46,7 @@ git -C "$SEED" add README.md
 git -C "$SEED" commit -qm "main base"
 git -C "$SEED" remote add origin "$REMOTE"
 git -C "$SEED" push -q -u origin main
+git -C "$SEED" push -q origin main:develop
 
 # The primary repository includes a local-only submodule. Every workspace
 # checkout and every branch-specific recovery must initialize its exact
@@ -128,5 +129,73 @@ check "PR recovery initializes its submodule" assert_file "$PR_CHECKOUT/shared-u
 PR_BACKUP="$(find "$PR_ROOT/tmp/checkout-recovery" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 check "PR old checkout is preserved outside active checkout" assert_file "$PR_BACKUP/feature-only.txt"
 check "PR replacement is clean" assert_clean "$PR_CHECKOUT"
+
+# Team parent branch identity is derived from the stable logical conversation,
+# so new wake comments and execution attempts resolve to the same branch.
+TEAM_CONTEXT="github_issues:test-owner/primary#82"
+TEAM_BRANCH="$(workspace_team_task_branch_name "$TEAM_CONTEXT")"
+TEAM_BRANCH_AGAIN="$(workspace_team_task_branch_name "$TEAM_CONTEXT")"
+check "Team branch name is stable for the same logical conversation" test "$TEAM_BRANCH" = "$TEAM_BRANCH_AGAIN"
+check "Team branch name is scoped and ref-safe" bash -c '[[ "$1" =~ ^feature/team-[0-9a-f]{12}$ ]]' _ "$TEAM_BRANCH"
+
+TEAM_ROOT="$MANUL_WORKSPACE/ws-team-parent"
+mkdir -p "$TEAM_ROOT"
+TEAM_CHECKOUT="$(workspace_prepare_primary_checkout "$TEAM_ROOT" "test-owner/primary" "$CACHE")"
+git -C "$TEAM_CHECKOUT" remote set-url origin "$REMOTE"
+# Workspace clones intentionally do not inherit seed-repository Git identity.
+# Configure only this disposable Team checkout before creating its checkpoint.
+git -C "$TEAM_CHECKOUT" config user.name "Manul Team recovery tests"
+git -C "$TEAM_CHECKOUT" config user.email "manul-team-recovery@example.invalid"
+check "Team dispatch prepares the stable branch before agent execution" workspace_prepare_team_task_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_ROOT" test-owner/primary
+check "Team dispatch is not left on the base branch" assert_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH"
+check "Team dispatch persists the selected base in Git metadata" test "$(git -C "$TEAM_CHECKOUT" config --local --get "branch.$TEAM_BRANCH.manul-base")" = "main"
+expect_team_base_switch_rejected() {
+  ! workspace_prepare_team_task_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH" develop "$TEAM_ROOT" test-owner/primary
+}
+check "Team wake rejects a different base instead of switching silently" expect_team_base_switch_rejected
+check "Team wake keeps the pinned base after a mismatch" test "$(git -C "$TEAM_CHECKOUT" config --local --get "branch.$TEAM_BRANCH.manul-base")" = "main"
+check "Team wake remains on the same branch after a base mismatch" assert_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH"
+
+printf 'committed Team checkpoint\n' > "$TEAM_CHECKOUT/team-checkpoint.txt"
+git -C "$TEAM_CHECKOUT" add team-checkpoint.txt
+git -C "$TEAM_CHECKOUT" commit -qm "Add Team checkpoint"
+git -C "$TEAM_CHECKOUT" push -q -u origin "$TEAM_BRANCH"
+TEAM_CHECKPOINT_HEAD="$(git -C "$TEAM_CHECKOUT" rev-parse HEAD)"
+printf 'uncommitted Team resume work\n' > "$TEAM_CHECKOUT/team-resume-work.txt"
+check "Team wake resumes the same branch without resetting its HEAD" workspace_prepare_team_task_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_ROOT" test-owner/primary
+check "Team wake preserves the exact local checkpoint HEAD" assert_head "$TEAM_CHECKOUT" "$TEAM_CHECKPOINT_HEAD"
+check "Team wake preserves uncommitted task-local progress" assert_file "$TEAM_CHECKOUT/team-resume-work.txt"
+check "Team wake remains on the stable task branch" assert_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH"
+
+# A new workspace for the same logical conversation must recover the exact
+# pushed task branch rather than inventing a new name or falling back to main.
+TEAM_FRESH_ROOT="$MANUL_WORKSPACE/ws-team-fresh"
+mkdir -p "$TEAM_FRESH_ROOT"
+TEAM_FRESH_CHECKOUT="$(workspace_prepare_primary_checkout "$TEAM_FRESH_ROOT" "test-owner/primary" "$CACHE")"
+git -C "$TEAM_FRESH_CHECKOUT" remote set-url origin "$REMOTE"
+expect_unpinned_remote_team_branch_rejected() {
+  ! workspace_prepare_team_task_branch "$TEAM_FRESH_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_FRESH_ROOT" test-owner/primary
+}
+check "remote Team branch without base metadata is rejected" expect_unpinned_remote_team_branch_rejected
+check "unverified remote Team branch does not switch away from main" assert_branch "$TEAM_FRESH_CHECKOUT" main
+git -C "$TEAM_FRESH_CHECKOUT" config --local "branch.$TEAM_BRANCH.manul-base" main
+check "restored Team workspace metadata allows exact remote branch recovery" workspace_prepare_team_task_branch "$TEAM_FRESH_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_FRESH_ROOT" test-owner/primary
+check "Team retry checks out the same stable remote branch" assert_branch "$TEAM_FRESH_CHECKOUT" "$TEAM_BRANCH"
+check "Team retry recovers the pushed checkpoint" assert_file "$TEAM_FRESH_CHECKOUT/team-checkpoint.txt"
+
+# Dirty state on main is not silently switched away or cleaned. The helper
+# fails closed and keeps both the base branch and untracked content intact.
+TEAM_DIRTY_ROOT="$MANUL_WORKSPACE/ws-team-dirty-base"
+mkdir -p "$TEAM_DIRTY_ROOT"
+TEAM_DIRTY_CHECKOUT="$(workspace_prepare_primary_checkout "$TEAM_DIRTY_ROOT" "test-owner/primary" "$CACHE")"
+git -C "$TEAM_DIRTY_CHECKOUT" remote set-url origin "$REMOTE"
+TEAM_DIRTY_BRANCH="$(workspace_team_task_branch_name "github_issues:test-owner/primary#82-dirty")"
+printf 'operator/base content to preserve\n' > "$TEAM_DIRTY_CHECKOUT/preserve-me.txt"
+expect_team_dirty_base_rejected() {
+  ! workspace_prepare_team_task_branch "$TEAM_DIRTY_CHECKOUT" "$TEAM_DIRTY_BRANCH" main "$TEAM_DIRTY_ROOT" test-owner/primary
+}
+check "dirty base checkout is rejected before branch switching" expect_team_dirty_base_rejected
+check "dirty base checkout remains on main" assert_branch "$TEAM_DIRTY_CHECKOUT" main
+check "dirty base checkout content is preserved" assert_file "$TEAM_DIRTY_CHECKOUT/preserve-me.txt"
 
 printf '\nResults: %s passed, 0 failed\n' "$passed"

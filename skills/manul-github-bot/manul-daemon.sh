@@ -2955,14 +2955,16 @@ pr_auto_create() {
 # completion evaluator use the same independently verified PR identity.
 VERIFIED_EXISTING_PR_BRANCH=""
 VERIFIED_EXISTING_PR_URL=""
+VERIFIED_EXISTING_PR_BASE=""
 verify_existing_task_pr() {
   local repo="$1" comment_id="$2" workdir="$3" initial_base_branch="$4"
-  local allow_prior_urls="${5:-true}"
+  local allow_prior_urls="${5:-true}" expected_team_branch="${6:-}"
   local safe_comment_id comment_url issue_num safe_repo prior_urls prior_urls_json
   local pr_json candidates candidate_count verified verified_head_sha remote_head safe_task_token
 
   VERIFIED_EXISTING_PR_BRANCH=""
   VERIFIED_EXISTING_PR_URL=""
+  VERIFIED_EXISTING_PR_BASE=""
   safe_comment_id="$(sql_escape "$comment_id")"
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   issue_num="$(printf '%s' "$comment_url" | grep -oE '/(issues|pull)/[0-9]+' | grep -oE '[0-9]+' | head -n 1)"
@@ -2994,6 +2996,7 @@ verify_existing_task_pr() {
   candidates="$(printf '%s' "$pr_json" | jq -c \
     --arg task "$comment_id" \
     --arg taskToken "$safe_task_token" \
+    --arg expectedTeamBranch "$expected_team_branch" \
     --argjson priorUrls "$prior_urls_json" '
       [
         .[]
@@ -3004,6 +3007,7 @@ verify_existing_task_pr() {
             (((.body // "") | contains("<!-- manul-task:" + $task + " -->"))
               or ((.body // "") | contains("task " + $task)))
             or ((.headRefName // "") | test("(^|-)"+$taskToken+"-attempt-[0-9]+$"))
+            or ($expectedTeamBranch != "" and (.headRefName // "") == $expectedTeamBranch)
             or (($priorUrls | index($candidateUrl)) != null)
           )
       ]' 2>/dev/null)" || {
@@ -3027,7 +3031,19 @@ verify_existing_task_pr() {
   VERIFIED_EXISTING_PR_BRANCH="$(jq -r '.headRefName // empty' <<<"$verified")"
   VERIFIED_EXISTING_PR_URL="$(jq -r '.url // empty' <<<"$verified")"
   verified_head_sha="$(jq -r '.headRefOid // empty' <<<"$verified")"
-  if [ "$verified_base" != "$initial_base_branch" ] ||
+  local team_base_override="false"
+  if [ "$verified_base" != "$initial_base_branch" ] &&
+     [ -n "$expected_team_branch" ] &&
+     [ "$VERIFIED_EXISTING_PR_BRANCH" = "$expected_team_branch" ] &&
+     git check-ref-format --branch "$verified_base" >/dev/null 2>&1; then
+    local remote_base_sha
+    remote_base_sha="$(git -C "$workdir" ls-remote --heads origin "$verified_base" 2>/dev/null | awk 'NR == 1 {print $1}')"
+    if [ -n "$remote_base_sha" ]; then
+      team_base_override="true"
+    fi
+  fi
+
+  if { [ "$verified_base" != "$initial_base_branch" ] && [ "$team_base_override" != "true" ]; } ||
      [ -z "$VERIFIED_EXISTING_PR_BRANCH" ] ||
      [ "$VERIFIED_EXISTING_PR_BRANCH" = "$verified_base" ] ||
      [ -z "$verified_head_sha" ]; then
@@ -3047,7 +3063,8 @@ verify_existing_task_pr() {
     return 2
   fi
 
-  log "verify_existing_task_pr: verified unique open PR $VERIFIED_EXISTING_PR_URL for task=$comment_id branch=$VERIFIED_EXISTING_PR_BRANCH base=$initial_base_branch"
+  VERIFIED_EXISTING_PR_BASE="$verified_base"
+  log "verify_existing_task_pr: verified unique open PR $VERIFIED_EXISTING_PR_URL for task=$comment_id branch=$VERIFIED_EXISTING_PR_BRANCH base=$verified_base"
   return 0
 }
 
@@ -3142,11 +3159,11 @@ verify_required_pr() {
   local action
   action="$(sqlite3 "$DB" "SELECT action FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   # Legacy tasks may have a NULL/empty action because the action column was
-  # introduced after the task was queued. Standalone issue/comment tasks are
-  # implementation tasks by default; only an explicit non-IMPLEMENT action
-  # (e.g. REVIEW_FIX) opts out of standalone PR verification.
+  # introduced after the task was queued. Standalone IMPLEMENT tasks and
+  # code-changing TEAM parents both require a verified PR. Explicit actions
+  # such as REVIEW_FIX retain their separate delivery contract.
   action="${action:-IMPLEMENT}"
-  [ "$action" = "IMPLEMENT" ] || return 0
+  [ "$action" = "IMPLEMENT" ] || [ "$action" = "TEAM" ] || return 0
   local comment_url
   comment_url="$(sqlite3 "$DB" "SELECT commentUrl FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null)"
   [[ "$comment_url" == *"/pull/"* ]] && return 0
@@ -3278,7 +3295,7 @@ verify_result_comment_pr_url_if_required() {
   shift 2
 
   if [ "$comment_only_delivery" = "true" ]; then
-    log "dispatch: skipping PR URL verification for verified comment-only IMPLEMENT delivery"
+    log "dispatch: skipping PR URL verification for verified comment-only delivery"
     lc_log "PR_RESULT_LINK_VERIFY_SKIPPED" "reason=verified_comment_only_delivery"
     return 0
   fi
@@ -3690,6 +3707,8 @@ evaluate_task_completion() {
   local DELIVERY_MODE="${19:-implementation}"
   local TASK_SOURCE_TYPE="${20:-}"
   local TASK_EXECUTION_KIND="${21:-repository}"
+  local TEAM_TASK_BRANCH="${22:-}"
+  local TASK_ACTION="${23:-IMPLEMENT}"
   # Reset per-evaluation output so a prior task cannot leak its verified merged PR base.
   local VERIFIED_MERGED_RESULT_PR_BASE=""
 
@@ -3823,16 +3842,16 @@ evaluate_task_completion() {
     fi
   fi
   
-  # 7.6 Determine whether the agent actually changed repository state.
-  # Informational tasks may legitimately finish without a branch or PR.
-  # Every repository change must be verified through the full PR/result pipeline,
-  # including issue-body tasks (issuebody:*). The task identifier format must
-  # never weaken the implementation PR requirement.
+  # 7.6 Verify repository changes and no-op deliveries from one explicit
+  # decision tree. The no-diff branch must be the sibling of the changed-repo
+  # branch; do not attach it to the later push-verification conditional.
   if [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
     repo_changed="false"
     if repository_changed_since "$WORKDIR" "$INITIAL_HEAD"; then repo_changed="true"; fi
+    current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
+    log "dispatch: completion preflight task=$COMMENT_ID action=$TASK_ACTION source=$TASK_SOURCE_TYPE branch=${current_branch:-detached} reservedTeamBranch=$TEAM_TASK_BRANCH repoChanged=$repo_changed base=$INITIAL_BASE_BRANCH"
+
     if [ "$repo_changed" = "true" ]; then
-      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
       if [ -z "$current_branch" ]; then
         SUCCESS="false"
         FAILURE_CODE="VERIFICATION_FAILED"
@@ -3840,7 +3859,6 @@ evaluate_task_completion() {
         log "dispatch: task $COMMENT_ID changed repository state from detached HEAD"
       elif [ -n "$PR_HEAD_BRANCH" ]; then
         # PR-tied tasks are intentionally executed on the existing PR head branch.
-        # That branch equals the prepared INITIAL_BRANCH, so it is valid by design.
         if [ "$current_branch" != "$PR_HEAD_BRANCH" ]; then
           SUCCESS="false"
           FAILURE_CODE="VERIFICATION_FAILED"
@@ -3851,7 +3869,7 @@ evaluate_task_completion() {
           SUCCESS="false"
           FAILURE_CODE="DELIVERY_NOT_COMMITTED"
           FAIL_REASON="Delivery rejected: TASK_DONE left uncommitted repository changes on PR head branch $current_branch (${repo_state_issues% })"
-          log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on PR head branch $current_branch (${repo_state_issues% })"
+          log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted repository changes on PR head branch $current_branch (${repo_state_issues% })"
           lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
         else
           log "dispatch: task $COMMENT_ID changed repository on expected PR head branch $current_branch"
@@ -3866,64 +3884,115 @@ evaluate_task_completion() {
         SUCCESS="false"
         FAILURE_CODE="DELIVERY_NOT_COMMITTED"
         FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but the repository has uncommitted changes on branch $current_branch (${repo_state_issues% })"
-        log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted changes on branch $current_branch (${repo_state_issues% })"
+        log "dispatch: task $COMMENT_ID delivery verification failed: uncommitted repository changes on branch $current_branch (${repo_state_issues% })"
         lc_log "DELIVERY_NOT_COMMITTED" "task=$COMMENT_ID repo=$REPO branch=$current_branch state=${repo_state_issues% }"
       elif ! verify_required_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$INITIAL_BASE_BRANCH"; then
         SUCCESS="false"
         FAILURE_CODE="VERIFICATION_FAILED"
         FAIL_REASON="Implementation task did not produce a real PR against its branch base"
         log "dispatch: task $COMMENT_ID PR verification failed"
-else
-         local verified_base
-         verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
-         if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" && ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
-           SUCCESS="false"
-           FAILURE_CODE="VERIFICATION_FAILED"
-           FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
-           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
-         else
-           log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
-         fi
-       fi
-       fi
+      else
+        local verified_base
+        verified_base="$(infer_task_base_branch "$WORKDIR" "$current_branch" "$INITIAL_BASE_BRANCH")"
+        if ! task_source_is_todo_type "$TASK_SOURCE_TYPE" &&
+           ! verify_result_comment_pr_url "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$verified_base" "$current_branch"; then
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="Result comment did not contain the exact canonical URL of the verified PR"
+          log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
+        else
+          log "dispatch: task $COMMENT_ID has repository changes on branch $current_branch; PR and result URL verified"
+        fi
+      fi
 
-       # 7.7. Delivery push verification. A task that reports TASK_DONE with a real
-       # repository change must have committed AND pushed its work. Distinguish the
-       # concrete delivery states so retry/failure comments explain exactly what is
-       # missing instead of collapsing everything to a generic verification failure.
-       # Only runs when the repository actually changed; informational tasks with no
-       # diff have nothing to deliver and must not be rejected here.
-       if [ "$SUCCESS" = "true" ] && [ "$repo_changed" = "true" ]; then
-         local has_origin_remote="false"
-         local remote_branch_sha=""
-         if git -C "$WORKDIR" remote get-url origin >/dev/null 2>&1; then
-           has_origin_remote="true"
-           remote_branch_sha="$(git -C "$WORKDIR" ls-remote --heads origin "$current_branch" 2>/dev/null | awk '{print $1}')"
-         fi
+      # Delivery push verification is part of the changed-repository branch,
+      # never a sibling of its no-diff alternative.
+      if [ "$SUCCESS" = "true" ]; then
+        local has_origin_remote="false"
+        local remote_branch_sha=""
+        if git -C "$WORKDIR" remote get-url origin >/dev/null 2>&1; then
+          has_origin_remote="true"
+          remote_branch_sha="$(git -C "$WORKDIR" ls-remote --heads origin "$current_branch" 2>/dev/null | awk '{print $1}')"
+        fi
 
-         if [ "$has_origin_remote" = "true" ] && [ -z "$remote_branch_sha" ]; then
-           SUCCESS="false"
-           FAILURE_CODE="DELIVERY_NOT_PUSHED"
-           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch was never pushed to the origin remote"
-           log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch not pushed to origin"
-         elif [ "$has_origin_remote" = "true" ] && [ -n "$remote_branch_sha" ] \
-           && [ "$remote_branch_sha" != "$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null)" ]; then
-           SUCCESS="false"
-           FAILURE_CODE="DELIVERY_NOT_PUSHED"
-           FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch diverged from the pushed origin/$current_branch"
-           log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch diverges from origin"
-         else
-           log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
-         fi
-       fi
-     elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ] && [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]; then
-      # IMPLEMENT work normally must finish on its own feature branch. A no-op
-      # on the base branch is accepted only when an existing PR for this same
-      # issue has been independently re-verified, or the agent posted a valid
-      # result comment indicating successful completion without repository changes.
+        if [ "$has_origin_remote" = "true" ] && [ -z "$remote_branch_sha" ]; then
+          SUCCESS="false"
+          FAILURE_CODE="DELIVERY_NOT_PUSHED"
+          FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch was never pushed to the origin remote"
+          log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch not pushed to origin"
+        elif [ "$has_origin_remote" = "true" ] && [ "$remote_branch_sha" != "$(git -C "$WORKDIR" rev-parse HEAD 2>/dev/null)" ]; then
+          SUCCESS="false"
+          FAILURE_CODE="DELIVERY_NOT_PUSHED"
+          FAIL_REASON="Delivery rejected: the agent reported TASK_DONE but branch $current_branch diverged from the pushed origin/$current_branch"
+          log "dispatch: task $COMMENT_ID delivery verification failed: branch $current_branch diverges from origin"
+        else
+          log "dispatch: task $COMMENT_ID delivery push state verified for branch $current_branch"
+        fi
+      fi
+
+    elif [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]; then
+      log "dispatch: completion no-diff path task=$COMMENT_ID action=$TASK_ACTION"
       local already_satisfied="false"
-      current_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || echo "")"
-      if [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
+
+      if [ "$TASK_ACTION" = "TEAM" ]; then
+        if [ -n "$PR_HEAD_BRANCH" ]; then
+          if [ "$current_branch" = "$PR_HEAD_BRANCH" ]; then
+            already_satisfied="true"
+            current_branch="$PR_HEAD_BRANCH"
+            log "dispatch: Team task $COMMENT_ID made no new changes on verified PR branch $PR_HEAD_BRANCH"
+          else
+            SUCCESS="false"
+            FAILURE_CODE="VERIFICATION_FAILED"
+            FAIL_REASON="Team task left its verified PR branch (expected $PR_HEAD_BRANCH, got ${current_branch:-detached})"
+            log "dispatch: Team task $COMMENT_ID no-op branch mismatch: $FAIL_REASON"
+            lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_pr_branch_mismatch expected=$PR_HEAD_BRANCH actual=${current_branch:-detached}"
+          fi
+        elif [ -z "$TEAM_TASK_BRANCH" ] || [ "$current_branch" != "$TEAM_TASK_BRANCH" ]; then
+          SUCCESS="false"
+          FAILURE_CODE="VERIFICATION_FAILED"
+          FAIL_REASON="Team task did not remain on its daemon-prepared branch (expected $TEAM_TASK_BRANCH, got ${current_branch:-detached})"
+          log "dispatch: Team task $COMMENT_ID no-op branch mismatch: $FAIL_REASON"
+          lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_task_branch_mismatch expected=$TEAM_TASK_BRANCH actual=${current_branch:-detached}"
+        else
+          local team_base_ref team_merge_base team_ahead_commits team_branch_has_delta
+          team_base_ref="refs/remotes/origin/$INITIAL_BASE_BRANCH"
+          team_merge_base=""
+          team_ahead_commits="0"
+          team_branch_has_delta="false"
+          if git -C "$WORKDIR" show-ref --verify --quiet "$team_base_ref"; then
+            team_merge_base="$(git -C "$WORKDIR" merge-base "$team_base_ref" HEAD 2>/dev/null || true)"
+          fi
+          if [ -z "$team_merge_base" ]; then
+            SUCCESS="false"
+            FAILURE_CODE="VERIFICATION_FAILED"
+            FAIL_REASON="Could not verify the Team task branch against origin/$INITIAL_BASE_BRANCH"
+          else
+            team_ahead_commits="$(git -C "$WORKDIR" rev-list --count "$team_merge_base..HEAD" 2>/dev/null || echo 0)"
+            if [ "$team_ahead_commits" -gt 0 ] || ! git -C "$WORKDIR" diff --quiet "$team_merge_base" HEAD -- 2>/dev/null; then
+              team_branch_has_delta="true"
+            fi
+          fi
+
+          if [ "$SUCCESS" = "true" ] && [ "$team_branch_has_delta" = "false" ]; then
+            if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+              already_satisfied="true"
+              log "dispatch: Team Todo task $COMMENT_ID accepted as no-op on $TEAM_TASK_BRANCH; no empty PR required"
+              lc_log "TEAM_NO_REPO_CHANGE" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE branch=$TEAM_TASK_BRANCH base=$INITIAL_BASE_BRANCH"
+            elif verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$INITIAL_HEAD" "$current_branch"; then
+              already_satisfied="true"
+              COMMENT_ONLY_DELIVERY="true"
+              log "dispatch: Team task $COMMENT_ID accepted as verified no-op on $TEAM_TASK_BRANCH; no empty PR required"
+              lc_log "TEAM_NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO branch=$TEAM_TASK_BRANCH base=$INITIAL_BASE_BRANCH"
+            else
+              SUCCESS="false"
+              FAILURE_CODE="VERIFICATION_FAILED"
+              FAIL_REASON="Team no-op did not publish a verifiable non-empty result comment"
+              log "dispatch: Team task $COMMENT_ID no-op result comment was rejected: $FAIL_REASON"
+              lc_log "TASK_ERROR" "task=$COMMENT_ID reason=team_noop_result_rejected"
+            fi
+          fi
+        fi
+      elif [ -z "$current_branch" ] || [ "$current_branch" = "$INITIAL_BASE_BRANCH" ] || [ "$current_branch" = "$DEFAULT_BRANCH" ]; then
         if task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
           already_satisfied="true"
           log "dispatch: Todo task $TASK_SOURCE_ID completed without repository changes"
@@ -3934,25 +4003,19 @@ else
           log "dispatch: task $COMMENT_ID accepted as already satisfied by verified PR $VERIFIED_EXISTING_PR_URL"
           lc_log "IMPLEMENT_ALREADY_SATISFIED" "task=$COMMENT_ID repo=$REPO branch=$current_branch base=$INITIAL_BASE_BRANCH url=$VERIFIED_EXISTING_PR_URL"
         elif verify_merged_result_pr "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$current_attempt" "$INITIAL_BASE_BRANCH" "$DEFAULT_BRANCH"; then
-          # A prior attempt may have completed and merged its PR, then a retry
-          # can start from the updated base and produce no new repository diff.
-          # Accept this only when this attempt's exact result marker points to a
-          # real merged PR and the source issue is closed.
           already_satisfied="true"
           current_branch="$VERIFIED_EXISTING_PR_BRANCH"
-          log "dispatch: task $COMMENT_ID accepted as already delivered through verified merged PR $VERIFIED_EXISTING_PR_URL"
+          log "dispatch: task $COMMENT_ID accepted as already delivered through verified PR $VERIFIED_EXISTING_PR_URL"
           lc_log "IMPLEMENT_ALREADY_SATISFIED_MERGED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM branch=$current_branch base=$VERIFIED_MERGED_RESULT_PR_BASE url=$VERIFIED_EXISTING_PR_URL"
         elif verify_implement_comment_only_delivery "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$WORKDIR" "$INITIAL_HEAD" "$current_branch"; then
-          # A clean base checkout plus this attempt's verified, non-empty result
-          # comment is an intentional informational IMPLEMENT delivery. Keep a
-          # distinct flag so later PR URL checks do not mistake it for a PR task.
           already_satisfied="true"
-          log "dispatch: task $COMMENT_ID accepted as completed with verified comment-only delivery (no repository changes)"
+          COMMENT_ONLY_DELIVERY="true"
+          log "dispatch: task $COMMENT_ID accepted with verified comment-only delivery"
         else
           SUCCESS="false"
           FAILURE_CODE="${IMPLEMENT_COMMENT_ONLY_FAILURE_CODE:-VERIFICATION_FAILED}"
-          FAIL_REASON="${IMPLEMENT_COMMENT_ONLY_FAILURE_REASON:-Implementation task completed on a base/default branch ($current_branch) without a verified pre-existing or merged task PR}"
-          log "dispatch: task $COMMENT_ID rejected on base branch $current_branch: ${FAIL_REASON}"
+          FAIL_REASON="${IMPLEMENT_COMMENT_ONLY_FAILURE_REASON:-Implementation task completed on base/default branch ($current_branch) without a verified pre-existing or merged task PR}"
+          log "dispatch: task $COMMENT_ID rejected on base branch $current_branch: $FAIL_REASON"
           lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_delivery_rejected code=$FAILURE_CODE branch=$current_branch"
         fi
       fi
@@ -3982,13 +4045,12 @@ else
           log "dispatch: task $COMMENT_ID result comment PR URL verification failed"
         fi
       fi
-    elif [ "$SUCCESS" = "true" ] && [ "$DELIVERY_MODE" != "comment_only" ]; then
-      # A TASK_DONE from an IMPLEMENT task is only informational when the agent
-      # genuinely made no repository changes. Keep this explicit so issuebody:*
-      # tasks cannot accidentally bypass the repository/PR verification above.
+
+    else
       log "dispatch: task $COMMENT_ID made no repository changes; PR/branch not required"
       lc_log "NO_REPO_CHANGE" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM"
     fi
+  fi
   fi
 
   # GitHub-rooted tasks require a deterministic result-comment receipt.
@@ -4556,7 +4618,7 @@ dispatch_once() {
     # Identify proactive policy and resolve PR metadata.
     local TASK_TYPE="issue"
     local PR_HEAD_BRANCH="" PR_HEAD_SHA="" PR_BASE_BRANCH="" PR_BASE_SHA="" PR_UPDATED_AT=""
-    local TASK_PR_NUMBER="N/A" TASK_PR_RECOVERED="false" PR_NUM_FROM_URL=""
+    local TASK_PR_NUMBER="N/A" TASK_PR_RECOVERED="false" PR_NUM_FROM_URL="" TEAM_TASK_BRANCH=""
     local PROACTIVE_PR_POLICY="" PR_GUARD_DIR=""
     case "$COMMENT_ID" in
       ci_fix:*) PROACTIVE_PR_POLICY="ciFix" ;;
@@ -5095,60 +5157,128 @@ REPORT_ONLY_PROMPT
       fi
       log "dispatch: verified PR head branch $verify_branch in workspace"
      else
-       # Issue / standalone task: target the resolved repository/base branch, not
-       # whichever branch happens to be checked out in the task workspace.
+       # Resolve the base branch before deciding which isolated branch to use.
        local default_branch
        default_branch="$(git -C "$WORKDIR" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}' || echo "")"
        local base_branch
        base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
-       log "dispatch: preparing workspace $WORKDIR from base branch '$base_branch' for task $COMMENT_ID"
-       local base_recovered=0
-       if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
-         log "ERROR: fetch origin failed before task setup on $REPO; trying a fresh clone at selected branch '$base_branch'"
-         if workspace_recover_primary_checkout "$workspace_path" "$REPO" "$WORKDIR" "$base_branch" 2>>"$LOG"; then
-           base_recovered=1
-           log "dispatch: recovered checkout directly from remote at selected base branch '$base_branch'"
-         else
-           handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not fetch origin or rebuild a fresh checkout at selected base branch '$base_branch'. See daemon diagnostics for the exact Git/recovery blocker; the prior checkout was preserved whenever possible." "${PR_NUM_FROM_URL:-}" "$current_attempt"
-           return 0
-         fi
-       fi
-       if [ "$base_recovered" -eq 0 ]; then
-         base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
-         if ! workspace_prepare_task_base_branch "$WORKDIR" "$base_branch" "$workspace_path" "$REPO" 2>>"$LOG"; then
-           log "ERROR: failed to prepare checkout for selected base branch '$base_branch' in task $COMMENT_ID"
-           handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the selected base branch '$base_branch'. Manul attempted a fresh clone at that same branch; see daemon diagnostics for the exact Git/recovery blocker. The prior checkout was preserved whenever recovery could safely archive it." "${PR_NUM_FROM_URL:-}" "$current_attempt"
-           return 0
-         fi
-       fi
 
-       # A retry must resume a single verified PR from an earlier attempt of
-       # this exact task instead of creating another attempt-specific branch.
-       if [[ "$TASK_ACTION" == "IMPLEMENT" || "$TASK_ACTION" == "TEAM" ]]; then
-         local existing_task_pr_rc=0
-         verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$base_branch" "false" || existing_task_pr_rc=$?
-         if [ "$existing_task_pr_rc" -eq 0 ]; then
+       if [ "$TASK_ACTION" = "TEAM" ]; then
+         TEAM_TASK_BRANCH="$(workspace_team_task_branch_name "$CONVERSATION_ID" 2>/dev/null || true)"
+         if [ -z "$TEAM_TASK_BRANCH" ]; then
+           handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not derive a stable Team task branch because the logical conversation identity is missing or invalid." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_branch_identity"
+           return 0
+         fi
+
+         local existing_team_pr_rc=0
+         verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$base_branch" "false" "$TEAM_TASK_BRANCH" || existing_team_pr_rc=$?
+         if [ "$existing_team_pr_rc" -eq 0 ]; then
            PR_HEAD_BRANCH="$VERIFIED_EXISTING_PR_BRANCH"
            TASK_PR_RECOVERED="true"
            TASK_PR_NUMBER="$(printf '%s' "$VERIFIED_EXISTING_PR_URL" | sed -nE 's|.*/pull/([0-9]+)(/.*)?$|\1|p')"
            if ! [[ "$TASK_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior task PR was identified, but its canonical URL did not contain a valid PR number. Refusing to create a duplicate PR." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior Team PR was identified, but its canonical URL did not contain a valid PR number. Refusing to create another PR." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_recovery"
              return 0
            fi
-           log "dispatch: resuming existing task PR #$TASK_PR_NUMBER on branch $PR_HEAD_BRANCH for task $COMMENT_ID"
+           if [ "$PR_HEAD_BRANCH" = "$TEAM_TASK_BRANCH" ]; then
+             base_branch="$VERIFIED_EXISTING_PR_BASE"
+             if ! git -C "$WORKDIR" fetch origin "$base_branch" --quiet 2>>"$LOG" ||
+                ! git -C "$WORKDIR" show-ref --verify --quiet "refs/remotes/origin/$base_branch"; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "The existing Team PR base '$base_branch' could not be refreshed or verified; refusing to resume on another base." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_base"
+               return 0
+             fi
+             local team_pr_base_key="branch.$PR_HEAD_BRANCH.manul-base"
+             local recorded_team_pr_base
+             recorded_team_pr_base="$(git -C "$WORKDIR" config --local --get "$team_pr_base_key" 2>/dev/null || true)"
+             if [ -n "$recorded_team_pr_base" ] && [ "$recorded_team_pr_base" != "$base_branch" ]; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Existing Team PR branch '$PR_HEAD_BRANCH' is pinned to base '$recorded_team_pr_base', but GitHub reports '$base_branch'; refusing to switch bases." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_base_mismatch"
+               return 0
+             fi
+           fi
+           log "dispatch: resuming Team PR #$TASK_PR_NUMBER on verified branch $PR_HEAD_BRANCH for conversation $CONVERSATION_ID (base=$base_branch)"
            if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" "$workspace_path" "$REPO" 2>>"$LOG"; then
-             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior open PR for this task exists, but its head branch '$PR_HEAD_BRANCH' could not be prepared safely. Manul will not create another PR." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "The existing Team PR head branch '$PR_HEAD_BRANCH' could not be prepared safely. The prior checkout was preserved; no agent was started." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_recovery"
              return 0
            fi
-           local recovered_task_branch
-           recovered_task_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || true)"
-           if [ "$recovered_task_branch" != "$PR_HEAD_BRANCH" ]; then
-             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Existing task PR branch verification failed (expected '$PR_HEAD_BRANCH', got '${recovered_task_branch:-detached}'). Refusing to create a duplicate PR." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
+           local recovered_team_pr_branch
+           recovered_team_pr_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || true)"
+           if [ "$PR_HEAD_BRANCH" = "$TEAM_TASK_BRANCH" ]; then
+             local team_pr_base_key="branch.$PR_HEAD_BRANCH.manul-base"
+             if ! git -C "$WORKDIR" config --local "$team_pr_base_key" "$base_branch"; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not persist the verified PR base '$base_branch' for stable Team branch '$PR_HEAD_BRANCH'." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_base_persist"
+               return 0
+             fi
+           fi
+           if [ "$recovered_team_pr_branch" != "$PR_HEAD_BRANCH" ]; then
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Existing Team PR branch verification failed (expected '$PR_HEAD_BRANCH', got '$recovered_team_pr_branch'). Refusing to continue on an unverified branch." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_recovery"
              return 0
            fi
-         elif [ "$existing_task_pr_rc" -gt 1 ]; then
-           handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A PR related to this task exists or GitHub could not be queried, but it could not be resumed unambiguously. Manul will not create another branch/PR until the existing delivery can be verified." "${PR_NUM_FROM_URL:-}" "$current_attempt" "task_pr_recovery"
+         elif [ "$existing_team_pr_rc" -gt 1 ]; then
+           handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "An existing Team PR or its remote head could not be verified unambiguously. Manul will not create or switch branches until the existing delivery can be checked." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_pr_recovery"
            return 0
+         else
+           if ! workspace_prepare_team_task_branch "$WORKDIR" "$TEAM_TASK_BRANCH" "$base_branch" "$workspace_path" "$REPO" 2>>"$LOG"; then
+             log "ERROR: failed to prepare stable Team task branch '$TEAM_TASK_BRANCH' for conversation $CONVERSATION_ID"
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not safely prepare the stable Team task branch '$TEAM_TASK_BRANCH' from '$base_branch'. Existing task-local work was preserved; no agent was started." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_branch_preparation"
+             return 0
+           fi
+           local prepared_team_branch
+           prepared_team_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || true)"
+           if [ "$prepared_team_branch" != "$TEAM_TASK_BRANCH" ]; then
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Team branch preparation returned '$prepared_team_branch' instead of required branch '$TEAM_TASK_BRANCH'." "$PR_NUM_FROM_URL" "$current_attempt" "team_task_branch_verification"
+             return 0
+           fi
+           log "dispatch: verified stable Team branch $TEAM_TASK_BRANCH from base $base_branch for conversation $CONVERSATION_ID"
+         fi
+       else
+         # Preserve the existing standalone IMPLEMENT/VERIFY preparation path.
+         log "dispatch: preparing workspace $WORKDIR from base branch '$base_branch' for task $COMMENT_ID"
+         local base_recovered=0
+         if ! git -C "$WORKDIR" fetch origin --quiet 2>>"$LOG"; then
+           log "ERROR: fetch origin failed before task setup on $REPO; trying a fresh clone at selected branch '$base_branch'"
+           if workspace_recover_primary_checkout "$workspace_path" "$REPO" "$WORKDIR" "$base_branch" 2>>"$LOG"; then
+             base_recovered=1
+             log "dispatch: recovered checkout directly from remote at selected base branch '$base_branch'"
+           else
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not fetch origin or rebuild a fresh checkout at selected base branch '$base_branch'. See daemon diagnostics for the exact Git/recovery blocker; the prior checkout was preserved whenever possible." "$PR_NUM_FROM_URL" "$current_attempt"
+             return 0
+           fi
+         fi
+         if [ "$base_recovered" -eq 0 ]; then
+           base_branch="$(determine_task_base_branch "$WORKDIR" "$default_branch")"
+           if ! workspace_prepare_task_base_branch "$WORKDIR" "$base_branch" "$workspace_path" "$REPO" 2>>"$LOG"; then
+             log "ERROR: failed to prepare checkout for selected base branch '$base_branch' in task $COMMENT_ID"
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Could not prepare the selected base branch '$base_branch'. Manul attempted a fresh clone at that same branch; see daemon diagnostics for the exact Git/recovery blocker. The prior checkout was preserved whenever possible." "$PR_NUM_FROM_URL" "$current_attempt"
+             return 0
+           fi
+         fi
+
+         if [ "$TASK_ACTION" = "IMPLEMENT" ]; then
+           local existing_task_pr_rc=0
+           verify_existing_task_pr "$REPO" "$COMMENT_ID" "$WORKDIR" "$base_branch" "false" || existing_task_pr_rc=$?
+           if [ "$existing_task_pr_rc" -eq 0 ]; then
+             PR_HEAD_BRANCH="$VERIFIED_EXISTING_PR_BRANCH"
+             TASK_PR_RECOVERED="true"
+             TASK_PR_NUMBER="$(printf '%s' "$VERIFIED_EXISTING_PR_URL" | sed -nE 's|.*/pull/([0-9]+)(/.*)?$|\1|p')"
+             if ! [[ "$TASK_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior task PR was identified, but its canonical URL did not contain a valid PR number. Refusing to create a duplicate PR." "$PR_NUM_FROM_URL" "$current_attempt" "task_pr_recovery"
+               return 0
+             fi
+             log "dispatch: resuming existing task PR #$TASK_PR_NUMBER on branch $PR_HEAD_BRANCH for task $COMMENT_ID"
+             if ! workspace_prepare_pr_branch "$WORKDIR" "$PR_HEAD_BRANCH" "$workspace_path" "$REPO" 2>>"$LOG"; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A prior task PR exists, but its head branch '$PR_HEAD_BRANCH' could not be prepared safely. Manul will not create another branch/PR." "$PR_NUM_FROM_URL" "$current_attempt" "task_pr_recovery"
+               return 0
+             fi
+             local recovered_task_branch
+             recovered_task_branch="$(git -C "$WORKDIR" symbolic-ref --short HEAD 2>/dev/null || true)"
+             if [ "$recovered_task_branch" != "$PR_HEAD_BRANCH" ]; then
+               handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "Existing task PR branch verification failed (expected '$PR_HEAD_BRANCH', got '$recovered_task_branch'). Refusing to create a duplicate PR." "$PR_NUM_FROM_URL" "$current_attempt" "task_pr_recovery"
+               return 0
+             fi
+           elif [ "$existing_task_pr_rc" -gt 1 ]; then
+             handle_pre_execution_failure "$COMMENT_ID" "$CLAIM_TOKEN" "$REPO" "$ISSUE_NUM" "$WORKSPACE_ID" "$REPLY_TO" "A PR related to this task exists or GitHub could not be queried, but it could not be resumed unambiguously. Manul will not create another branch/PR until the existing delivery can be verified." "$PR_NUM_FROM_URL" "$current_attempt" "task_pr_recovery"
+             return 0
+           fi
          fi
        fi
      fi
@@ -5286,6 +5416,15 @@ PROMPT_APPEND
 - Do NOT create another branch or PR. The source issue remains #__ISSUE_NUM__; post the task result on that issue.
 PROMPT_APPEND
       fi
+    elif [ "$TASK_ACTION" = "TEAM" ]; then
+      cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
+- This is a Team workflow parent. The daemon prepared and verified the stable task branch \`__TEAM_TASK_BRANCH__\` from \`__INITIAL_BASE_BRANCH__\` before launching you.
+- Continue on this exact checked-out branch. Do NOT create another branch, switch to the base/default branch, reset, clean, or replace the prepared checkout.
+- The same logical Team conversation reuses this branch across child-completion wakeups and resumes, including resumes submitted as a new comment.
+- When this task makes repository changes, commit and push this branch and create or update one real PR targeting \`__INITIAL_BASE_BRANCH__\` after the first successful push. Do not create a second PR for the same Team branch.
+- When this task is informational or produces no repository changes, do not create an empty PR; publish a verified non-empty result comment and finish normally.
+- Before editing, verify \`git -C "__WORKDIR__" branch --show-current\` equals \`__TEAM_TASK_BRANCH__\`. Stop and report the mismatch if it does not.
+PROMPT_APPEND
     elif [ -n "$PR_HEAD_BRANCH" ]; then
       # PR-tied task: operate on the PR's head branch
       cat >> "$TASK_PROMPT_FILE" <<'PROMPT_APPEND'
@@ -5384,6 +5523,7 @@ PROMPT_APPEND
     prompt_content="${prompt_content//__CURRENT_BRANCH__/$CURRENT_BRANCH}"
     prompt_content="${prompt_content//__DEFAULT_BRANCH__/$DEFAULT_BRANCH}"
     prompt_content="${prompt_content//__INITIAL_BASE_BRANCH__/$INITIAL_BASE_BRANCH}"
+    prompt_content="${prompt_content//__TEAM_TASK_BRANCH__/$TEAM_TASK_BRANCH}"
     printf '%s' "$prompt_content" > "$TASK_PROMPT_FILE"
 
     if [ -n "$PROACTIVE_PR_POLICY" ]; then
@@ -5986,7 +6126,7 @@ TEAM_CHECKPOINT_PROTOCOL
      # Call production completion evaluation function
           local delivery_mode="implementation"
      if [ "$TASK_ACTION" = "VERIFY" ]; then delivery_mode="comment_only"; fi
-     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE" "$TASK_EXECUTION_KIND"
+     evaluate_task_completion "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "$rc" "$STDOUT_FILE" "$DB" "$REPO_DIR" "$WORKDIR" "$CLAIM_TOKEN" "$INITIAL_HEAD" "$INITIAL_BRANCH" "$INITIAL_BASE_BRANCH" "$exec_summary" "$exec_failure_code" "$PR_HEAD_BRANCH" "" "$delivery_mode" "$TASK_SOURCE_TYPE" "$TASK_EXECUTION_KIND" "$TEAM_TASK_BRANCH" "$TASK_ACTION"
 
     # A structured TASK_NEEDS_USER result pauses this task without entering the
     # worker failure/retry path. The daemon asks the user and then waits for an

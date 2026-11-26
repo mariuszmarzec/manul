@@ -1,9 +1,11 @@
 name: Manul CI
 
-# Automatic runs are disabled to conserve GitHub Actions minutes.
-# Run this workflow manually with workflow_dispatch when desired.
+# Keep manual dispatch for full-suite operator runs, and validate every pull request
+# because branch/workspace lifecycle changes must not merge without runtime tests.
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
