@@ -56,7 +56,7 @@ assert_eq "manulfoo does not match" "false" "$(run_gate '/manulfoo')"
 echo
 echo "=== /manul team command classification in all GitHub poll paths ==="
 
-team_branch_count="$(grep -F 'then' "$POLL" | grep -F '{action: "TEAM", prompt:' | wc -l | tr -d ' ')"
+team_branch_count="$(grep -F '{action: "TEAM", prompt:' "$POLL" | wc -l | tr -d ' ')"
 assert_eq "all three GitHub poll paths classify team explicitly" "3" "$team_branch_count"
 
 team_prompt_count="$(grep -F 'or $actx.action == "TEAM" then $actx.prompt' "$POLL" | wc -l | tr -d ' ')"
