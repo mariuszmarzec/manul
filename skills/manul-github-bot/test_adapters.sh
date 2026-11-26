@@ -75,12 +75,25 @@ run_test() {
 
 assert_json_status() {
   local json="$1" expected="$2" label="$3"
-  local actual
+  local actual raw_log raw_stderr
   actual="$(printf '%s' "$json" | jq -r '.status // empty' 2>/dev/null || true)"
   if [ "$actual" = "$expected" ]; then
     ok "$label"
   else
     fail "$label (status=$actual output=$json)"
+    # Preserve the useful runtime evidence before the per-test temp directory
+    # is removed by its RETURN trap. The adapter already redacts persisted
+    # stderr; keep this diagnostic bounded so CI failures stay readable.
+    raw_log="$(printf '%s' "$json" | jq -r '.diagnostics.raw_log // empty' 2>/dev/null || true)"
+    raw_stderr="$(printf '%s' "$json" | jq -r '.diagnostics.raw_stderr // empty' 2>/dev/null || true)"
+    if [ -n "$raw_log" ] && [ -f "$raw_log" ]; then
+      echo "  runtime JSONL tail ($raw_log):" >&2
+      tail -n 40 "$raw_log" >&2
+    fi
+    if [ -n "$raw_stderr" ] && [ -f "$raw_stderr" ]; then
+      echo "  runtime stderr tail ($raw_stderr):" >&2
+      tail -n 40 "$raw_stderr" >&2
+    fi
   fi
 }
 
