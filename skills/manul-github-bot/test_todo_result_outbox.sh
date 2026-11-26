@@ -50,7 +50,7 @@ assert_eq() {
 echo "=== completed result survives a Todo outage ==="
 PUBLISH_RC=1
 publish_rc=0
-publish_todo_task_result "completed-task" "todo_local_mcp" "503@aaaaaaaaaaaaaaaa" "Review result: REQUEST_CHANGES" || publish_rc=$?
+publish_todo_task_result "completed-task" "todo_local_mcp" "503@aaaaaaaaaaaaaaaa" "Review result: REQUEST_CHANGES" "test-claim-token" || publish_rc=$?
 assert_eq "10" "$publish_rc" "delivery failure is distinguished from outbox persistence failure"
 assert_eq "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM manul_todo_result_outbox WHERE taskId='completed-task' AND deliveredAt IS NULL;")" "completed report is durably queued"
 assert_eq "1" "$(sqlite3 "$DB" "SELECT attempts FROM manul_todo_result_outbox WHERE taskId='completed-task';")" "failed delivery increments retry count"
