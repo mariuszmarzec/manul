@@ -108,11 +108,8 @@ if [[ "${1:-}" == "api" ]]; then
   if [[ "$args" == *"api/user"* ]] || [[ "$args" == "api user"* ]]; then
     echo '{"login":"mariuszmarzec","id":1,"type":"User"}'; exit 0
   fi
-  if [[ "$args" == *"issues/comments?per_page=100"* ]]; then cat "$MOCK_GH/comments.json"; exit 0; fi
-  # The poller separately syncs the conversation history at the end of the
-  # cycle. Serve the same fixture there, but do not confuse it with the global
-  # comments scan above.
   if [[ "$args" == *"repos/mariuszmarzec/shoppingListGenerator/issues/27/comments?per_page=100"* ]]; then cat "$MOCK_GH/comments.json"; exit 0; fi
+  if [[ "$args" == *"issues/comments?per_page=100"* ]]; then cat "$MOCK_GH/comments.json"; exit 0; fi
   echo '[]'; exit 0
 fi
 echo '{}'
