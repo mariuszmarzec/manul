@@ -6,6 +6,8 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [master]
+  push:
+    branches: ["fix/poller-conversation-message-dedup"]
 
 permissions:
   contents: read
