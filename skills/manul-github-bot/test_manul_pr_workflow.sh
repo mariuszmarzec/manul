@@ -456,6 +456,14 @@ test_prompt_enforces_agent_posting() {
   local has_routing
   has_routing="$(grep -c 'in_reply_to' "$PROMPT")"
   assert_eq "$TEST_NAME (routing instructions present)" "1" "$has_routing"
+
+  # VERIFY is an immutable report-only contract throughout generated prompts.
+  local has_verify_action_contract
+  has_verify_action_contract="$(grep -c 'When \`Task Action\` is \`VERIFY\`:' "$DAEMON")"
+  assert_eq "$TEST_NAME (VERIFY action is explicit in generated prompt)" "1" "$has_verify_action_contract"
+  local has_verify_runtime_guard
+  has_verify_runtime_guard="$(grep -c 'if \[ "\$TASK_ACTION" = "VERIFY" \]; then DELIVERY_MODE="comment_only"; fi' "$DAEMON")"
+  assert_eq "$TEST_NAME (VERIFY forces report-only evaluator mode)" "1" "$has_verify_runtime_guard"
 }
 
 # ============================================================================
