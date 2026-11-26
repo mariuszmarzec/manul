@@ -210,7 +210,6 @@ test_placeholder_no_duplicates_on_repoll() {
   MANUL_DIR="$MANUL_DIR" TEST_DIR="$TEST_DIR" PATH="$MOCK_GH:$PATH" \
     bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator >/dev/null 2>&1 || true
   local first
-  first="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;") "
   first="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;")"
 
   local result
