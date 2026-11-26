@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# This script is an executable Manul entry point; preserve its Git execute bit.
 # manul-queue-reset.sh — Reset Manul task state.
 #
 # Default mode rebuilds replayable unfinished tasks and polls configured
