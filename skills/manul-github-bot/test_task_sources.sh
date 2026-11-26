@@ -239,6 +239,30 @@ race_active_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHER
 assert_eq "terminal task history is preserved when a new source task is queued" "2" "$race_total_count"
 assert_eq "terminal tasks do not block reopened work" "1" "$race_active_count"
 
+# The same Todo root must not run twice when it is visible through local and
+# remote MCP providers, but fingerprint updates within one provider are new
+# source versions and intentionally retain their own row/context.
+todo_remote_cross_source="$(jq -cn '{
+  taskSourceType:"todo_remote_mcp", taskSourceId:"88@remote-fingerprint",
+  taskSourceUrl:"fiteo-todo://task/88@remote-fingerprint",
+  title:"Shared Todo root", body:"Shared Todo root", prompt:"Process shared Todo root",
+  createdAt:"2026-11-26T12:00:00Z", updatedAt:"2026-11-26T12:00:00Z",
+  state:"OPEN", action:"IMPLEMENT",
+  metadata:{repository:"",issueNumber:0}, execution:{kind:"repository"}
+}')"
+todo_local_cross_source="$(jq -cn '{
+  taskSourceType:"todo_local_mcp", taskSourceId:"88@local-fingerprint",
+  taskSourceUrl:"fiteo-todo://task/88@local-fingerprint",
+  title:"Same Todo root", body:"Same Todo root", prompt:"Process same Todo root",
+  createdAt:"2026-11-26T12:01:00Z", updatedAt:"2026-11-26T12:01:00Z",
+  state:"OPEN", action:"IMPLEMENT",
+  metadata:{repository:"",issueNumber:0}, execution:{kind:"repository"}
+}')"
+queue_normalized_source_task "$todo_remote_cross_source"
+queue_normalized_source_task "$todo_local_cross_source"
+todo_cross_source_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE taskSourceType IN ('todo_local_mcp','todo_remote_mcp') AND taskSourceId LIKE '88@%' AND status IN ('queued','running','blocked_user','waiting_children','delivery_pending');")"
+assert_eq "same Todo root is deduplicated across local and remote providers" "1" "$todo_cross_source_count"
+
 # Todo fingerprints identify a source version, not the durable root task context.
 todo_remote_task="$(jq -cn '{
   taskSourceType:"todo_remote_mcp",
