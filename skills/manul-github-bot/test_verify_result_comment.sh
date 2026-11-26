@@ -574,7 +574,7 @@ assert_rc "Escaped-newline report contains meaningful content" 0 "$?"
 empty_content_test_body="$content_test_marker\\n\\n— manul 🐈"
 result_comment_body_has_content "$empty_content_test_body" "$content_test_marker"
 assert_rc "Marker and signature without prose are empty" 1 "$?"
-multiline_content_test_body="$content_test_marker"
+multiline_content_test_body="$(printf '%s\n' "$content_test_marker" "Useful multiline report." "" "— manul 🐈")"
 result_comment_body_has_content "$multiline_content_test_body" "$content_test_marker"
 assert_rc "Actual multiline report contains meaningful content" 0 "$?"
 
