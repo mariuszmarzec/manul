@@ -574,7 +574,827 @@ assert_rc "Escaped-newline report contains meaningful content" 0 "$?"
 empty_content_test_body="$content_test_marker\\n\\n— manul 🐈"
 result_comment_body_has_content "$empty_content_test_body" "$content_test_marker"
 assert_rc "Marker and signature without prose are empty" 1 "$?"
-multiline_content_test_body="$content_test_marker"$'\\n'"Useful multiline report."$'\\n\\n'"— manul 🐈"
+multiline_content_test_body="$content_test_marker"
+result_comment_body_has_content "$multiline_content_test_body" "$content_test_marker"
+assert_rc "Actual multiline report contains meaningful content" 0 "$?"
+
+# ── Test 1: Top-level comment with matching marker ─────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 100, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-1:attempt:1 -->\nI completed the task.\n\n— manul 🐈"}]
+EOF
+run_test "Found: top-level comment with marker" \
+    "$REPO" 1 "result-1" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 0
+
+# The report-only evaluator uses the extended verifier mode so marker,
+# uniqueness, and meaningful content are checked from the same GitHub read.
+echo "Test: report-only verifier accepts a non-empty exact-marker result"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-nonempty" "$REPO" 1 "https://github.com/owner/repo/issues/1#issuecomment-result-nonempty"
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 110, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-nonempty:attempt:1 --> Useful findings and validation results. — manul 🐈"}]
+EOF
+RESULT_COMMENT_VERIFY_FAILURE_CODE=""
+verify_result_comment "$REPO" 1 "result-nonempty" "result-nonempty" 1 true >/dev/null 2>&1
+rc=$?
+assert_rc "Report-only exact marker with meaningful content succeeds" 0 "$rc"
+assert_rc "Successful report-only verification has no failure code" "" "$RESULT_COMMENT_VERIFY_FAILURE_CODE"
+
+echo "Test: report-only verifier rejects marker-only result content"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-empty" "$REPO" 1 "https://github.com/owner/repo/issues/1#issuecomment-result-empty"
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 111, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-empty:attempt:1 -->"}]
+EOF
+RESULT_COMMENT_VERIFY_FAILURE_CODE=""
+verify_result_comment "$REPO" 1 "result-empty" "result-empty" 1 true >/dev/null 2>&1
+rc=$?
+assert_rc "Report-only marker without a user-facing report fails" 1 "$rc"
+assert_rc "Empty report is classified distinctly" "DELIVERY_COMMENT_EMPTY" "$RESULT_COMMENT_VERIFY_FAILURE_CODE"
+
+# ── Test 2: Review reply with matching marker ─────────────────────────────────
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[{"id": 101, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 100, "body": "<!-- manul-task:review:result-2:attempt:1 -->\\nReply with result.\\n\\n— manul 🐈"}]
+EOF
+rm -f "$WORK/responses/owner__repo__issues__1__comments.json"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+verify_result_comment "$REPO" 42 "review:result-2" "review:result-2" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Found: review reply with marker" 0 "$rc"
+
+# ── Test 2b: Inline PR review comment with matching marker ─────────────────────
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[
+  {"id": 201, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 100,
+   "body": "<!-- manul-task:review:result-2b:attempt:1 -->\\nReply result in inline review thread.\\n\\n— manul 🐈"}
+]
+EOF
+rm -f "$WORK/responses/"owner__repo__issues__1__comments.json
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2b" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+echo "Test: Found inline PR review comment with marker ..."
+verify_result_comment "$REPO" 42 "review:result-2b" "review:result-2b" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Found: inline PR review comment with marker" 0 "$rc"
+
+# ── Test 2c: A matching marker in a different review thread must be rejected ───
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[
+  {"id": 202, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 999,
+   "body": "<!-- manul-task:review:result-2c:attempt:1 -->\nWrong review thread.\n\n— manul 🐈"}
+]
+EOF
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2c" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+verify_result_comment "$REPO" 42 "review:result-2c" "review:result-2c" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Rejected: result marker exists only in a different review thread" 1 "$rc"
+
+# ── Test 3: No comments with marker ────────────────────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 102, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "Some comment without marker"}]
+EOF
+run_test "Not found: no marker in comments" \
+    "$REPO" 1 "result-3" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 4: Lifecycle comments rejected ────────────────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[
+  {"id": 103, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "✅ Manul completed the task"},
+  {"id": 104, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "🔄 Manul is working on this task"},
+  {"id": 105, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "❌ Manul failed after 3 attempts"},
+  {"id": 106, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "⚠️ Manul detected an issue"}
+]
+EOF
+run_test "Lifecycle comments rejected (no real result)" \
+    "$REPO" 1 "result-4" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 5: Multiple matching comments → FAIL (duplicate comments invalid) ─────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[
+  {"id": 107, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-5:attempt:1 -->\nFirst result"},
+  {"id": 108, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-5:attempt:1 -->\nSecond result"}
+]
+EOF
+run_test "Multiple matches rejected (invalid duplicates)" \
+    "$REPO" 1 "result-5" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 6: Wrong attempt number ───────────────────────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 109, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-6:attempt:3 -->\nWrong attempt"}]
+EOF
+run_test "Wrong attempt number rejected" \
+    "$REPO" 1 "result-6" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 6b: A unique current-attempt result with a stale marker is repaired in place ──
+echo "Test: unique result comment from this attempt has a stale attempt marker"
+rm -f "$TEMP_DB" "$WORK/responses/owner__repo__issues__1__comments.json" "$PATCH_LOG_FILE"
+setup_db
+START_AT="$(date -u -d '5 minutes ago' '+%Y-%m-%d %H:%M:%S')"
+CREATED_AT="$(date -u -d '1 minute ago' '+%Y-%m-%dT%H:%M:%SZ')"
+COMMENT_ID="result-repair"
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-result-repair"
+insert_task "$COMMENT_ID" "$REPO" 1 "$COMMENT_URL"
+sqlite3 "$TEMP_DB" "UPDATE processed_comments SET status='running', attempts=3, agentStartedAt='$START_AT' WHERE commentId='$COMMENT_ID';"
+STALE_BODY="<!-- manul-task:${COMMENT_ID}:attempt:1 -->
+The implementation finished on the third execution.
+— manul 🐈"
+jq -n --arg created_at "$CREATED_AT" --arg body "$STALE_BODY" '[{id:113,in_reply_to_id:null,created_at:$created_at,body:$body}]' > "$WORK/responses/owner__repo__issues__1__comments.json"
+
+verify_result_comment "$REPO" 1 "$COMMENT_ID" "$COMMENT_ID" 3 >/dev/null 2>&1
+rc=$?
+assert_rc "Unique current-run result marker is repaired in place for attempt 3" 0 "$rc"
+if grep -Fq "<!-- manul-task:${COMMENT_ID}:attempt:3 -->" "$PATCH_LOG_FILE" &&
+   grep -Fq "repos/owner/repo/issues/comments/113" "$PATCH_LOG_FILE"; then
+    ok "Marker repair PATCH targets the existing result comment and uses current attempt"
+else
+    fail "Marker repair PATCH request is missing or targets the wrong comment"
+fi
+if ! grep -Fq "<!-- manul-task:${COMMENT_ID}:attempt:1 -->" "$PATCH_LOG_FILE"; then
+    ok "Marker repair replaces stale attempt marker rather than duplicating the comment"
+else
+    fail "Marker repair request retained the stale marker"
+fi
+
+# ── Test 6c: An older result comment must not be repaired as the current attempt ──
+echo "Test: stale result comment from before this attempt remains rejected"
+rm -f "$TEMP_DB" "$WORK/responses/owner__repo__issues__1__comments.json" "$PATCH_LOG_FILE"
+setup_db
+START_AT="$(date -u -d '5 minutes ago' '+%Y-%m-%d %H:%M:%S')"
+CREATED_AT="$(date -u -d '10 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')"
+COMMENT_ID="result-old-comment"
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-result-old-comment"
+insert_task "$COMMENT_ID" "$REPO" 1 "$COMMENT_URL"
+sqlite3 "$TEMP_DB" "UPDATE processed_comments SET status='running', attempts=3, agentStartedAt='$START_AT' WHERE commentId='$COMMENT_ID';"
+STALE_BODY="<!-- manul-task:$COMMENT_ID:attempt:1 -->
+This result was posted by an earlier attempt.
+— manul 🐈"
+jq -n --arg created_at "$CREATED_AT" --arg body "$STALE_BODY" '[{id:114,in_reply_to_id:null,created_at:$created_at,body:$body}]' > "$WORK/responses/owner__repo__issues__1__comments.json"
+verify_result_comment "$REPO" 1 "$COMMENT_ID" "$COMMENT_ID" 3 >/dev/null 2>&1
+rc=$?
+assert_rc "Comment created before current attempt is rejected" 1 "$rc"
+[ ! -s "$PATCH_LOG_FILE" ] && ok "Older result comment is never modified" || fail "Stale result comment was incorrectly patched"
+# ── Test 7: gh API failure → fail-closed ──────────────────────────────────────
+# Create a fake gh that fails
+cat > "$FAKE_BIN/gh_fail" << 'EOF'
+#!/bin/bash
+echo "[]" >&2
+exit 1
+EOF
+chmod +x "$FAKE_BIN/gh_fail"
+
+# Temporarily replace gh with failing version
+mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.bak"
+cp "$FAKE_BIN/gh_fail" "$FAKE_BIN/gh"
+
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-7" "$REPO" 1 "https://github.com/${REPO}/issues/1#issuecomment-result-7"
+
+verify_result_comment "$REPO" 1 "result-7" "result-7" 1 >/dev/null 2>&1
+local_rc=$?
+
+# Restore original gh
+mv "$FAKE_BIN/gh.bak" "$FAKE_BIN/gh"
+
+if [ "$local_rc" -ne 0 ]; then
+    ok "gh API failure → fail-closed (rc=$local_rc)"
+else
+    fail "gh API failure → should return non-zero (got rc=$local_rc)"
+fi
+
+# ── Test 8: Missing commentUrl in DB ───────────────────────────────────────────
+rm -f "$TEMP_DB"
+setup_db
+# Don't insert any task record
+
+verify_result_comment "$REPO" 1 "nonexistent-task" "nonexistent-task" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Missing commentUrl in DB" 1 "$rc"
+
+# ── Test 9: Empty/null body ────────────────────────────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[
+  {"id": 110, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": null},
+  {"id": 111, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": ""},
+  {"id": 112, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "Just text, no marker"}
+]
+EOF
+run_test "Empty/null bodies don't match" \
+    "$REPO" 1 "result-9" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ============================================================================
+# Integration test — full dispatch flow with real daemon state machine
+# ============================================================================
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  verify_result_comment() — Integration Tests"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+# ── Integration Test 10: Full cycle — task queued → claimed → verified ─────────
+echo "Test: Full dispatch cycle (queued→running→verified→completed)"
+rm -f "$TEMP_DB"
+setup_db
+
+COMMENT_ID="integration-10"
+REPO="owner/repo"
+ISSUE=1
+ATTEMPT=1
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-${COMMENT_ID}"
+
+# Step A: Insert task as queued
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+
+# Step B: Verify task is queued
+queued_before="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='$COMMENT_ID' AND status='queued';")"
+if [ "$queued_before" = "1" ]; then
+    ok "Integration: task starts as queued"
+else
+    fail "Integration: task should be queued (got $queued_before)"
+fi
+
+# Step C: Simulate agent completing task
+sqlite3 "$TEMP_DB" "
+    UPDATE processed_comments
+    SET status='running', attempts=1, processedAt=datetime('now'), heartbeatAt=datetime('now'), workerPid=$$
+    WHERE commentId='$COMMENT_ID';
+" 2>/dev/null
+
+# Step D: Post a fake result comment via fake gh
+RESULT_BODY="<!-- manul-task:${COMMENT_ID}:attempt:${ATTEMPT} -->
+I have completed the implementation. All tests pass.
+
+— manul 🐈"
+
+echo "[{\"id\": 200, \"user\": {\"login\": \"Agent-Fix\"}, \"in_reply_to_id\": null, \"body\": null}]" | \
+    jq --arg body "$RESULT_BODY" '.[0].body = $body' > "$WORK/responses/owner__repo__issues__1__comments.json"
+
+# Step E: Run verification
+verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "$ATTEMPT" >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+    ok "Integration: verification passes with correct marker"
+else
+    fail "Integration: verification should pass with correct marker"
+fi
+
+# Step F: Transition to completed
+if update_task_completion "$COMMENT_ID" "completed" 2>/dev/null; then
+    ok "Integration: task transitioned to completed"
+else
+    fail "Integration: task should transition to completed"
+fi
+
+# Step G: Verify final state
+final_status="$(sqlite3 "$TEMP_DB" "SELECT status FROM processed_comments WHERE commentId='$COMMENT_ID';")"
+final_processed="$(sqlite3 "$TEMP_DB" "SELECT processedAt FROM processed_comments WHERE commentId='$COMMENT_ID';")"
+if [ "$final_status" = "completed" ] && [ -n "$final_processed" ]; then
+    ok "Integration: final state is completed with processedAt set"
+else
+    fail "Integration: expected completed+processedAt, got status=$final_status processedAt=$final_processed"
+fi
+
+# ── Integration Test 11: Fail-closed on missing commentUrl ────────────────────
+echo ""
+echo "Test: Fail-closed when commentUrl is missing from DB"
+rm -f "$TEMP_DB"
+setup_db
+
+# Insert task WITHOUT a valid commentUrl (empty string)
+sqlite3 "$TEMP_DB" "
+    INSERT OR REPLACE INTO processed_comments
+        (commentId, repository, issueNumber, commentUrl, prompt, status, attempts, createdAt)
+    VALUES
+        ('no-url-task', '$REPO', $ISSUE, '', 'test prompt', 'queued', 0, '2026-09-10T00:00:00Z');
+" 2>/dev/null
+
+verify_result_comment "$REPO" "$ISSUE" "no-url-task" "no-url-task" 1 >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    ok "Integration: missing commentUrl correctly fails (rc=1)"
+else
+    fail "Integration: missing commentUrl should cause failure (expected rc=1)"
+fi
+
+# ── Integration Test 12: Lifecycle comments in result don't fool verification ──
+echo ""
+echo "Test: Lifecycle emoji prefix doesn't produce false positive"
+rm -f "$TEMP_DB"
+setup_db
+
+LC_COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-life-cycle-test"
+insert_task "life-cycle-test" "$REPO" "$ISSUE" "$LC_COMMENT_URL"
+
+# Comment starts with ✅ (lifecycle) but also contains a marker — should be rejected
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 300, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "✅ Manul completed\n<!-- manul-task:life-cycle-test:attempt:1 -->\nThis should not count"}]
+EOF
+
+verify_result_comment "$REPO" "$ISSUE" "life-cycle-test" "life-cycle-test" 1 >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    ok "Integration: lifecycle-prefixed comment correctly rejected (rc=1)"
+else
+    fail "Integration: lifecycle-prefixed comment should be rejected (expected rc=1)"
+fi
+
+# ============================================================================
+# Timeout regression test — hanging gh process must be killed
+# ============================================================================
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Timeout/Process Cleanup Regression Tests"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+echo "Test: API timeout → function returns failure, no hanging gh"
+rm -f "$TEMP_DB"
+setup_db
+COMMENT_ID="timeout-test"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "https://github.com/owner/repo/issues/1#issuecomment-${COMMENT_ID}"
+
+# Create a fake gh that hangs indefinitely
+cat > "$FAKE_BIN/gh_hang" << 'HANGEOR'
+#!/bin/bash
+# Fake gh that hangs forever
+while true; do
+    sleep 1
+done
+HANGEOR
+chmod +x "$FAKE_BIN/gh_hang"
+
+# Save original gh, replace with hanging version
+mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.bak"
+ln -sf "$FAKE_BIN/gh_hang" "$FAKE_BIN/gh"
+
+# Set a short timeout for testing
+export GH_API_TIMEOUT="1"
+
+# Run verification — should timeout and return failure
+START_TIME=$(date +%s)
+verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "1" >/dev/null 2>&1
+RESULT_RC=$?
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+
+# Restore original gh
+rm -f "$FAKE_BIN/gh"
+mv "$FAKE_BIN/gh.bak" "$FAKE_BIN/gh"
+
+# Clean up hanging process
+pkill -f "gh_hang" 2>/dev/null || true
+sleep 0.5
+
+if [ "$RESULT_RC" -ne 0 ]; then
+    ok "API timeout → returns failure (rc=$RESULT_RC, elapsed=${ELAPSED}s)"
+else
+    fail "API timeout → should return failure (got rc=$RESULT_RC)"
+fi
+
+# Verify no gh processes are still hanging
+if pgrep -f "gh_hang" > /dev/null 2>&1; then
+    fail "Hanging gh process still exists after timeout"
+    pkill -9 -f "gh_hang" 2>/dev/null || true
+else
+    ok "No hanging gh process after timeout"
+fi
+
+# ============================================================================
+# Results summary
+# ============================================================================
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Results: $PASS passed, $FAIL failed (out of $TOTAL tests)"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+if [ "$FAIL" -eq 0 ]; then
+    echo -e "${GREEN}All tests passed.${NC}"
+else
+    echo -e "${RED}$FAIL test(s) failed.${NC}"
+fi
+
+exit $FAIL
+\n'"Useful multiline report."
+result_comment_body_has_content "$multiline_content_test_body" "$content_test_marker"
+assert_rc "Actual multiline report contains meaningful content" 0 "$?"
+
+# ── Test 1: Top-level comment with matching marker ─────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 100, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-1:attempt:1 -->\nI completed the task.\n\n— manul 🐈"}]
+EOF
+run_test "Found: top-level comment with marker" \
+    "$REPO" 1 "result-1" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 0
+
+# The report-only evaluator uses the extended verifier mode so marker,
+# uniqueness, and meaningful content are checked from the same GitHub read.
+echo "Test: report-only verifier accepts a non-empty exact-marker result"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-nonempty" "$REPO" 1 "https://github.com/owner/repo/issues/1#issuecomment-result-nonempty"
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 110, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-nonempty:attempt:1 --> Useful findings and validation results. — manul 🐈"}]
+EOF
+RESULT_COMMENT_VERIFY_FAILURE_CODE=""
+verify_result_comment "$REPO" 1 "result-nonempty" "result-nonempty" 1 true >/dev/null 2>&1
+rc=$?
+assert_rc "Report-only exact marker with meaningful content succeeds" 0 "$rc"
+assert_rc "Successful report-only verification has no failure code" "" "$RESULT_COMMENT_VERIFY_FAILURE_CODE"
+
+echo "Test: report-only verifier rejects marker-only result content"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-empty" "$REPO" 1 "https://github.com/owner/repo/issues/1#issuecomment-result-empty"
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 111, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-empty:attempt:1 -->"}]
+EOF
+RESULT_COMMENT_VERIFY_FAILURE_CODE=""
+verify_result_comment "$REPO" 1 "result-empty" "result-empty" 1 true >/dev/null 2>&1
+rc=$?
+assert_rc "Report-only marker without a user-facing report fails" 1 "$rc"
+assert_rc "Empty report is classified distinctly" "DELIVERY_COMMENT_EMPTY" "$RESULT_COMMENT_VERIFY_FAILURE_CODE"
+
+# ── Test 2: Review reply with matching marker ─────────────────────────────────
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[{"id": 101, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 100, "body": "<!-- manul-task:review:result-2:attempt:1 -->\\nReply with result.\\n\\n— manul 🐈"}]
+EOF
+rm -f "$WORK/responses/owner__repo__issues__1__comments.json"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+verify_result_comment "$REPO" 42 "review:result-2" "review:result-2" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Found: review reply with marker" 0 "$rc"
+
+# ── Test 2b: Inline PR review comment with matching marker ─────────────────────
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[
+  {"id": 201, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 100,
+   "body": "<!-- manul-task:review:result-2b:attempt:1 -->\\nReply result in inline review thread.\\n\\n— manul 🐈"}
+]
+EOF
+rm -f "$WORK/responses/"owner__repo__issues__1__comments.json
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2b" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+echo "Test: Found inline PR review comment with marker ..."
+verify_result_comment "$REPO" 42 "review:result-2b" "review:result-2b" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Found: inline PR review comment with marker" 0 "$rc"
+
+# ── Test 2c: A matching marker in a different review thread must be rejected ───
+cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
+[
+  {"id": 202, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 999,
+   "body": "<!-- manul-task:review:result-2c:attempt:1 -->\nWrong review thread.\n\n— manul 🐈"}
+]
+EOF
+rm -f "$TEMP_DB"
+setup_db
+insert_task "review:result-2c" "$REPO" 42 "https://github.com/owner/repo/pull/42#discussion_r100"
+verify_result_comment "$REPO" 42 "review:result-2c" "review:result-2c" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Rejected: result marker exists only in a different review thread" 1 "$rc"
+
+# ── Test 3: No comments with marker ────────────────────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 102, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "Some comment without marker"}]
+EOF
+run_test "Not found: no marker in comments" \
+    "$REPO" 1 "result-3" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 4: Lifecycle comments rejected ────────────────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[
+  {"id": 103, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "✅ Manul completed the task"},
+  {"id": 104, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "🔄 Manul is working on this task"},
+  {"id": 105, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "❌ Manul failed after 3 attempts"},
+  {"id": 106, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "⚠️ Manul detected an issue"}
+]
+EOF
+run_test "Lifecycle comments rejected (no real result)" \
+    "$REPO" 1 "result-4" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 5: Multiple matching comments → FAIL (duplicate comments invalid) ─────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[
+  {"id": 107, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-5:attempt:1 -->\nFirst result"},
+  {"id": 108, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-5:attempt:1 -->\nSecond result"}
+]
+EOF
+run_test "Multiple matches rejected (invalid duplicates)" \
+    "$REPO" 1 "result-5" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 6: Wrong attempt number ───────────────────────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 109, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-6:attempt:3 -->\nWrong attempt"}]
+EOF
+run_test "Wrong attempt number rejected" \
+    "$REPO" 1 "result-6" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ── Test 6b: A unique current-attempt result with a stale marker is repaired in place ──
+echo "Test: unique result comment from this attempt has a stale attempt marker"
+rm -f "$TEMP_DB" "$WORK/responses/owner__repo__issues__1__comments.json" "$PATCH_LOG_FILE"
+setup_db
+START_AT="$(date -u -d '5 minutes ago' '+%Y-%m-%d %H:%M:%S')"
+CREATED_AT="$(date -u -d '1 minute ago' '+%Y-%m-%dT%H:%M:%SZ')"
+COMMENT_ID="result-repair"
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-result-repair"
+insert_task "$COMMENT_ID" "$REPO" 1 "$COMMENT_URL"
+sqlite3 "$TEMP_DB" "UPDATE processed_comments SET status='running', attempts=3, agentStartedAt='$START_AT' WHERE commentId='$COMMENT_ID';"
+STALE_BODY="<!-- manul-task:${COMMENT_ID}:attempt:1 -->
+The implementation finished on the third execution.
+— manul 🐈"
+jq -n --arg created_at "$CREATED_AT" --arg body "$STALE_BODY" '[{id:113,in_reply_to_id:null,created_at:$created_at,body:$body}]' > "$WORK/responses/owner__repo__issues__1__comments.json"
+
+verify_result_comment "$REPO" 1 "$COMMENT_ID" "$COMMENT_ID" 3 >/dev/null 2>&1
+rc=$?
+assert_rc "Unique current-run result marker is repaired in place for attempt 3" 0 "$rc"
+if grep -Fq "<!-- manul-task:${COMMENT_ID}:attempt:3 -->" "$PATCH_LOG_FILE" &&
+   grep -Fq "repos/owner/repo/issues/comments/113" "$PATCH_LOG_FILE"; then
+    ok "Marker repair PATCH targets the existing result comment and uses current attempt"
+else
+    fail "Marker repair PATCH request is missing or targets the wrong comment"
+fi
+if ! grep -Fq "<!-- manul-task:${COMMENT_ID}:attempt:1 -->" "$PATCH_LOG_FILE"; then
+    ok "Marker repair replaces stale attempt marker rather than duplicating the comment"
+else
+    fail "Marker repair request retained the stale marker"
+fi
+
+# ── Test 6c: An older result comment must not be repaired as the current attempt ──
+echo "Test: stale result comment from before this attempt remains rejected"
+rm -f "$TEMP_DB" "$WORK/responses/owner__repo__issues__1__comments.json" "$PATCH_LOG_FILE"
+setup_db
+START_AT="$(date -u -d '5 minutes ago' '+%Y-%m-%d %H:%M:%S')"
+CREATED_AT="$(date -u -d '10 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')"
+COMMENT_ID="result-old-comment"
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-result-old-comment"
+insert_task "$COMMENT_ID" "$REPO" 1 "$COMMENT_URL"
+sqlite3 "$TEMP_DB" "UPDATE processed_comments SET status='running', attempts=3, agentStartedAt='$START_AT' WHERE commentId='$COMMENT_ID';"
+STALE_BODY="<!-- manul-task:$COMMENT_ID:attempt:1 -->
+This result was posted by an earlier attempt.
+— manul 🐈"
+jq -n --arg created_at "$CREATED_AT" --arg body "$STALE_BODY" '[{id:114,in_reply_to_id:null,created_at:$created_at,body:$body}]' > "$WORK/responses/owner__repo__issues__1__comments.json"
+verify_result_comment "$REPO" 1 "$COMMENT_ID" "$COMMENT_ID" 3 >/dev/null 2>&1
+rc=$?
+assert_rc "Comment created before current attempt is rejected" 1 "$rc"
+[ ! -s "$PATCH_LOG_FILE" ] && ok "Older result comment is never modified" || fail "Stale result comment was incorrectly patched"
+# ── Test 7: gh API failure → fail-closed ──────────────────────────────────────
+# Create a fake gh that fails
+cat > "$FAKE_BIN/gh_fail" << 'EOF'
+#!/bin/bash
+echo "[]" >&2
+exit 1
+EOF
+chmod +x "$FAKE_BIN/gh_fail"
+
+# Temporarily replace gh with failing version
+mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.bak"
+cp "$FAKE_BIN/gh_fail" "$FAKE_BIN/gh"
+
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-7" "$REPO" 1 "https://github.com/${REPO}/issues/1#issuecomment-result-7"
+
+verify_result_comment "$REPO" 1 "result-7" "result-7" 1 >/dev/null 2>&1
+local_rc=$?
+
+# Restore original gh
+mv "$FAKE_BIN/gh.bak" "$FAKE_BIN/gh"
+
+if [ "$local_rc" -ne 0 ]; then
+    ok "gh API failure → fail-closed (rc=$local_rc)"
+else
+    fail "gh API failure → should return non-zero (got rc=$local_rc)"
+fi
+
+# ── Test 8: Missing commentUrl in DB ───────────────────────────────────────────
+rm -f "$TEMP_DB"
+setup_db
+# Don't insert any task record
+
+verify_result_comment "$REPO" 1 "nonexistent-task" "nonexistent-task" 1 >/dev/null 2>&1
+rc=$?
+assert_rc "Missing commentUrl in DB" 1 "$rc"
+
+# ── Test 9: Empty/null body ────────────────────────────────────────────────────
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[
+  {"id": 110, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": null},
+  {"id": 111, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": ""},
+  {"id": 112, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "Just text, no marker"}
+]
+EOF
+run_test "Empty/null bodies don't match" \
+    "$REPO" 1 "result-9" 1 \
+    "$WORK/responses/owner__repo__issues__1__comments.json" 1
+
+# ============================================================================
+# Integration test — full dispatch flow with real daemon state machine
+# ============================================================================
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  verify_result_comment() — Integration Tests"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+# ── Integration Test 10: Full cycle — task queued → claimed → verified ─────────
+echo "Test: Full dispatch cycle (queued→running→verified→completed)"
+rm -f "$TEMP_DB"
+setup_db
+
+COMMENT_ID="integration-10"
+REPO="owner/repo"
+ISSUE=1
+ATTEMPT=1
+COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-${COMMENT_ID}"
+
+# Step A: Insert task as queued
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "$COMMENT_URL"
+
+# Step B: Verify task is queued
+queued_before="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='$COMMENT_ID' AND status='queued';")"
+if [ "$queued_before" = "1" ]; then
+    ok "Integration: task starts as queued"
+else
+    fail "Integration: task should be queued (got $queued_before)"
+fi
+
+# Step C: Simulate agent completing task
+sqlite3 "$TEMP_DB" "
+    UPDATE processed_comments
+    SET status='running', attempts=1, processedAt=datetime('now'), heartbeatAt=datetime('now'), workerPid=$$
+    WHERE commentId='$COMMENT_ID';
+" 2>/dev/null
+
+# Step D: Post a fake result comment via fake gh
+RESULT_BODY="<!-- manul-task:${COMMENT_ID}:attempt:${ATTEMPT} -->
+I have completed the implementation. All tests pass.
+
+— manul 🐈"
+
+echo "[{\"id\": 200, \"user\": {\"login\": \"Agent-Fix\"}, \"in_reply_to_id\": null, \"body\": null}]" | \
+    jq --arg body "$RESULT_BODY" '.[0].body = $body' > "$WORK/responses/owner__repo__issues__1__comments.json"
+
+# Step E: Run verification
+verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "$ATTEMPT" >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+    ok "Integration: verification passes with correct marker"
+else
+    fail "Integration: verification should pass with correct marker"
+fi
+
+# Step F: Transition to completed
+if update_task_completion "$COMMENT_ID" "completed" 2>/dev/null; then
+    ok "Integration: task transitioned to completed"
+else
+    fail "Integration: task should transition to completed"
+fi
+
+# Step G: Verify final state
+final_status="$(sqlite3 "$TEMP_DB" "SELECT status FROM processed_comments WHERE commentId='$COMMENT_ID';")"
+final_processed="$(sqlite3 "$TEMP_DB" "SELECT processedAt FROM processed_comments WHERE commentId='$COMMENT_ID';")"
+if [ "$final_status" = "completed" ] && [ -n "$final_processed" ]; then
+    ok "Integration: final state is completed with processedAt set"
+else
+    fail "Integration: expected completed+processedAt, got status=$final_status processedAt=$final_processed"
+fi
+
+# ── Integration Test 11: Fail-closed on missing commentUrl ────────────────────
+echo ""
+echo "Test: Fail-closed when commentUrl is missing from DB"
+rm -f "$TEMP_DB"
+setup_db
+
+# Insert task WITHOUT a valid commentUrl (empty string)
+sqlite3 "$TEMP_DB" "
+    INSERT OR REPLACE INTO processed_comments
+        (commentId, repository, issueNumber, commentUrl, prompt, status, attempts, createdAt)
+    VALUES
+        ('no-url-task', '$REPO', $ISSUE, '', 'test prompt', 'queued', 0, '2026-09-10T00:00:00Z');
+" 2>/dev/null
+
+verify_result_comment "$REPO" "$ISSUE" "no-url-task" "no-url-task" 1 >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    ok "Integration: missing commentUrl correctly fails (rc=1)"
+else
+    fail "Integration: missing commentUrl should cause failure (expected rc=1)"
+fi
+
+# ── Integration Test 12: Lifecycle comments in result don't fool verification ──
+echo ""
+echo "Test: Lifecycle emoji prefix doesn't produce false positive"
+rm -f "$TEMP_DB"
+setup_db
+
+LC_COMMENT_URL="https://github.com/owner/repo/issues/1#issuecomment-life-cycle-test"
+insert_task "life-cycle-test" "$REPO" "$ISSUE" "$LC_COMMENT_URL"
+
+# Comment starts with ✅ (lifecycle) but also contains a marker — should be rejected
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 300, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "✅ Manul completed\n<!-- manul-task:life-cycle-test:attempt:1 -->\nThis should not count"}]
+EOF
+
+verify_result_comment "$REPO" "$ISSUE" "life-cycle-test" "life-cycle-test" 1 >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    ok "Integration: lifecycle-prefixed comment correctly rejected (rc=1)"
+else
+    fail "Integration: lifecycle-prefixed comment should be rejected (expected rc=1)"
+fi
+
+# ============================================================================
+# Timeout regression test — hanging gh process must be killed
+# ============================================================================
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Timeout/Process Cleanup Regression Tests"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+echo "Test: API timeout → function returns failure, no hanging gh"
+rm -f "$TEMP_DB"
+setup_db
+COMMENT_ID="timeout-test"
+insert_task "$COMMENT_ID" "$REPO" "$ISSUE" "https://github.com/owner/repo/issues/1#issuecomment-${COMMENT_ID}"
+
+# Create a fake gh that hangs indefinitely
+cat > "$FAKE_BIN/gh_hang" << 'HANGEOR'
+#!/bin/bash
+# Fake gh that hangs forever
+while true; do
+    sleep 1
+done
+HANGEOR
+chmod +x "$FAKE_BIN/gh_hang"
+
+# Save original gh, replace with hanging version
+mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.bak"
+ln -sf "$FAKE_BIN/gh_hang" "$FAKE_BIN/gh"
+
+# Set a short timeout for testing
+export GH_API_TIMEOUT="1"
+
+# Run verification — should timeout and return failure
+START_TIME=$(date +%s)
+verify_result_comment "$REPO" "$ISSUE" "$COMMENT_ID" "$COMMENT_ID" "1" >/dev/null 2>&1
+RESULT_RC=$?
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+
+# Restore original gh
+rm -f "$FAKE_BIN/gh"
+mv "$FAKE_BIN/gh.bak" "$FAKE_BIN/gh"
+
+# Clean up hanging process
+pkill -f "gh_hang" 2>/dev/null || true
+sleep 0.5
+
+if [ "$RESULT_RC" -ne 0 ]; then
+    ok "API timeout → returns failure (rc=$RESULT_RC, elapsed=${ELAPSED}s)"
+else
+    fail "API timeout → should return failure (got rc=$RESULT_RC)"
+fi
+
+# Verify no gh processes are still hanging
+if pgrep -f "gh_hang" > /dev/null 2>&1; then
+    fail "Hanging gh process still exists after timeout"
+    pkill -9 -f "gh_hang" 2>/dev/null || true
+else
+    ok "No hanging gh process after timeout"
+fi
+
+# ============================================================================
+# Results summary
+# ============================================================================
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "  Results: $PASS passed, $FAIL failed (out of $TOTAL tests)"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+if [ "$FAIL" -eq 0 ]; then
+    echo -e "${GREEN}All tests passed.${NC}"
+else
+    echo -e "${RED}$FAIL test(s) failed.${NC}"
+fi
+
+exit $FAIL
+\n\n'"— manul 🐈"
 result_comment_body_has_content "$multiline_content_test_body" "$content_test_marker"
 assert_rc "Actual multiline report contains meaningful content" 0 "$?"
 
