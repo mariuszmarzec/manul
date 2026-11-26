@@ -109,6 +109,10 @@ if [[ "${1:-}" == "api" ]]; then
     echo '{"login":"mariuszmarzec","id":1,"type":"User"}'; exit 0
   fi
   if [[ "$args" == *"repos/mariuszmarzec/shoppingListGenerator/issues/27/comments?per_page=100"* ]]; then cat "$MOCK_GH/comments.json"; exit 0; fi
+  if [[ "$args" == "api repos/mariuszmarzec/shoppingListGenerator/issues/27" ]]; then
+    echo '{"number":27,"title":"Poller fixture","body":"Fixture issue body","user":{"login":"mariuszmarzec"},"created_at":"2026-09-23T11:55:00Z","html_url":"https://github.com/mariuszmarzec/shoppingListGenerator/issues/27"}'
+    exit 0
+  fi
   if [[ "$args" == *"issues/comments?per_page=100"* ]]; then cat "$MOCK_GH/comments.json"; exit 0; fi
   echo '[]'; exit 0
 fi
