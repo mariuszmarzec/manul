@@ -115,11 +115,26 @@ test_helpers_and_persistence() {
   context="$(build_conversation_context 'conv-test-org/test-repo-issue-1')"
   grep -Fq 'Also make sure the assertion uses float comparison.' <<<"$context" || { echo 'ordinary feedback missing from follow-up context'; return 1; }
 
-  # Test idempotency
+  # Test idempotency and durable source-type promotion. A message may first
+  # be synchronized as ordinary context, then recognized as a task trigger.
   persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' comment
   count="$(sqlite3 "$db" "SELECT COUNT(*) FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1';")"
   [ "$count" -eq 3 ] || { echo "duplicate persistence created $count rows"; return 1; }
-  
+
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' task-trigger
+  local message_type
+  message_type="$(sqlite3 "$db" "SELECT messageType FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1' AND commentId='101';")"
+  [ "$message_type" = "task-trigger" ] || { echo "existing context message did not promote to task-trigger (type=$message_type)"; return 1; }
+
+  # Subsequent ordinary sync must not downgrade the trigger marker.
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' comment
+  message_type="$(sqlite3 "$db" "SELECT messageType FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1' AND commentId='101';")"
+  [ "$message_type" = "task-trigger" ] || { echo "ordinary sync downgraded task-trigger marker (type=$message_type)"; return 1; }
+
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 102 user 'Now implement the change according to my previous feedback.' 'https://example/102' '2026-01-01T00:00:03Z' user-clarification
+  message_type="$(sqlite3 "$db" "SELECT messageType FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1' AND commentId='102';")"
+  [ "$message_type" = "user-clarification" ] || { echo "existing message did not promote to user-clarification (type=$message_type)"; return 1; }
+
   rm -rf "$dir"
   return 0
 }
