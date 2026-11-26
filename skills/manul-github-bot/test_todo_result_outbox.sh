@@ -16,9 +16,7 @@ sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 log() { printf '%s\n' "$*" >>"$LOG"; }
 lc_log() { :; }
 
-for function_name in ensure_todo_result_outbox_table queue_todo_result_update todo_result_outbox_is_delivered retry_pending_todo_result_updates publish_todo_task_result; do
-  eval "$(sed -n "/^${function_name}() {/,/^}/p" "$DAEMON")"
-done
+source "$SCRIPT_DIR/todo-result-outbox.sh"
 PUBLISH_RC=0
 COMPLETE_RC=0
 CALLS="$TEST_DIR/provider-calls.log"
@@ -30,6 +28,10 @@ task_source_publish_update() {
   printf '{"status":"%s","updateTaskId":7001}\n' "$4"
 }
 task_source_complete() { printf 'complete|%s|%s\n' "$2" "$3" >>"$CALLS"; return "$COMPLETE_RC"; }
+update_task_completion() {
+  local task_id="$1" new_status="$2"
+  sqlite3 "$DB" "UPDATE processed_comments SET status='$new_status' WHERE commentId='$(sql_escape "$task_id")' AND status='running'; SELECT changes();" | tail -n 1 | grep -qx '1'
+}
 sqlite3 "$DB" "
   CREATE TABLE processed_comments(
     commentId TEXT PRIMARY KEY, status TEXT NOT NULL, processedAt TEXT,
@@ -52,6 +54,7 @@ publish_todo_task_result "completed-task" "todo_local_mcp" "503@aaaaaaaaaaaaaaaa
 assert_eq "10" "$publish_rc" "delivery failure is distinguished from outbox persistence failure"
 assert_eq "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM manul_todo_result_outbox WHERE taskId='completed-task' AND deliveredAt IS NULL;")" "completed report is durably queued"
 assert_eq "1" "$(sqlite3 "$DB" "SELECT attempts FROM manul_todo_result_outbox WHERE taskId='completed-task';")" "failed delivery increments retry count"
+assert_eq "delivery_pending" "$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='completed-task';")" "finished work is parked without being re-executed"
 queue_todo_result_update "completed-task" "todo_local_mcp" "503@aaaaaaaaaaaaaaaa" completed "Retry must preserve original report." >/dev/null
 assert_eq "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM manul_todo_result_outbox WHERE taskId='completed-task';")" "outbox enqueue is idempotent"
 
