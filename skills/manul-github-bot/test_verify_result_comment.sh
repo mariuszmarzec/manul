@@ -573,6 +573,34 @@ run_test "Found: top-level comment with marker" \
     "$REPO" 1 "result-1" 1 \
     "$WORK/responses/owner__repo__issues__1__comments.json" 0
 
+# The report-only evaluator uses the extended verifier mode so marker,
+# uniqueness, and meaningful content are checked from the same GitHub read.
+echo "Test: report-only verifier accepts a non-empty exact-marker result"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-nonempty" "$REPO" 1 "https://github.com/owner/repo/issues/1#issuecomment-result-nonempty"
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 110, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-nonempty:attempt:1 -->\nUseful findings and validation results.\n\n— manul 🐈"}]
+EOF
+RESULT_COMMENT_VERIFY_FAILURE_CODE=""
+verify_result_comment "$REPO" 1 "result-nonempty" "result-nonempty" 1 true >/dev/null 2>&1
+rc=$?
+assert_rc "Report-only exact marker with meaningful content succeeds" 0 "$rc"
+assert_rc "Successful report-only verification has no failure code" "" "$RESULT_COMMENT_VERIFY_FAILURE_CODE"
+
+echo "Test: report-only verifier rejects marker-only result content"
+rm -f "$TEMP_DB"
+setup_db
+insert_task "result-empty" "$REPO" 1 "https://github.com/owner/repo/issues/1#issuecomment-result-empty"
+cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
+[{"id": 111, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-empty:attempt:1 -->"}]
+EOF
+RESULT_COMMENT_VERIFY_FAILURE_CODE=""
+verify_result_comment "$REPO" 1 "result-empty" "result-empty" 1 true >/dev/null 2>&1
+rc=$?
+assert_rc "Report-only marker without a user-facing report fails" 1 "$rc"
+assert_rc "Empty report is classified distinctly" "DELIVERY_COMMENT_EMPTY" "$RESULT_COMMENT_VERIFY_FAILURE_CODE"
+
 # ── Test 2: Review reply with matching marker ─────────────────────────────────
 cat > "$WORK/responses/owner__repo__pulls__42__comments.json" << 'EOF'
 [{"id": 101, "user": {"login": "Manul-Bot"}, "in_reply_to_id": 100, "body": "<!-- manul-task:review:result-2:attempt:1 -->\\nReply with result.\\n\\n— manul 🐈"}]
