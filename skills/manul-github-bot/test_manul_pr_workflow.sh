@@ -459,11 +459,14 @@ test_prompt_enforces_agent_posting() {
 
   # VERIFY is an immutable report-only contract throughout generated prompts.
   local has_verify_action_contract
-  has_verify_action_contract="$(grep -c 'When \`Task Action\` is \`VERIFY\`:' "$DAEMON")"
+  has_verify_action_contract="$(grep -Fc 'When `Task Action` is `VERIFY`:' "$DAEMON")"
   assert_eq "$TEST_NAME (VERIFY action is explicit in generated prompt)" "1" "$has_verify_action_contract"
   local has_verify_runtime_guard
-  has_verify_runtime_guard="$(grep -c 'if \[ "\$TASK_ACTION" = "VERIFY" \]; then DELIVERY_MODE="comment_only"; fi' "$DAEMON")"
+  has_verify_runtime_guard="$(grep -Fc 'if [ "$TASK_ACTION" = "VERIFY" ]; then DELIVERY_MODE="comment_only"; fi' "$DAEMON")"
   assert_eq "$TEST_NAME (VERIFY forces report-only evaluator mode)" "1" "$has_verify_runtime_guard"
+  local has_verify_orchestrator_contract
+  has_verify_orchestrator_contract="$(grep -Fc '`VERIFY` means report-only work' "$SCRIPT_DIR/orchestrator.prompt.md")"
+  assert_eq "$TEST_NAME (orchestrator preserves VERIFY as report-only)" "1" "$has_verify_orchestrator_contract"
 }
 
 # ============================================================================
