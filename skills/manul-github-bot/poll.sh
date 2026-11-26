@@ -1429,8 +1429,17 @@ filter_new_poll_request_members() {
     member_id="$(jq -r '.id' <<<"$member")"
     member_raw_id="$(jq -r '.rawId // .id' <<<"$member")"
     known_member="$(sqlite3 "$DB" "
-      SELECT 1 FROM processed_comments
+      SELECT 1
+      FROM (
+        SELECT 1
+        FROM processed_comments
         WHERE commentId IN ('$(sql_escape "$member_id")', '$(sql_escape "$member_raw_id")')
+        UNION ALL
+        SELECT 1
+        FROM conversation_links
+        WHERE linkType='REQUEST_BATCH_MEMBER'
+          AND commentId IN ('$(sql_escape "$member_id")', '$(sql_escape "$member_raw_id")')
+      )
       LIMIT 1;
     " 2>>"$LOG")" || return 1
     [ "$known_member" = "1" ] && continue
@@ -1537,6 +1546,18 @@ render_poll_request_batch() {
         source_url="$(jq -r '.url // ""' <<<"$source_comment")"
         source_created="$(jq -r '.created // ""' <<<"$source_comment")"
         persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$source_author" "$raw_body" "$source_url" "$source_created" "comment"
+        # Record every non-anchor trigger as a consumed member of this task.
+        # Conversation history alone must never act as queue/dedupe state.
+        if [ "$raw_id" != "$id" ]; then
+          sqlite3 "$DB" "
+            INSERT OR IGNORE INTO conversation_links(
+              conversationId, repo, issueNumber, commentId, taskCommentId, linkType, createdAt
+            ) VALUES(
+              '$(sql_escape "$conv_id")', '$(sql_escape "$repo")', $issue,
+              '$(sql_escape "$raw_id")', '$(sql_escape "$id")', 'REQUEST_BATCH_MEMBER', '$now'
+            );
+          " 2>>"$LOG" || true
+        fi
       done < <(jq -c '.batchMembers[]?' <<<"$obj")
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
       # Task context is materialized after the poll has ingested all
