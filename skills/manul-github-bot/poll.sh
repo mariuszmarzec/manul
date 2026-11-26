@@ -1375,6 +1375,7 @@ WHERE NOT EXISTS (
       OR (
         '$safe_source_type' IN ('todo_local_mcp','todo_remote_mcp')
         AND active.taskSourceType IN ('todo_local_mcp','todo_remote_mcp')
+        AND active.taskSourceType != '$safe_source_type'
         AND (
           CASE
             WHEN instr(COALESCE(active.taskSourceId,''),'@') > 0
