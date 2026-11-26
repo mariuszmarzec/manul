@@ -333,7 +333,7 @@ report_marker_pattern = re.compile(
 )
 update_marker_pattern = re.compile(
     r"<!-- MANUL_TASK_UPDATE:v1;root=([0-9]+);source=([0-9]+@[0-9a-f]{16});"
-    r"status=(?:needs_input|failed|answered);sha256=([0-9a-f]{64}) -->"
+    r"status=(?:needs_input|failed|answered|completed);sha256=([0-9a-f]{64}) -->"
 )
 for index, child in enumerate(root.get("subTasks") or []):
     description = child.get("description")
@@ -786,7 +786,6 @@ todo_task_publish_update() {
       todo_task_has_remote_trigger "$root_json" || return 1 ;;
     *) return 2 ;;
   esac
-  todo_task_is_active "$root_json" || return 1
   actual_version="$(todo_task_fingerprint "$root_json")" || return 1
   [ "$actual_version" = "$expected_version" ] || {
     echo "Todo source changed before its status update could be saved" >&2
@@ -802,13 +801,18 @@ todo_task_publish_update() {
     echo "Multiple matching Manul status subtasks exist for this Todo source version" >&2
     return 1
   fi
+  if ! todo_task_is_active "$root_json"; then
+    if [ "$status" != "completed" ] || [ "$existing_count" -ne 1 ] || ! todo_task_tree_is_done "$root_json"; then
+      return 1
+    fi
+  fi
 
   if [ "$existing_count" -eq 1 ]; then
     result_json="$(jq -c '.[0]' <<<"$existing_json")"
     result_id="$(jq -r '.id // empty' <<<"$result_json")"
     result_description="$(jq -r '.description // empty' <<<"$result_json")"
     [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
-    if [ "$status" != "answered" ] && [ "$(jq -r '.isToDo // true' <<<"$result_json")" != "true" ]; then
+    if [ "$status" != "answered" ] && [ "$status" != "completed" ] && [ "$(jq -r '.isToDo // true' <<<"$result_json")" != "true" ]; then
       echo "Generated Todo status subtask is no longer open" >&2
       return 1
     fi
@@ -818,6 +822,8 @@ todo_task_publish_update() {
       heading="Wymagane informacje do kontynuacji"
     elif [ "$status" = "answered" ]; then
       heading="Odpowiedź"
+    elif [ "$status" = "completed" ]; then
+      heading="Raport wykonania"
     else
       heading="Wykonanie zadania nie powiodło się"
     fi
@@ -849,7 +855,7 @@ todo_task_publish_update() {
   result_description="$(jq -r '.description // empty' <<<"$result_json")"
   [[ "$result_id" =~ ^[1-9][0-9]*$ ]] || return 1
   [ "$(jq -r '.parentTaskId' <<<"$result_json")" = "$task_id" ] || return 1
-  if [ "$status" != "answered" ] && [ "$(jq -r '.isToDo // true' <<<"$result_json")" != "true" ]; then
+  if [ "$status" != "answered" ] && [ "$status" != "completed" ] && [ "$(jq -r '.isToDo // true' <<<"$result_json")" != "true" ]; then
     return 1
   fi
   actual_version="$(todo_task_fingerprint "$root_json")" || return 1
