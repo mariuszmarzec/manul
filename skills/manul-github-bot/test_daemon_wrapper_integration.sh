@@ -289,10 +289,9 @@ echo "implementation change" >> "$WORKDIR/README.md"
 git -C "$WORKDIR" add README.md
 git -C "$WORKDIR" commit -qm "implementation change"
 
-# Create test database with the SAME 25-column schema as poll.sh's real DB so
-# update_task_completion() (which sets heartbeatAt/leaseExpiresAt) and
-# verify_required_pr() (which reads action/prNumber/prUrl) operate on columns
-# that actually exist.
+# Create test database with the same lifecycle columns as poll.sh's real DB,
+# including session_id, which delivery_pending clears to prevent stale runtime
+# sessions from being resumed after repository work has already finished.
 sqlite3 "$DB" "CREATE TABLE processed_comments (
     commentId TEXT PRIMARY KEY,
     repository TEXT NOT NULL,
@@ -309,6 +308,7 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
     heartbeatAt TEXT,
     leaseExpiresAt TEXT,
     workerPid INTEGER,
+    session_id TEXT,
     nextAttemptAt TEXT,
     conversationId TEXT,
     parentTaskId TEXT,
