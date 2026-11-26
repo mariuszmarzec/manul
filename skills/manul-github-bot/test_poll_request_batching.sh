@@ -57,9 +57,17 @@ assert_eq "singleton falls back to parsed prompt when fullBody is empty" "Fallba
 DB="$TEST_DIR/manul.db"
 LOG="$TEST_DIR/test.log"
 sqlite3 "$DB" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY); CREATE TABLE conversation_messages(commentId TEXT); INSERT INTO processed_comments(commentId) VALUES('issue:100'); INSERT INTO conversation_messages(commentId) VALUES('101');"
-candidate='[{"id":"issue:100","rawId":"100","fullBody":"Already queued"},{"id":"issue:101","rawId":"101","fullBody":"Already persisted"},{"id":"issue:102","rawId":"102","fullBody":"New request"},{"id":"issue:103","rawId":"103","fullBody":"New sibling"}]'
+candidate='[{"id":"issue:100","rawId":"100","fullBody":"Already queued"},{"id":"issue:101","rawId":"101","fullBody":"Persisted by history sync before task discovery"},{"id":"issue:102","rawId":"102","fullBody":"New request"},{"id":"issue:103","rawId":"103","fullBody":"New sibling"}]'
 remaining="$(filter_new_poll_request_members "$candidate")"
-assert_eq "previously queued and persisted comments are removed individually" "issue:102,issue:103" "$(jq -r '[.[].id] | join(",")' <<<"$remaining")"
+assert_eq "only comments with an existing task row are removed" "issue:101,issue:102,issue:103" "$(jq -r '[.[].id] | join(",")' <<<"$remaining")"
+# The exact race regression: history contains the trigger, but no queue row
+# exists. Production queue dedupe must still permit a task to be inserted.
+already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='issue:101' LIMIT 1;")"
+assert_eq "history-only trigger is not mistaken for an already queued task" "" "$already_recorded"
+sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId) VALUES('issue:101');"
+assert_eq "history-only trigger is queued exactly once" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:101';")"
+already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='issue:101' LIMIT 1;")"
+assert_eq "second poll sees the existing task and does not enqueue a duplicate" "1" "$already_recorded"
 filtered_batch="$(printf '%s\n' "$remaining" | render_poll_request_batch)"
 assert_eq "remaining comments are re-anchored to the earliest new comment" "issue:102" "$(jq -r '.id' <<<"$filtered_batch")"
 assert_eq "only unprocessed source comments remain in the batch" "2" "$(jq -r '.batchSize' <<<"$filtered_batch")"
