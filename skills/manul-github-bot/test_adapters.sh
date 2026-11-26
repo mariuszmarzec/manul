@@ -1743,6 +1743,10 @@ ENV
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'TRACE start %s\\n' "$*" >> "$MOCK_TRACE_FILE"
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'manul-fiteo connected'
+  exit 0
+fi
 [ "${OPENCODE_CONFIG:-}" = "$HOME/.config/opencode/opencode.jsonc" ] || exit 65
 jq -e '
   .mcp.servers["manul-fiteo"].type == "remote"
@@ -1861,6 +1865,10 @@ ENV
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'TRACE start %s\\n' "$*" >> "$MOCK_TRACE_FILE"
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'manul-fiteo connected'
+  exit 0
+fi
 jq -e '
   .mcp.servers["manul-fiteo"].url == "{env:FITEO_BASE_URL}/mcp"
   and .tools["manul_fiteo_*"] == null
@@ -1909,6 +1917,10 @@ HELPER
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'TRACE start %s\\n' "$*" >> "$MOCK_TRACE_FILE"
+if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\\n' 'manul-todo-local connected'
+  exit 0
+fi
 if [ "${1:-}" = "debug" ] && [ "${2:-}" = "agents" ]; then
   printf '%s\n' '[{"id":"coder"}]'
   exit 0
