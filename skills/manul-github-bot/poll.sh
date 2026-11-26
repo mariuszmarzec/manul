@@ -335,7 +335,23 @@ persist_conversation_message() {
       AND commentId='$(sql_escape "$comment_id")'
     LIMIT 1;
   " 2>/dev/null || true)"
-  [ "$already_persisted" = "1" ] && return 0
+  if [ "$already_persisted" = "1" ]; then
+    # A comment can first arrive through ordinary conversation-history sync,
+    # then be recognized as a task trigger on the next poll. Promote its
+    # existing row instead of letting idempotency preserve the weaker type.
+    # Later history sync must never downgrade a durable trigger/clarification.
+    case "$message_type" in
+      task-trigger|user-clarification)
+        sqlite3 "$DB" "
+          UPDATE conversation_messages
+          SET messageType='$(sql_escape "$message_type")'
+          WHERE conversationId='$(sql_escape "$conv_id")'
+            AND commentId='$(sql_escape "$comment_id")';
+        " 2>>"$LOG" || true
+        ;;
+    esac
+    return 0
+  fi
 
   local esc_repo esc_author esc_body esc_url esc_type message_id
   esc_repo="$(sql_escape "$repo")"
