@@ -335,7 +335,24 @@ persist_conversation_message() {
       AND commentId='$(sql_escape "$comment_id")'
     LIMIT 1;
   " 2>/dev/null || true)"
-  [ "$already_persisted" = "1" ] && return 0
+  if [ "$already_persisted" = "1" ]; then
+    # Preserve the message's source classification when a later poll pass
+    # recognizes an already-synchronized comment as a task trigger or
+    # clarification. This is conversation metadata only; poll deduplication
+    # uses processed_comments/conversation_links, never messageType.
+    case "$message_type" in
+      task-trigger|user-clarification)
+        sqlite3 "$DB" "
+          UPDATE conversation_messages
+          SET messageType='$(sql_escape "$message_type")'
+          WHERE conversationId='$(sql_escape "$conv_id")'
+            AND commentId='$(sql_escape "$comment_id")'
+            AND (messageType IS NULL OR messageType IN ('comment','issue-comment','ordinary','context',''));
+        " 2>>"$LOG" || true
+        ;;
+    esac
+    return 0
+  fi
 
   local esc_repo esc_author esc_body esc_url esc_type message_id
   esc_repo="$(sql_escape "$repo")"
@@ -1429,11 +1446,17 @@ filter_new_poll_request_members() {
     member_id="$(jq -r '.id' <<<"$member")"
     member_raw_id="$(jq -r '.rawId // .id' <<<"$member")"
     known_member="$(sqlite3 "$DB" "
-      SELECT 1 FROM processed_comments
+      SELECT 1
+      FROM (
+        SELECT 1
+        FROM processed_comments
         WHERE commentId IN ('$(sql_escape "$member_id")', '$(sql_escape "$member_raw_id")')
-      UNION ALL
-      SELECT 1 FROM conversation_messages
-        WHERE commentId IN ('$(sql_escape "$member_raw_id")', '$(sql_escape "$member_id")')
+        UNION ALL
+        SELECT 1
+        FROM conversation_links
+        WHERE linkType='REQUEST_BATCH_MEMBER'
+          AND commentId IN ('$(sql_escape "$member_id")', '$(sql_escape "$member_raw_id")')
+      )
       LIMIT 1;
     " 2>>"$LOG")" || return 1
     [ "$known_member" = "1" ] && continue
@@ -1508,9 +1531,11 @@ render_poll_request_batch() {
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    # processed_comments is short-lived; conversation_messages is the durable
-    # message-identity record used to prevent old triggers from being requeued.
-    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
+    # Task identity belongs to processed_comments only. conversation_messages
+    # is an ingestion/history table: an ordinary sync can persist a trigger
+    # before the next poll gets a chance to enqueue it. Treating history as
+    # task state loses that trigger permanently (the poll/sync race).
+    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
     [ "$already_recorded" = "1" ] && continue
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     base_id="$id"
@@ -1538,6 +1563,18 @@ render_poll_request_batch() {
         source_url="$(jq -r '.url // ""' <<<"$source_comment")"
         source_created="$(jq -r '.created // ""' <<<"$source_comment")"
         persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$source_author" "$raw_body" "$source_url" "$source_created" "comment"
+        # Record every non-anchor trigger as a consumed member of this task.
+        # Conversation history alone must never act as queue/dedupe state.
+        if [ "$raw_id" != "$id" ]; then
+          sqlite3 "$DB" "
+            INSERT OR IGNORE INTO conversation_links(
+              conversationId, repo, issueNumber, commentId, taskCommentId, linkType, createdAt
+            ) VALUES(
+              '$(sql_escape "$conv_id")', '$(sql_escape "$repo")', $issue,
+              '$(sql_escape "$raw_id")', '$(sql_escape "$id")', 'REQUEST_BATCH_MEMBER', '$now'
+            );
+          " 2>>"$LOG" || true
+        fi
       done < <(jq -c '.batchMembers[]?' <<<"$obj")
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
       # Task context is materialized after the poll has ingested all
@@ -1614,9 +1651,10 @@ render_poll_request_batch() {
     esc="$(printf '%s' "$prompt" | sed "s/'/''/g")"
     esc_a="$(printf '%s' "$agent" | sed "s/'/''/g")"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    # See the issue-comment path above: keep processed_comments short-lived,
-    # but never rediscover an already-ingested issue as a new task.
-    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
+    # Issue-body task identity is also tracked in processed_comments;
+    # conversation_messages may contain an unrelated history entry and must
+    # not suppress task discovery.
+    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
     [ "$already_recorded" = "1" ] && continue
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     base_id="$id"
