@@ -196,6 +196,49 @@ assert_eq "queued source task starts without lease" "" "$actual_lease"
 actual_conversation_id="$(sqlite3 "$DB" "SELECT coalesce(conversationId,'') FROM processed_comments WHERE commentId='source:github_issues:owner/issues#13';")"
 assert_eq "GitHub source task receives a stable workspace conversation" "conv-source-github_issues-owner/issues#13" "$actual_conversation_id"
 
+# Different providers can describe the same repository/issue. Race two poller
+# workers and prove that the SQLite transaction admits only one active task.
+race_github_task="$(jq -cn '{
+  taskSourceType:"github_issues", taskSourceId:"owner/issues#77",
+  taskSourceUrl:"https://github.com/owner/issues/issues/77",
+  title:"Shared target", body:"Shared target", prompt:"Implement shared target",
+  createdAt:"2026-11-26T10:00:00Z", updatedAt:"2026-11-26T10:00:00Z",
+  state:"OPEN", action:"IMPLEMENT",
+  metadata:{repository:"owner/issues",issueNumber:77}, execution:{kind:"repository"}
+}')"
+race_jira_task="$(jq -cn '{
+  taskSourceType:"jira_tasks", taskSourceId:"DEMO-77",
+  taskSourceUrl:"https://jira.example.test/browse/DEMO-77",
+  title:"Same shared target", body:"Same shared target", prompt:"Implement the same target",
+  createdAt:"2026-11-26T10:00:00Z", updatedAt:"2026-11-26T10:00:00Z",
+  state:"OPEN", action:"IMPLEMENT",
+  metadata:{repository:"OWNER/ISSUES",issueNumber:77}, execution:{kind:"repository"}
+}')"
+queue_normalized_source_task "$race_github_task" &
+race_github_pid=$!
+queue_normalized_source_task "$race_jira_task" &
+race_jira_pid=$!
+wait "$race_github_pid" || fail "GitHub source enqueue worker exited successfully"
+wait "$race_jira_pid" || fail "Jira source enqueue worker exited successfully"
+race_active_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE lower(repository)=lower('owner/issues') AND issueNumber=77 AND status IN ('queued','running','blocked_user','waiting_children','delivery_pending');")"
+assert_eq "concurrent source pollers queue only one active task for the same repo/issue" "1" "$race_active_count"
+
+# Completed history is retained but must not block a newly reopened work item.
+sqlite3 "$DB" "UPDATE processed_comments SET status='completed' WHERE lower(repository)=lower('owner/issues') AND issueNumber=77;"
+reopened_todo_task="$(jq -cn '{
+  taskSourceType:"todo_remote_mcp", taskSourceId:"task-77@fingerprint",
+  taskSourceUrl:"fiteo-todo://task/task-77@fingerprint",
+  title:"Reopened shared target", body:"Reopened shared target", prompt:"Revisit shared target",
+  createdAt:"2026-11-26T11:00:00Z", updatedAt:"2026-11-26T11:00:00Z",
+  state:"OPEN", action:"IMPLEMENT",
+  metadata:{repository:"owner/issues",issueNumber:77}, execution:{kind:"repository"}
+}')"
+queue_normalized_source_task "$reopened_todo_task"
+race_total_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE lower(repository)=lower('owner/issues') AND issueNumber=77;")"
+race_active_count="$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE lower(repository)=lower('owner/issues') AND issueNumber=77 AND status IN ('queued','running','blocked_user','waiting_children','delivery_pending');")"
+assert_eq "terminal task history is preserved when a new source task is queued" "2" "$race_total_count"
+assert_eq "terminal tasks do not block reopened work" "1" "$race_active_count"
+
 # Todo fingerprints identify a source version, not the durable root task context.
 todo_remote_task="$(jq -cn '{
   taskSourceType:"todo_remote_mcp",
