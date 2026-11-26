@@ -1806,7 +1806,23 @@ render_poll_request_batch() {
       NEW=$((NEW + 1))
       raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
       raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
-      persist_conversation_message "$conv_id" "$repo" "$pr_num" "$raw_id" "$author" "$raw_body" "$url" "$created" "review-comment"
+      persist_conversation_message "$conv_id" "$repo" "$pr_num" "$raw_id" "$author" "$raw_body" "$url" "$created" "task-trigger"
+      sqlite3 "$DB" "
+        INSERT INTO conversation_links(
+          conversationId, repo, issueNumber, prNumber, commentId, taskCommentId, linkType, createdAt
+        )
+        SELECT
+          '$(sql_escape "$conv_id")', '$(sql_escape "$repo")', $pr_num, $pr_num,
+          '$(sql_escape "$raw_id")', '$(sql_escape "$id")', 'task-trigger',
+          '$(sql_escape "$created")'
+        WHERE NOT EXISTS (
+          SELECT 1 FROM conversation_links
+          WHERE conversationId='$(sql_escape "$conv_id")'
+            AND commentId='$(sql_escape "$raw_id")'
+            AND taskCommentId='$(sql_escape "$id")'
+            AND linkType='task-trigger'
+        );
+      " 2>>"$LOG" || log "WARN: could not link review trigger comment $raw_id to task $id"
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
       # Review-thread context is materialized after the poll has ingested
       # all available GitHub messages for this repository.
