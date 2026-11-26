@@ -68,7 +68,7 @@ assert_eq "issue and inline-review comments keep the parsed Team goal as the pro
 extract_classifier() {
   local target="$1"
   awk -v target="$target" '
-    /^[[:space:]]*\| \(if \(\$rest \| test\("\\\^team/ {
+    index($0, "if ($rest | test(\"^team") > 0 {
       seen++
       if (seen == target) {
         active=1
