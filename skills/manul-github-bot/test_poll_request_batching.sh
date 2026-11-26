@@ -56,7 +56,7 @@ assert_eq "singleton falls back to parsed prompt when fullBody is empty" "Fallba
 
 DB="$TEST_DIR/manul.db"
 LOG="$TEST_DIR/test.log"
-sqlite3 "$DB" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY); CREATE TABLE conversation_messages(commentId TEXT); INSERT INTO processed_comments(commentId) VALUES('issue:100'); INSERT INTO conversation_messages(commentId) VALUES('101');"
+sqlite3 "$DB" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY); CREATE TABLE conversation_messages(commentId TEXT, messageType TEXT); INSERT INTO processed_comments(commentId) VALUES('issue:100'); INSERT INTO conversation_messages(commentId,messageType) VALUES('101','task-trigger');"
 candidate='[{"id":"issue:100","rawId":"100","fullBody":"Already queued"},{"id":"issue:101","rawId":"101","fullBody":"Already persisted"},{"id":"issue:102","rawId":"102","fullBody":"New request"},{"id":"issue:103","rawId":"103","fullBody":"New sibling"}]'
 remaining="$(filter_new_poll_request_members "$candidate")"
 assert_eq "previously queued and persisted comments are removed individually" "issue:102,issue:103" "$(jq -r '[.[].id] | join(",")' <<<"$remaining")"

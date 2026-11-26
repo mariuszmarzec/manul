@@ -359,6 +359,8 @@ else
   has_table conversation_messages && HAS_MESSAGES=1
 
   MESSAGE_DELETE_SQL=""
+  LINKED_MESSAGE_DELETE_SQL=""
+  TASK_TRIGGER_LINK_DELETE_SQL=""
   if [ "$HAS_MESSAGES" -eq 1 ]; then
     MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
 WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
@@ -366,6 +368,19 @@ WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
    OR commentId IN (SELECT substr(commentId,7) FROM queue_reset_candidates WHERE commentId LIKE 'issue:%')
    OR commentId IN (SELECT substr(commentId,11) FROM queue_reset_candidates WHERE commentId LIKE 'issuebody:%')
    OR commentId IN (SELECT substr(commentId,8) FROM queue_reset_candidates WHERE commentId LIKE 'review:%');"
+  fi
+  if has_table conversation_links; then
+    TASK_TRIGGER_LINK_DELETE_SQL="DELETE FROM conversation_links
+WHERE taskCommentId IN (SELECT commentId FROM queue_reset_candidates)
+  AND linkType='task-trigger';"
+    if [ "$HAS_MESSAGES" -eq 1 ]; then
+      LINKED_MESSAGE_DELETE_SQL="DELETE FROM conversation_messages
+WHERE commentId IN (
+  SELECT commentId FROM conversation_links
+  WHERE taskCommentId IN (SELECT commentId FROM queue_reset_candidates)
+    AND linkType='task-trigger'
+);"
+    fi
   fi
 
   # Selection and deletion share one write transaction. If a worker claimed a
@@ -378,6 +393,8 @@ CREATE TEMP TABLE queue_reset_candidates AS
   WHERE $CANDIDATE_PREDICATE;
 SELECT 'candidate_count=' || COUNT(*) FROM queue_reset_candidates;
 $MESSAGE_DELETE_SQL
+$LINKED_MESSAGE_DELETE_SQL
+$TASK_TRIGGER_LINK_DELETE_SQL
 DELETE FROM processed_comments
 WHERE commentId IN (SELECT commentId FROM queue_reset_candidates)
   AND status IN ('queued','failed','stale');

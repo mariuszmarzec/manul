@@ -335,7 +335,23 @@ persist_conversation_message() {
       AND commentId='$(sql_escape "$comment_id")'
     LIMIT 1;
   " 2>/dev/null || true)"
-  [ "$already_persisted" = "1" ] && return 0
+  if [ "$already_persisted" = "1" ]; then
+    # A comment can first arrive through ordinary conversation-history sync,
+    # then be recognized as a task trigger on the next poll. Promote its
+    # existing row instead of letting idempotency preserve the weaker type.
+    # Later history sync must never downgrade a durable trigger/clarification.
+    case "$message_type" in
+      task-trigger|user-clarification)
+        sqlite3 "$DB" "
+          UPDATE conversation_messages
+          SET messageType='$(sql_escape "$message_type")'
+          WHERE conversationId='$(sql_escape "$conv_id")'
+            AND commentId='$(sql_escape "$comment_id")';
+        " 2>>"$LOG" || true
+        ;;
+    esac
+    return 0
+  fi
 
   local esc_repo esc_author esc_body esc_url esc_type message_id
   esc_repo="$(sql_escape "$repo")"
@@ -851,6 +867,43 @@ ensure_task_source_columns() {
 }
 
 ensure_task_source_columns
+
+# Backfill durable trigger identity for tasks created before trigger messages
+# received an explicit messageType. For grouped requests, the rendered task
+# prompt names every original source comment, so all batch members are retained.
+sqlite3 "$DB" "
+  INSERT INTO conversation_links(
+    conversationId, repo, issueNumber, commentId, taskCommentId, linkType, createdAt
+  )
+  SELECT
+    cm.conversationId, cm.repo, cm.issueNumber, cm.commentId, pc.commentId,
+    'task-trigger', COALESCE(pc.createdAt, cm.createdAt, datetime('now'))
+  FROM conversation_messages cm
+  JOIN processed_comments pc
+    ON pc.repository = cm.repo
+   AND pc.issueNumber = cm.issueNumber
+   AND (
+     pc.commentId IN (cm.commentId, 'issue:' || cm.commentId, 'review:' || cm.commentId)
+     OR instr(COALESCE(pc.prompt, ''), 'Source comment: #' || cm.commentId) > 0
+   )
+  WHERE cm.messageType IN ('comment', 'review-comment')
+    AND NOT EXISTS (
+      SELECT 1 FROM conversation_links existing
+      WHERE existing.conversationId = cm.conversationId
+        AND existing.commentId = cm.commentId
+        AND existing.taskCommentId = pc.commentId
+        AND existing.linkType = 'task-trigger'
+    );
+  UPDATE conversation_messages
+  SET messageType='task-trigger'
+  WHERE messageType IN ('comment', 'review-comment')
+    AND EXISTS (
+      SELECT 1 FROM conversation_links source
+      WHERE source.conversationId = conversation_messages.conversationId
+        AND source.commentId = conversation_messages.commentId
+        AND source.linkType = 'task-trigger'
+    );
+" 2>>"$LOG" || log "WARN: could not backfill durable task-trigger identities"
 
 # Lease metadata belongs only to claimed/running tasks. Older pollers populated
 # these columns on queued rows, so normalize those rows when the poller loads.
@@ -1434,6 +1487,7 @@ filter_new_poll_request_members() {
       UNION ALL
       SELECT 1 FROM conversation_messages
         WHERE commentId IN ('$(sql_escape "$member_raw_id")', '$(sql_escape "$member_id")')
+          AND messageType IN ('task-trigger', 'user-clarification')
       LIMIT 1;
     " 2>>"$LOG")" || return 1
     [ "$known_member" = "1" ] && continue
@@ -1510,7 +1564,7 @@ render_poll_request_batch() {
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     # processed_comments is short-lived; conversation_messages is the durable
     # message-identity record used to prevent old triggers from being requeued.
-    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
+    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' AND messageType IN ('task-trigger', 'user-clarification') LIMIT 1;" 2>/dev/null || true)"
     [ "$already_recorded" = "1" ] && continue
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     base_id="$id"
@@ -1537,7 +1591,23 @@ render_poll_request_batch() {
         source_author="$(jq -r '.author // ""' <<<"$source_comment")"
         source_url="$(jq -r '.url // ""' <<<"$source_comment")"
         source_created="$(jq -r '.created // ""' <<<"$source_comment")"
-        persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$source_author" "$raw_body" "$source_url" "$source_created" "comment"
+        persist_conversation_message "$conv_id" "$repo" "$issue" "$raw_id" "$source_author" "$raw_body" "$source_url" "$source_created" "task-trigger"
+        sqlite3 "$DB" "
+          INSERT INTO conversation_links(
+            conversationId, repo, issueNumber, commentId, taskCommentId, linkType, createdAt
+          )
+          SELECT
+            '$(sql_escape "$conv_id")', '$(sql_escape "$repo")', $issue,
+            '$(sql_escape "$raw_id")', '$(sql_escape "$id")', 'task-trigger',
+            '$(sql_escape "$source_created")'
+          WHERE NOT EXISTS (
+            SELECT 1 FROM conversation_links
+            WHERE conversationId='$(sql_escape "$conv_id")'
+              AND commentId='$(sql_escape "$raw_id")'
+              AND taskCommentId='$(sql_escape "$id")'
+              AND linkType='task-trigger'
+          );
+        " 2>>"$LOG" || log "WARN: could not link trigger comment $raw_id to task $id"
       done < <(jq -c '.batchMembers[]?' <<<"$obj")
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $issue, '$url', NULL, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
       # Task context is materialized after the poll has ingested all
@@ -1616,7 +1686,7 @@ render_poll_request_batch() {
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     # See the issue-comment path above: keep processed_comments short-lived,
     # but never rediscover an already-ingested issue as a new task.
-    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' LIMIT 1;" 2>/dev/null || true)"
+    already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$id")' UNION ALL SELECT 1 FROM conversation_messages WHERE commentId='$(sql_escape "$id")' AND messageType IN ('task-trigger', 'user-clarification') LIMIT 1;" 2>/dev/null || true)"
     [ "$already_recorded" = "1" ] && continue
     conv_id="$(generate_conversation_id "$repo" "$issue" "issue")" || continue
     base_id="$id"
@@ -1736,7 +1806,23 @@ render_poll_request_batch() {
       NEW=$((NEW + 1))
       raw_id="$(jq -r '.rawId // .id' <<<"$obj")"
       raw_body="$(jq -r '.rawBody // .body // ""' <<<"$obj")"
-      persist_conversation_message "$conv_id" "$repo" "$pr_num" "$raw_id" "$author" "$raw_body" "$url" "$created" "review-comment"
+      persist_conversation_message "$conv_id" "$repo" "$pr_num" "$raw_id" "$author" "$raw_body" "$url" "$created" "task-trigger"
+      sqlite3 "$DB" "
+        INSERT INTO conversation_links(
+          conversationId, repo, issueNumber, prNumber, commentId, taskCommentId, linkType, createdAt
+        )
+        SELECT
+          '$(sql_escape "$conv_id")', '$(sql_escape "$repo")', $pr_num, $pr_num,
+          '$(sql_escape "$raw_id")', '$(sql_escape "$id")', 'task-trigger',
+          '$(sql_escape "$created")'
+        WHERE NOT EXISTS (
+          SELECT 1 FROM conversation_links
+          WHERE conversationId='$(sql_escape "$conv_id")'
+            AND commentId='$(sql_escape "$raw_id")'
+            AND taskCommentId='$(sql_escape "$id")'
+            AND linkType='task-trigger'
+        );
+      " 2>>"$LOG" || log "WARN: could not link review trigger comment $raw_id to task $id"
       sqlite3 "$DB" "INSERT OR IGNORE INTO conversations(conversationId, repository, issueNumber, issueUrl, activePrNumber, status, createdAt, updatedAt) VALUES('$conv_id', '$(sql_escape "$repo")', $pr_num, '$url', $pr_num, 'OPEN', '$now', '$now');" 2>>"$LOG" || true
       # Review-thread context is materialized after the poll has ingested
       # all available GitHub messages for this repository.

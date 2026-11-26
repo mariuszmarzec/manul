@@ -26,6 +26,55 @@ run_test() {
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
+test_context_message_does_not_suppress_new_trigger() {
+  local dir db candidate result count
+  dir="$(mktemp -d /tmp/manul-trigger-dedupe-XXXXXX)"
+  db="$dir/manul.db"
+  sqlite3 "$db" "
+    CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY);
+    CREATE TABLE conversation_messages(commentId TEXT, messageType TEXT);
+  "
+
+  DB="$db"
+  LOG="$dir/poll.log"
+  sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+  source <(sed -n '/^filter_new_poll_request_members()/,/^}/p' "$SCRIPT_DIR/poll.sh")
+
+  candidate='[{"id":"issue:7195886303","rawId":"7195886303"}]'
+  sqlite3 "$db" "INSERT INTO conversation_messages VALUES('7195886303','comment');"
+  result="$(filter_new_poll_request_members "$candidate")"
+  count="$(jq 'length' <<<"$result")"
+  if [ "$count" -ne 1 ]; then
+    echo "ERROR: ordinary conversation history suppressed a new /manul trigger"
+    rm -rf "$dir"
+    return 1
+  fi
+
+  sqlite3 "$db" "UPDATE conversation_messages SET messageType='task-trigger' WHERE commentId='7195886303';"
+  result="$(filter_new_poll_request_members "$candidate")"
+  count="$(jq 'length' <<<"$result")"
+  if [ "$count" -ne 0 ]; then
+    echo "ERROR: durable task-trigger marker did not suppress a duplicate"
+    rm -rf "$dir"
+    return 1
+  fi
+
+  sqlite3 "$db" "UPDATE conversation_messages SET messageType='user-clarification' WHERE commentId='7195886303';"
+  result="$(filter_new_poll_request_members "$candidate")"
+  count="$(jq 'length' <<<"$result")"
+  if [ "$count" -ne 0 ]; then
+    echo "ERROR: already-consumed user clarification was not deduplicated"
+    rm -rf "$dir"
+    return 1
+  fi
+
+  sqlite3 "$db" "DELETE FROM conversation_messages; INSERT INTO processed_comments VALUES('issue:7195886303');"
+  result="$(filter_new_poll_request_members "$candidate")"
+  count="$(jq 'length' <<<"$result")"
+  rm -rf "$dir"
+  [ "$count" -eq 0 ]
+}
+
 # =============================================================================
 # Test 1: Helper functions and Persistence (Unit-style)
 # =============================================================================
@@ -66,11 +115,26 @@ test_helpers_and_persistence() {
   context="$(build_conversation_context 'conv-test-org/test-repo-issue-1')"
   grep -Fq 'Also make sure the assertion uses float comparison.' <<<"$context" || { echo 'ordinary feedback missing from follow-up context'; return 1; }
 
-  # Test idempotency
+  # Test idempotency and durable source-type promotion. A message may first
+  # be synchronized as ordinary context, then recognized as a task trigger.
   persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' comment
   count="$(sqlite3 "$db" "SELECT COUNT(*) FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1';")"
   [ "$count" -eq 3 ] || { echo "duplicate persistence created $count rows"; return 1; }
-  
+
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' task-trigger
+  local message_type
+  message_type="$(sqlite3 "$db" "SELECT messageType FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1' AND commentId='101';")"
+  [ "$message_type" = "task-trigger" ] || { echo "existing context message did not promote to task-trigger (type=$message_type)"; return 1; }
+
+  # Subsequent ordinary sync must not downgrade the trigger marker.
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 101 user 'Also make sure the assertion uses float comparison.' 'https://example/101' '2026-01-01T00:00:02Z' comment
+  message_type="$(sqlite3 "$db" "SELECT messageType FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1' AND commentId='101';")"
+  [ "$message_type" = "task-trigger" ] || { echo "ordinary sync downgraded task-trigger marker (type=$message_type)"; return 1; }
+
+  persist_conversation_message 'conv-test-org/test-repo-issue-1' test-org/test-repo 1 102 user 'Now implement the change according to my previous feedback.' 'https://example/102' '2026-01-01T00:00:03Z' user-clarification
+  message_type="$(sqlite3 "$db" "SELECT messageType FROM conversation_messages WHERE conversationId='conv-test-org/test-repo-issue-1' AND commentId='102';")"
+  [ "$message_type" = "user-clarification" ] || { echo "existing message did not promote to user-clarification (type=$message_type)"; return 1; }
+
   rm -rf "$dir"
   return 0
 }
@@ -750,6 +814,7 @@ test_waiting_team_parent_blocks_duplicate_ci_fix() {
 # =============================================================================
 # Run tests
 # =============================================================================
+run_test "ordinary conversation messages do not suppress new triggers" test_context_message_does_not_suppress_new_trigger
 run_test "helper functions and persistence logic" test_helpers_and_persistence
 run_test "issue conversation: trigger→ordinary→follow-up preserves context" test_issue_conversation_regression
 run_test "review thread: every comment persisted, identity based on root only" test_review_thread_regression
