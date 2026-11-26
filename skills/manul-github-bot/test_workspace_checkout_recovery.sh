@@ -142,6 +142,10 @@ TEAM_ROOT="$MANUL_WORKSPACE/ws-team-parent"
 mkdir -p "$TEAM_ROOT"
 TEAM_CHECKOUT="$(workspace_prepare_primary_checkout "$TEAM_ROOT" "test-owner/primary" "$CACHE")"
 git -C "$TEAM_CHECKOUT" remote set-url origin "$REMOTE"
+# Workspace clones intentionally do not inherit seed-repository Git identity.
+# Configure only this disposable Team checkout before creating its checkpoint.
+git -C "$TEAM_CHECKOUT" config user.name "Manul Team recovery tests"
+git -C "$TEAM_CHECKOUT" config user.email "manul-team-recovery@example.invalid"
 check "Team dispatch prepares the stable branch before agent execution" workspace_prepare_team_task_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH" main "$TEAM_ROOT" test-owner/primary
 check "Team dispatch is not left on the base branch" assert_branch "$TEAM_CHECKOUT" "$TEAM_BRANCH"
 check "Team dispatch persists the selected base in Git metadata" test "$(git -C "$TEAM_CHECKOUT" config --local --get "branch.$TEAM_BRANCH.manul-base")" = "main"
