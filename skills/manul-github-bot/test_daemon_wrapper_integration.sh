@@ -289,10 +289,9 @@ echo "implementation change" >> "$WORKDIR/README.md"
 git -C "$WORKDIR" add README.md
 git -C "$WORKDIR" commit -qm "implementation change"
 
-# Create test database with the SAME 25-column schema as poll.sh's real DB so
-# update_task_completion() (which sets heartbeatAt/leaseExpiresAt) and
-# verify_required_pr() (which reads action/prNumber/prUrl) operate on columns
-# that actually exist.
+# Create test database with the same lifecycle columns as poll.sh's real DB,
+# including session_id, which delivery_pending clears to prevent stale runtime
+# sessions from being resumed after repository work has already finished.
 sqlite3 "$DB" "CREATE TABLE processed_comments (
     commentId TEXT PRIMARY KEY,
     repository TEXT NOT NULL,
@@ -309,6 +308,7 @@ sqlite3 "$DB" "CREATE TABLE processed_comments (
     heartbeatAt TEXT,
     leaseExpiresAt TEXT,
     workerPid INTEGER,
+    session_id TEXT,
     nextAttemptAt TEXT,
     conversationId TEXT,
     parentTaskId TEXT,
@@ -1159,7 +1159,17 @@ echo "=== Test TEAM-TODO-NOOP: Todo Team no-op completes without a GitHub issue 
 # Keep the provider boundary hermetic while asserting the exact completion
 # request made by the production evaluator.
 TODO_COMPLETION_RECEIPT="$TEST_TMPDIR/todo-completion-receipt.txt"
+TODO_REPORT_RECEIPT="$TEST_TMPDIR/todo-report-receipt.txt"
 TASK_SOURCE_ID="116715"
+# Mock both Todo provider operations. Completion-report publication is a new
+# part of the production lifecycle and must not contact a real Todo MCP server.
+task_source_publish_update() {
+  local _source_json="$1" source_type="$2" source_id="$3" result_status="$4" summary="$5"
+  [ "$source_type" = "todo_remote_mcp" ] && [ "$source_id" = "$TASK_SOURCE_ID" ] || return 1
+  [ "$result_status" = "completed" ] || return 1
+  printf '%s|%s\n%s\n' "$source_type" "$result_status" "$summary" >"$TODO_REPORT_RECEIPT"
+  printf '{"status":"%s","updateTaskId":116716}\n' "$result_status"
+}
 task_source_complete() {
   [ "$2" = "todo_remote_mcp" ] && [ "$3" = "$TASK_SOURCE_ID" ] || return 1
   printf '%s|%s\n' "$2" "$3" >"$TODO_COMPLETION_RECEIPT"
@@ -1204,7 +1214,12 @@ if [ "$(cat "$TODO_COMPLETION_RECEIPT" 2>/dev/null || true)" != "todo_remote_mcp
   cat "$LOG_FILE" >&2
   exit 1
 fi
-echo "[OK] Todo Team no-op completes through its provider path without an empty PR"
+if [ "$(head -n 1 "$TODO_REPORT_RECEIPT" 2>/dev/null || true)" != "todo_remote_mcp|completed" ] || ! grep -q "COMPLETED" "$TODO_REPORT_RECEIPT"; then
+  echo "FAIL: Todo Team no-op did not publish its completed report before source completion" >&2
+  cat "$LOG_FILE" >&2
+  exit 1
+fi
+echo "[OK] Todo Team no-op publishes its completed report and completes through the provider path without an empty PR"
 
 
 echo ""

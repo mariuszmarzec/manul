@@ -10,7 +10,7 @@
 #   --list           Compact list of active tasks plus recent terminal tasks
 #   --wide           Show the full diagnostic table with all columns (use with --list)
 #   --history        List terminal task history retained for the longer window
-#   --status S       Filter by status (queued, running, waiting_children, blocked_user, completed, failed, stale)
+#   --status S       Filter by status (queued, running, waiting_children, blocked_user, delivery_pending, completed, failed, stale)
 #   --log            Show daemon.log instead of task status
 #   --tail N         Number of log lines to show (default: 100)
 #   --tail=N         Same as --tail N
@@ -31,7 +31,7 @@
 #   {
 #     "taskId": "string",
 #     "conversationId": "string",
-#     "status": "queued|running|waiting_children|blocked_user|completed|failed|stale",
+#     "status": "queued|running|waiting_children|blocked_user|delivery_pending|completed|failed|stale",
 #     "repo": "string",
 #     "issue": number,
 #     "attempts": number,
@@ -188,7 +188,7 @@ if [ "$LIST_MODE" = true ]; then
   fi
 
   if [ -n "$FILTER_STATUS" ]; then
-    if [ "$FILTER_STATUS" = "queued" ] || [ "$FILTER_STATUS" = "running" ] || [ "$FILTER_STATUS" = "waiting_children" ] || [ "$FILTER_STATUS" = "blocked_user" ]; then
+    if [ "$FILTER_STATUS" = "queued" ] || [ "$FILTER_STATUS" = "running" ] || [ "$FILTER_STATUS" = "waiting_children" ] || [ "$FILTER_STATUS" = "blocked_user" ] || [ "$FILTER_STATUS" = "delivery_pending" ]; then
       WHERE_CLAUSE="WHERE status='$(sql_escape "$FILTER_STATUS")'"
     else
       WHERE_CLAUSE="WHERE status='$(sql_escape "$FILTER_STATUS")' AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')"
@@ -196,7 +196,7 @@ if [ "$LIST_MODE" = true ]; then
   elif [ "$HISTORY_MODE" = true ]; then
     WHERE_CLAUSE="WHERE status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')"
   else
-    WHERE_CLAUSE="WHERE (status IN ('queued', 'running', 'waiting_children', 'blocked_user') OR (status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')))"
+    WHERE_CLAUSE="WHERE (status IN ('queued', 'running', 'waiting_children', 'blocked_user', 'delivery_pending') OR (status IN ('completed', 'failed', 'stale') AND COALESCE(processedAt, createdAt) >= datetime('now', '-$local_retention_days days')))"
   fi
 
   # Source columns were added with task-source support. Keep status readable
@@ -395,6 +395,7 @@ if [ "$LIST_MODE" = true ]; then
       case "$status" in
         completed) short_status="DONE" ;;
         blocked_user) short_status="BLOCKED" ;;
+        delivery_pending) short_status="DELIVERY" ;;
         waiting_children) short_status="WAITING" ;;
         queued) short_status="QUEUED" ;;
         running) short_status="RUNNING" ;;

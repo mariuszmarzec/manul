@@ -993,6 +993,36 @@ jq '.[0].subTasks[0].description |= sub("owner/repo"; "owner/local")' "$TODO_MCP
 export TODO_MCP_FIXTURE="$TEST_DIR/local-update-edited.json"
 assert_eq "editing a generated status subtask invalidates its old source marker" "1" "$(todo_task_still_current "$LOCAL_UPDATE_SOURCE" todo_local_mcp "$local_update_id"; echo $?)"
 
+echo "=== completed Todo result reports ==="
+cat > "$TEST_DIR/local-completed-report.json" <<'JSON'
+[
+  {"id":503,"description":"/manul Review owner/repo PR 42","addedTime":"2026-10-01T10:00:00","modifiedTime":"2026-10-01T10:00:00","parentTaskId":null,"subTasks":[],"isToDo":true,"priority":1,"scheduler":null,"shares":[]}
+]
+JSON
+export TODO_MCP_FIXTURE="$TEST_DIR/local-completed-report.json"
+LOCAL_COMPLETED_SOURCE="$(todo_source_local_config "$LOCAL_SOURCE")"
+local_completed_root="$(jq -c '.[0]' "$TODO_MCP_FIXTURE")"
+local_completed_id="503@$(todo_task_fingerprint "$local_completed_root")"
+local_completed_summary="**Status:** COMPLETED - REQUEST_CHANGES - Found two review issues."
+local_completed_receipt="$(todo_task_publish_update "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id" completed "$local_completed_summary")"
+local_completed_child_id="$(jq -r '.updateTaskId' <<<"$local_completed_receipt")"
+local_completed_description="$(jq -r '.[0].subTasks[0].description' "$TODO_MCP_FIXTURE")"
+assert_eq "completed report is attached to the Todo root" "503" "$(jq -r '.[0].subTasks[0].parentTaskId' "$TODO_MCP_FIXTURE")"
+assert_contains "completed report preserves the review outcome" "$local_completed_description" "REQUEST_CHANGES"
+assert_contains "completed report has a verifiable marker" "$local_completed_description" "status=completed"
+assert_contains "completed report has a clear heading" "$local_completed_description" "Raport wykonania"
+assert_eq "completed report remains OPEN until tree completion" "true" "$(jq -r '.[0].subTasks[0].isToDo' "$TODO_MCP_FIXTURE")"
+assert_eq "completed report marker preserves the source fingerprint" "0" "$(todo_task_still_current "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id"; echo $?)"
+jq '.[0].subTasks[0].isToDo = false' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-completed-report-child-done.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/local-completed-report-child-done.json"
+local_completed_retry="$(todo_task_publish_update "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id" completed "$local_completed_summary")"
+assert_eq "completed report retry reuses the original child ID" "$local_completed_child_id" "$(jq -r '.updateTaskId' <<<"$local_completed_retry")"
+assert_eq "completed report retry creates no duplicate" "1" "$(jq '.[0].subTasks | length' "$TODO_MCP_FIXTURE")"
+jq '.[0].isToDo = false' "$TODO_MCP_FIXTURE" > "$TEST_DIR/local-completed-report-tree-done.json"
+export TODO_MCP_FIXTURE="$TEST_DIR/local-completed-report-tree-done.json"
+local_completed_final_retry="$(todo_task_publish_update "$LOCAL_COMPLETED_SOURCE" todo_local_mcp "$local_completed_id" completed "$local_completed_summary")"
+assert_eq "completed report retry succeeds after whole-tree completion" "$local_completed_child_id" "$(jq -r '.updateTaskId' <<<"$local_completed_final_retry")"
+
 # A terminal remote failure is also a verified OPEN child, not a suppressed
 # external-source comment. The parent share remains inherited; no child share
 # payload is added.
@@ -1015,7 +1045,13 @@ assert_eq "remote failure update remains OPEN" "true" "$(jq -r '.[0].subTasks[0]
 assert_eq "remote root stays OPEN after failure feedback" "true" "$(jq -r '.[0].isToDo' "$TODO_MCP_FIXTURE")"
 assert_eq "remote failure update preserves source identity" "0" "$(todo_task_still_current "$REMOTE_UPDATE_SOURCE" todo_remote_mcp "$remote_update_id"; echo $?)"
 remote_create_arguments="$(awk -F '\t' '$1 == "todo_create_task" {print $2; exit}' "$TODO_MCP_CALL_LOG")"
-assert_eq "remote update creation does not duplicate inherited parent shares" "false" "$(jq -r '.task | has("shares")' <<<"$remote_create_arguments")"
+printf '%s\n' "$remote_create_arguments" > "$TEST_DIR/remote-create-arguments.json"
+if [[ "$remote_create_arguments" == *'"shares":'* ]]; then
+  remote_create_has_shares=true
+else
+  remote_create_has_shares=false
+fi
+assert_eq "remote update creation does not duplicate inherited parent shares" "false" "$remote_create_has_shares"
 : > "$TODO_MCP_CALL_LOG"
 remote_update_retry="$(todo_task_publish_update "$REMOTE_UPDATE_SOURCE" todo_remote_mcp "$remote_update_id" failed "A retry must reuse the verified child.")"
 assert_eq "remote failure update retry reuses its child" "$remote_update_task_id" "$(jq -r '.updateTaskId' <<<"$remote_update_retry")"

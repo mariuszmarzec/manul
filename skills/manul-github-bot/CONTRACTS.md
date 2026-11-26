@@ -808,14 +808,28 @@ topology change invalidates the source; status/time-only progress does not. The 
 must remain active and the current source tree must still match before execution and
 completion.
 
-Repository-backed Todo tasks complete only after normal repository
-delivery verification (including a verified PR when repository files changed).
-Informational answer tasks complete only after their non-empty answer is
-persisted and read back as a verified Todo child. Missing user input creates a
-verified OPEN blocker subtask; terminal execution failures create a verified
-OPEN failure subtask containing the stage and redacted reason. The root stays
-active after either update and is marked done only after the relevant delivery
-contract has succeeded.
+Every successful repository-backed Todo task must publish a non-empty
+`completed` result subtask containing the agent's actual result (for example,
+review findings, blockers, changed files, verification, and a PR URL when one
+exists). The daemon reads the child back and verifies its parent, status marker,
+payload digest, and source version before marking the complete Todo tree done.
+The Manul task may enter `completed` only after this provider-side delivery is
+confirmed.
+
+Terminal execution failures must publish a verified OPEN `failed` result
+subtask containing the failure stage and redacted reason. A failed task keeps
+its Todo root active so the user can correct the problem and retry.
+
+Both result types are first written to a durable SQLite outbox. The worker makes
+an immediate delivery attempt; if Todo is unavailable, the outbox retries with
+bounded exponential backoff without rerunning completed agent work.
+Successful results remain in `delivery_pending` (visible and excluded from
+dispatch) until the report and whole Todo tree are verified. A completed report
+can be safely re-read after partial whole-tree completion; its signed payload
+marker is excluded from the source fingerprint only while its digest verifies.
+Informational answer tasks continue to persist their non-empty answer as a
+verified `answered` Todo child before marking the tree done. Missing user input
+creates a verified OPEN blocker subtask.
 
 The task-source identity is the root work item. A pull request, review
 comment, or CI check is never a task-source root. Those artifacts may be linked

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# This script is an executable Manul entry point; preserve its Git execute bit.
 # manul-poll.sh — GitHub /manul trigger poller for OpenClaw cron.
 #
 # Scans configured repos for issue comments + PR review comments containing the

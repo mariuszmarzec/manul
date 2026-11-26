@@ -74,6 +74,7 @@ source "$DAEMON_SCRIPT_DIR/agent-executor.sh"
 source "$DAEMON_SCRIPT_DIR/agent-execution-controller.sh"
 source "$DAEMON_SCRIPT_DIR/agent-session-state.sh"
 source "$DAEMON_SCRIPT_DIR/task-source.sh"
+source "$DAEMON_SCRIPT_DIR/todo-result-outbox.sh"
 
 CONFIG="$MANUL_CONFIG"
 POLL="$MANUL_DIR/poll.sh"
@@ -563,9 +564,9 @@ update_task_completion() {
         return 1
       fi
       ;;
-    queued)
+    queued|delivery_pending)
       if [ "$current_status" != "running" ]; then
-        log "ERROR: Cannot requeue task $comment_id from current status: $current_status"
+        log "ERROR: Cannot move task $comment_id to $status from current status: $current_status"
         return 1
       fi
       ;;
@@ -603,6 +604,10 @@ update_task_completion() {
       # scheduler's "attempts > 0 AND nextAttemptAt <= now" predicate ignores
       # NULL forever, silently stranding early-failure retries.
       update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, agentStartedAt=NULL, nextAttemptAt=datetime('now', '+${RETRY_DELAY_SECONDS} seconds')"
+      ;;
+    delivery_pending)
+      # Agent work is finished; only the durable result outbox may finalize it.
+      update_sql+=" , processedAt=NULL, heartbeatAt=NULL, leaseExpiresAt=NULL, workerPid=NULL, claimToken=NULL, agentStartedAt=NULL, nextAttemptAt=NULL, session_id=NULL"
       ;;
   esac
 
@@ -2352,7 +2357,7 @@ post_task_failure_feedback() {
   error="$(manul_redact_failure_details "$error")"
 
   if task_source_is_todo_type "$source_type"; then
-    local update_summary update_receipt post_attempt
+    local update_summary outbox_id
     update_summary="Manul zakończył próbę wykonania zadania błędem.
 
 **Etap:** $stage
@@ -2361,18 +2366,20 @@ post_task_failure_feedback() {
 $error
 
 Zadanie główne pozostaje otwarte. Usuń wskazaną przeszkodę i edytuj to podzadanie, aby utworzyć nową wersję zadania i ponowić pracę."
-    for post_attempt in 1 2 3; do
-      if update_receipt="$(task_source_publish_update "$CONFIG" "$source_type" "$source_id" failed "$update_summary" 2>&1)"; then
-        lc_log "TODO_TASK_FAILURE_UPDATE_CONFIRMED" "task=$comment_id source=$source_type stage=$stage try=$post_attempt receipt=$update_receipt"
-        return 0
-      fi
-      log "WARN: failed to publish Todo failure update for $comment_id (try=$post_attempt/3): ${update_receipt:-unknown error}"
-      if [ "$post_attempt" -lt 3 ]; then sleep "$post_attempt"; fi
-    done
-    lc_log "TODO_TASK_FAILURE_UPDATE_FAILED" "task=$comment_id source=$source_type stage=$stage"
-    return 1
+    outbox_id="$(queue_todo_result_update "$comment_id" "$source_type" "$source_id" failed "$update_summary")" || {
+      lc_log "TODO_TASK_FAILURE_OUTBOX_FAILED" "task=$comment_id source=$source_type stage=$stage"
+      log "ERROR: failed to persist Todo failure report in the durable outbox for $comment_id"
+      return 1
+    }
+    retry_pending_todo_result_updates "$comment_id" "$source_type" "$source_id" failed || true
+    if todo_result_outbox_is_delivered "$comment_id" "$source_type" "$source_id" failed; then
+      lc_log "TODO_TASK_FAILURE_UPDATE_CONFIRMED" "task=$comment_id source=$source_type stage=$stage outbox=$outbox_id"
+    else
+      lc_log "TODO_TASK_FAILURE_UPDATE_PENDING" "task=$comment_id source=$source_type stage=$stage outbox=$outbox_id"
+      log "WARN: Todo failure report for $comment_id is durably queued for retry (outbox=$outbox_id)"
+    fi
+    return 0
   fi
-
   if [[ "$issue_num" =~ ^0+$ ]]; then
     lc_log "EXTERNAL_SOURCE_FAILURE_FEEDBACK_SUPPRESSED" "task=$comment_id stage=$stage"
     return 0
@@ -4094,9 +4101,58 @@ evaluate_task_completion() {
     fi
   fi
 
+  # Successful repository-backed Todo tasks publish their actual result before
+  # their source task can be completed. The durable outbox protects reports from MCP outages.
+  TODO_RESULT_COMPLETION_FINALIZED="false"
+  if [ "$SUCCESS" = "true" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE" && [ "$TASK_EXECUTION_KIND" = "repository" ]; then
+    local todo_report_body todo_report_summary todo_report_rc
+    todo_report_body=""
+    if [ -f "$STDOUT_FILE" ]; then
+      todo_report_body="$(sed -E '/^TASK_DONE([[:space:]]|$)/d; /^TASK_FAILED([[:space:]:]|$)/d' "$STDOUT_FILE")"
+    fi
+    if [ -n "$(printf '%s' "$todo_report_body" | tr -d '[:space:]')" ]; then
+      todo_report_body="$(manul_redact_failure_details "$todo_report_body")"
+    else
+      todo_report_body="Agent zakończył pracę markerem TASK_DONE. Manul zweryfikował dostarczenie zadania dla repozytorium $REPO. Agent nie zwrócił osobnego podsumowania."
+    fi
+    todo_report_summary="**Status:** COMPLETED
+
+**Repozytorium:** $REPO
+
+**Rodzaj zadania:** ${TASK_ACTION:-IMPLEMENT}
+
+**Weryfikacja dostarczenia:** zakończona pomyślnie
+
+**Raport agenta:**
+
+$todo_report_body"
+    if [ -n "${VERIFIED_EXISTING_PR_URL:-}" ]; then
+      todo_report_summary+=$'\n\n'"**Zweryfikowany PR:** ${VERIFIED_EXISTING_PR_URL}"
+    fi
+    todo_report_rc=0
+    publish_todo_task_result "$COMMENT_ID" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" "$todo_report_summary" "$CLAIM_TOKEN" || todo_report_rc=$?
+    if [ "$todo_report_rc" -eq 0 ]; then
+      TODO_RESULT_COMPLETION_FINALIZED="true"
+      log "dispatch: verified completed Todo result report for task $COMMENT_ID"
+      lc_log "TODO_TASK_COMPLETION_REPORT_CONFIRMED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+    elif [ "$todo_report_rc" -eq 10 ]; then
+      SUCCESS="false"
+      FAILURE_CODE="TODO_RESULT_DELIVERY_PENDING"
+      FAIL_REASON="Repository work passed verification, but the Todo completion report is not yet confirmed. The durable outbox will retry without rerunning the task."
+      log "WARN: task $COMMENT_ID is waiting for Todo completion-report delivery"
+      lc_log "TODO_TASK_COMPLETION_REPORT_PENDING" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+    else
+      SUCCESS="false"
+      FAILURE_CODE="TODO_RESULT_OUTBOX_FAILED"
+      FAIL_REASON="Repository work passed verification, but Manul could not persist its completion report in the local outbox."
+      log "ERROR: could not persist Todo completion report for task $COMMENT_ID"
+      lc_log "TODO_TASK_COMPLETION_OUTBOX_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+    fi
+  fi
+
   # Mark the root Todo task and its complete ordered subtask tree done only
   # after repository delivery or direct-answer persistence has been verified above.
-  if [ "$SUCCESS" = "true" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
+  if [ "$SUCCESS" = "true" ] && task_source_is_todo_type "$TASK_SOURCE_TYPE" && [ "$TASK_EXECUTION_KIND" = "answer" ]; then
     if task_source_complete "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID"; then
       log "dispatch: Todo task tree $TASK_SOURCE_ID marked done"
       lc_log "TODO_SOURCE_COMPLETED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
@@ -4112,7 +4168,10 @@ evaluate_task_completion() {
   # 8. Update SQLite using enhanced finalization with verification
   if [ "$SUCCESS" = "true" ]; then
     # Enhanced task completion with verification
-    if complete_task_with_verification "$COMMENT_ID" "$CLAIM_TOKEN"; then
+    if [ "${TODO_RESULT_COMPLETION_FINALIZED:-false}" = "true" ]; then
+      COMPLETION_SUCCESS="true"
+      log "dispatch: Todo result outbox already finalized task $COMMENT_ID"
+    elif complete_task_with_verification "$COMMENT_ID" "$CLAIM_TOKEN"; then
       COMPLETION_SUCCESS="true"
     else
       log "ERROR: Enhanced task completion failed for $COMMENT_ID, falling back to basic completion"
@@ -4162,7 +4221,19 @@ evaluate_task_completion() {
       if [ "$TASK_ACTION" = "TEAM" ]; then MAX_ATTEMPTS=20; else MAX_ATTEMPTS=3; fi
     fi
 
-    if [ "$FAILURE_CODE" = "RUNTIME_PERMISSION_BLOCKED" ]; then
+    if [ "$FAILURE_CODE" = "TODO_RESULT_DELIVERY_PENDING" ]; then
+      local pending_status
+      pending_status="$(sqlite3 "$DB" "SELECT status FROM processed_comments WHERE commentId='$safe_comment_id' LIMIT 1;" 2>/dev/null || true)"
+      if [ "$pending_status" = "delivery_pending" ]; then
+        FINAL_COMMENT="⏳ Work finished; the Todo result report is queued for delivery. Manul will retry publishing it without rerunning the task."
+        log "dispatch: task $COMMENT_ID remains delivery_pending while the Todo outbox retries"
+        lc_log "TODO_RESULT_DELIVERY_PENDING" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+      else
+        FINAL_COMMENT="❌ Todo report delivery is pending, but the task could not be moved to delivery_pending. Recovery is required."
+        log "ERROR: task $COMMENT_ID is not delivery_pending after publication failed (status=$pending_status)"
+        lc_log "TODO_RESULT_PENDING_STATE_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE status=$pending_status"
+      fi
+    elif [ "$FAILURE_CODE" = "RUNTIME_PERMISSION_BLOCKED" ]; then
       # Permission denials are deterministic until the operator/policy changes.
       # Do not burn the remaining attempts re-running the same blocked tool call.
       if update_task_completion "$COMMENT_ID" "failed" "$FAIL_REASON" "$CLAIM_TOKEN"; then
@@ -4249,6 +4320,8 @@ poll_once() {
     lc_log "POLL" "fire=false new=$poll_new pending=$poll_pending"
   fi
 
+
+  retry_pending_todo_result_updates || log "WARN: Todo result outbox retry cycle failed"
 }
 
 task_execution_kind_from_context() {
@@ -6192,27 +6265,11 @@ TEAM_CHECKPOINT_PROTOCOL
     # Non-terminal retry comments remain ordinary result text without machine markers.
     local COMMENT_POST_SUCCESS="false"
     if task_source_is_todo_type "$TASK_SOURCE_TYPE" && [ "$task_final_status" = "failed" ]; then
-      local todo_failure_summary todo_failure_receipt todo_failure_attempt
-      todo_failure_summary="Manul zakończył wykonanie zadania błędem.
-
-**Etap:** ${FAILURE_CODE:-task execution}
-
-**Przyczyna:**
-$(manul_redact_failure_details "${FAIL_REASON:-${FINAL_COMMENT}}")
-
-Zadanie główne pozostaje otwarte. Usuń przeszkodę i edytuj to podzadanie, aby ponowić pracę."
-      for todo_failure_attempt in 1 2 3; do
-        if todo_failure_receipt="$(task_source_publish_update "$CONFIG" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" failed "$todo_failure_summary" 2>&1)"; then
-          COMMENT_POST_SUCCESS="true"
-          log "dispatch: published verified Todo failure update for $COMMENT_ID (receipt=$todo_failure_receipt)"
-          lc_log "TODO_TASK_FAILURE_UPDATE_CONFIRMED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE try=$todo_failure_attempt"
-          break
-        fi
-        log "WARN: failed to publish Todo failure update for $COMMENT_ID (try=$todo_failure_attempt/3): $todo_failure_receipt"
-        if [ "$todo_failure_attempt" -lt 3 ]; then sleep "$todo_failure_attempt"; fi
-      done
-      if [ "$COMMENT_POST_SUCCESS" != "true" ]; then
-        lc_log "TODO_TASK_FAILURE_UPDATE_FAILED" "task=$COMMENT_ID source=$TASK_SOURCE_TYPE"
+      post_task_failure_feedback "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "${FAIL_REASON:-${FINAL_COMMENT}}" "" "${FAILURE_CODE:-task_execution}" || true
+      if todo_result_outbox_is_delivered "$COMMENT_ID" "$TASK_SOURCE_TYPE" "$TASK_SOURCE_ID" failed; then
+        COMMENT_POST_SUCCESS="true"
+      else
+        COMMENT_POST_SUCCESS="false"
       fi
     fi
     if [ -n "$FINAL_COMMENT" ] && ! task_source_is_todo_type "$TASK_SOURCE_TYPE"; then
