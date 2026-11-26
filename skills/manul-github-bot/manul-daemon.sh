@@ -2682,7 +2682,15 @@ repair_result_comment_marker() {
 # or the raw body from the marker-repair response.
 result_comment_body_has_content() {
   local body="$1" marker="$2" clean
-  clean="$(printf '%s\n' "$body" | sed "s|$marker||g; s/— manul 🐈//g; s/\\\\n/ /g" | tr -d '[:space:]')"
+  # Remove exact literal tokens rather than interpolating dynamic task markers
+  # into a sed regular expression. GitHub CLI may return escaped "\\n" text
+  # after the jq line-flattening filter, while callers may also pass real
+  # newlines; both forms are whitespace, not report content.
+  clean="$body"
+  clean="${clean//"$marker"/}"
+  clean="${clean//— manul 🐈/}"
+  clean="${clean//\\\\n/}"
+  clean="$(printf '%s' "$clean" | tr -d '[:space:]')"
   [ -n "$clean" ]
 }
 
