@@ -1556,7 +1556,9 @@ render_poll_request_batch() {
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
     | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
-    | (if $tok == "run" then
+    | (if ($rest | test("^team([ \\t]+|$)"; "i")) then
+          {action: "TEAM", prompt: ($rest | sub("^[^ \\t]+([ \\t]+|$)"; "")), agent: ""}
+        elif $tok == "run" then
          (($rest | sub("^run([ \\t]+|$)"; "")) as $run_rest
           | if ($run_rest | test("^--agent([ \\t]+|$)")) then
               (try ($run_rest | capture("^--agent[ \\t]+(?<requested_agent>[^ \\t]+)(?:[ \\t]+(?<requested_prompt>(?s:.*)))?$"))
@@ -1589,7 +1591,7 @@ render_poll_request_batch() {
       action: $action,
       autoAccept: $auto_accept,
       prompt: $actx.prompt,
-      fullBody: (if (($actx.agent // $agent) != "") then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^.*?((\\r?\\n)[ \\t]*" + $trig_re + "([ \\t]*|$))"; "") | sub("^[ \\t]+"; "")) end)
+      fullBody: (if (($actx.agent // $agent) != "") or $actx.action == "TEAM" then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^.*?((\\r?\\n)[ \\t]*" + $trig_re + "([ \\t]*|$))"; "") | sub("^[ \\t]+"; "")) end)
     }' 2>>"$LOG" | group_poll_request_comments 2>>"$LOG" || true)
 
   if [ "$TASK_SOURCES_EXPLICIT" -eq 0 ]; then
@@ -1638,7 +1640,9 @@ render_poll_request_batch() {
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
     | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
-    | (if $tok == "run" then
+    | (if ($rest | test("^team([ \\t]+|$)"; "i")) then
+          {action: "TEAM", prompt: ($rest | sub("^[^ \\t]+([ \\t]+|$)"; "")), agent: ""}
+        elif $tok == "run" then
          (($rest | sub("^run([ \\t]+|$)"; "")) as $run_rest
           | if ($run_rest | test("^--agent([ \\t]+|$)")) then
               (try ($run_rest | capture("^--agent[ \\t]+(?<requested_agent>[^ \\t]+)(?:[ \\t]+(?<requested_prompt>(?s:.*)))?$"))
@@ -1756,7 +1760,9 @@ render_poll_request_batch() {
     | ($rest | split(" ")[0]) as $tok
     | (if ($tok != "" and ($agents | index($tok))) then $tok else "" end) as $agent
     | (if $agent == "" then $rest else ($rest | split(" ") | .[1:] | join(" ")) end) as $prompt_no_agent
-    | (if $tok == "run" then
+    | (if ($rest | test("^team([ \\t]+|$)"; "i")) then
+          {action: "TEAM", prompt: ($rest | sub("^[^ \\t]+([ \\t]+|$)"; "")), agent: ""}
+        elif $tok == "run" then
          (($rest | sub("^run([ \\t]+|$)"; "")) as $run_rest
           | if ($run_rest | test("^--agent([ \\t]+|$)")) then
               (try ($run_rest | capture("^--agent[ \\t]+(?<requested_agent>[^ \\t]+)(?:[ \\t]+(?<requested_prompt>(?s:.*)))?$"))
@@ -1785,7 +1791,7 @@ render_poll_request_batch() {
       action: $action,
       autoAccept: $auto_accept,
       prompt: $actx.prompt,
-      fullBody: (if (($actx.agent // $agent) != "") then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^[ \\t]+"; "")) end),
+      fullBody: (if (($actx.agent // $agent) != "") or $actx.action == "TEAM" then $actx.prompt else (.body | sub("^[ \\t]*" + $trig_re + "([ \\t]*|$)"; "") | sub("^[ \\t]+"; "")) end),
       path: (.path // ""),
       line: ((.line // .original_line // "") | tostring),
       diffHunk: (.diff_hunk // ""),
