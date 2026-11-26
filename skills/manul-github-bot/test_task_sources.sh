@@ -248,7 +248,7 @@ todo_remote_cross_source="$(jq -cn '{
   title:"Shared Todo root", body:"Shared Todo root", prompt:"Process shared Todo root",
   createdAt:"2026-11-26T12:00:00Z", updatedAt:"2026-11-26T12:00:00Z",
   state:"OPEN", action:"IMPLEMENT",
-  metadata:{repository:"",issueNumber:0}, execution:{kind:"repository"}
+  metadata:{repository:"mariuszmarzec/todo",issueNumber:0}, execution:{kind:"repository"}
 }')"
 todo_local_cross_source="$(jq -cn '{
   taskSourceType:"todo_local_mcp", taskSourceId:"88@local-fingerprint",
@@ -256,7 +256,7 @@ todo_local_cross_source="$(jq -cn '{
   title:"Same Todo root", body:"Same Todo root", prompt:"Process same Todo root",
   createdAt:"2026-11-26T12:01:00Z", updatedAt:"2026-11-26T12:01:00Z",
   state:"OPEN", action:"IMPLEMENT",
-  metadata:{repository:"",issueNumber:0}, execution:{kind:"repository"}
+  metadata:{repository:"mariuszmarzec/todo",issueNumber:0}, execution:{kind:"repository"}
 }')"
 queue_normalized_source_task "$todo_remote_cross_source"
 queue_normalized_source_task "$todo_local_cross_source"
