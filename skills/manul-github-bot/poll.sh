@@ -335,7 +335,24 @@ persist_conversation_message() {
       AND commentId='$(sql_escape "$comment_id")'
     LIMIT 1;
   " 2>/dev/null || true)"
-  [ "$already_persisted" = "1" ] && return 0
+  if [ "$already_persisted" = "1" ]; then
+    # Preserve the message's source classification when a later poll pass
+    # recognizes an already-synchronized comment as a task trigger or
+    # clarification. This is conversation metadata only; poll deduplication
+    # uses processed_comments/conversation_links, never messageType.
+    case "$message_type" in
+      task-trigger|user-clarification)
+        sqlite3 "$DB" "
+          UPDATE conversation_messages
+          SET messageType='$(sql_escape "$message_type")'
+          WHERE conversationId='$(sql_escape "$conv_id")'
+            AND commentId='$(sql_escape "$comment_id")'
+            AND (messageType IS NULL OR messageType IN ('comment','issue-comment','ordinary','context',''));
+        " 2>>"$LOG" || true
+        ;;
+    esac
+    return 0
+  fi
 
   local esc_repo esc_author esc_body esc_url esc_type message_id
   esc_repo="$(sql_escape "$repo")"

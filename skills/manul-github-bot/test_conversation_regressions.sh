@@ -33,6 +33,7 @@ test_context_message_does_not_suppress_new_trigger() {
   sqlite3 "$db" "
     CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY);
     CREATE TABLE conversation_messages(commentId TEXT, messageType TEXT);
+    CREATE TABLE conversation_links(commentId TEXT, taskCommentId TEXT, linkType TEXT);
   "
 
   DB="$db"
@@ -50,11 +51,13 @@ test_context_message_does_not_suppress_new_trigger() {
     return 1
   fi
 
+  # Message classification is metadata, not queue state. Even a task-trigger
+  # or clarification marker in the history table must not suppress discovery.
   sqlite3 "$db" "UPDATE conversation_messages SET messageType='task-trigger' WHERE commentId='7195886303';"
   result="$(filter_new_poll_request_members "$candidate")"
   count="$(jq 'length' <<<"$result")"
-  if [ "$count" -ne 0 ]; then
-    echo "ERROR: durable task-trigger marker did not suppress a duplicate"
+  if [ "$count" -ne 1 ]; then
+    echo "ERROR: task-trigger history metadata incorrectly suppressed a new trigger"
     rm -rf "$dir"
     return 1
   fi
@@ -62,8 +65,18 @@ test_context_message_does_not_suppress_new_trigger() {
   sqlite3 "$db" "UPDATE conversation_messages SET messageType='user-clarification' WHERE commentId='7195886303';"
   result="$(filter_new_poll_request_members "$candidate")"
   count="$(jq 'length' <<<"$result")"
+  if [ "$count" -ne 1 ]; then
+    echo "ERROR: user-clarification history metadata incorrectly suppressed a new trigger"
+    rm -rf "$dir"
+    return 1
+  fi
+
+  # Only an explicit task-membership link marks the message as consumed.
+  sqlite3 "$db" "INSERT INTO conversation_links(commentId,taskCommentId,linkType) VALUES('7195886303','issue:anchor','REQUEST_BATCH_MEMBER');"
+  result="$(filter_new_poll_request_members "$candidate")"
+  count="$(jq 'length' <<<"$result")"
   if [ "$count" -ne 0 ]; then
-    echo "ERROR: already-consumed user clarification was not deduplicated"
+    echo "ERROR: explicit consumed-task link did not suppress a duplicate"
     rm -rf "$dir"
     return 1
   fi
