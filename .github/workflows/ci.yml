@@ -6,8 +6,6 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [master]
-  push:
-    branches: ["fix/poller-conversation-message-dedup"]
 
 permissions:
   contents: read
@@ -45,19 +43,23 @@ jobs:
           set -euo pipefail
           bash skills/manul-github-bot/test_sdd_workflow.sh </dev/null
           bash skills/manul-github-bot/test_opencode_agent_discovery.sh </dev/null
-      - name: Run hermetic Manul shell tests
+      - name: Run targeted poller regression tests
         run: |
           set -euo pipefail
+          bash skills/manul-github-bot/test_poll_request_batching.sh </dev/null
+          bash skills/manul-github-bot/test_allowed_users_placeholder.sh </dev/null
+      - name: Run remaining hermetic Manul shell tests
+        run: |
+          set -euo pipefail
+          tests="$(find skills/manul-github-bot -maxdepth 1 -type f -name 'test_*.sh' -print | sort)"
           while IFS= read -r test; do
             case "$(basename "$test")" in
-              test_agent_modes.sh|test_manul_pr_workflow.sh|test_concurrency_impl.sh)
-                echo "SKIP $test (host integration or operator-state test)"
+              test_agent_modes.sh|test_manul_pr_workflow.sh|test_concurrency_impl.sh|test_poll_request_batching.sh|test_allowed_users_placeholder.sh)
+                echo "SKIP $test (already run explicitly or host integration)"
                 continue
                 ;;
             esac
             echo "::group::$(basename "$test")"
-            # The while loop reads its test list from process substitution.
-            # Prevent a test or one of its children from consuming that stream.
             bash "$test" </dev/null
             echo "::endgroup::"
-          done < <(find skills/manul-github-bot -maxdepth 1 -type f -name 'test_*.sh' -print | sort)
+          done <<<"$tests"

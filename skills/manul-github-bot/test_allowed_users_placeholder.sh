@@ -108,8 +108,12 @@ if [[ "${1:-}" == "api" ]]; then
   if [[ "$args" == *"api/user"* ]] || [[ "$args" == "api user"* ]]; then
     echo '{"login":"mariuszmarzec","id":1,"type":"User"}'; exit 0
   fi
+  if [[ "$args" == *"repos/mariuszmarzec/shoppingListGenerator/issues/27/comments?per_page=100"* ]]; then cat "$MOCK_GH/comments.json"; exit 0; fi
+  if [[ "$args" == "api repos/mariuszmarzec/shoppingListGenerator/issues/27" ]]; then
+    echo '{"number":27,"title":"Poller fixture","body":"Fixture issue body","user":{"login":"mariuszmarzec"},"created_at":"2026-09-23T11:55:00Z","html_url":"https://github.com/mariuszmarzec/shoppingListGenerator/issues/27"}'
+    exit 0
+  fi
   if [[ "$args" == *"issues/comments?per_page=100"* ]]; then cat "$MOCK_GH/comments.json"; exit 0; fi
-  if [[ "$args" == *"issues/27/comments"* ]]; then cat "$MOCK_GH/comments.json"; exit 0; fi
   echo '[]'; exit 0
 fi
 echo '{}'
@@ -210,8 +214,9 @@ test_placeholder_no_duplicates_on_repoll() {
   MANUL_DIR="$MANUL_DIR" TEST_DIR="$TEST_DIR" PATH="$MOCK_GH:$PATH" \
     bash "$SCRIPT_DIR/poll.sh" mariuszmarzec/shoppingListGenerator >/dev/null 2>&1 || true
   local first
-  first="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;") "
   first="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;")"
+  local first_messages
+  first_messages="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM conversation_messages;")"
 
   local result
   result="$(MANUL_DIR="$MANUL_DIR" TEST_DIR="$TEST_DIR" PATH="$MOCK_GH:$PATH" \
@@ -221,7 +226,10 @@ test_placeholder_no_duplicates_on_repoll() {
   assert_eq "$TEST_NAME (second poll new=0)" "0" "$new_count"
   local second
   second="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM processed_comments;")"
-  assert_eq "$TEST_NAME (count unchanged)" "$first" "$second"
+  assert_eq "$TEST_NAME (task count unchanged)" "$first" "$second"
+  local second_messages
+  second_messages="$(sqlite3 "$MANUL_DB" "SELECT COUNT(*) FROM conversation_messages;")"
+  assert_eq "$TEST_NAME (history sync remains idempotent)" "$first_messages" "$second_messages"
 
   cleanup
   unset TEST_DIR
