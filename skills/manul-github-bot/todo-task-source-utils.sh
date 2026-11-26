@@ -773,7 +773,7 @@ todo_task_publish_update() {
   task_id="$(todo_task_id_from_source_id "$source_id")"
   expected_version="$(todo_task_version_from_source_id "$source_id")" || return 1
   [[ "$task_id" =~ ^[0-9]+$ ]] || return 1
-  case "$status" in needs_input|failed|answered) ;; *) echo "Unsupported Todo update status: $status" >&2; return 2 ;; esac
+  case "$status" in needs_input|failed|answered|completed) ;; *) echo "Unsupported Todo update status: $status" >&2; return 2 ;; esac
 
   tasks_json="$(todo_mcp_source_list_tasks "$source_json" "$source_type")" || return $?
   root_json="$(todo_task_find_root "$tasks_json" "$task_id")" || return 1

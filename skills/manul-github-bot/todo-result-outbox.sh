@@ -42,7 +42,7 @@ queue_todo_result_update() {
     INSERT INTO manul_todo_result_outbox
       (taskId, sourceType, sourceId, resultStatus, summary, nextAttemptAt)
     VALUES
-      ('$safe_task_id', '$safe_source_type', '$safe_source_id', '$safe_status', '$summary', datetime('now'))
+      ('$safe_task_id', '$safe_source_type', '$safe_source_id', '$safe_status', '$safe_summary', datetime('now'))
     ON CONFLICT(taskId, sourceType, sourceId, resultStatus) DO UPDATE SET
       summary=excluded.summary, nextAttemptAt=datetime('now'), updatedAt=datetime('now')
     WHERE manul_todo_result_outbox.deliveredAt IS NULL;
