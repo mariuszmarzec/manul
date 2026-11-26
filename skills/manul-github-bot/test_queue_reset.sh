@@ -165,7 +165,11 @@ sqlite3 "$DB" <<'SQL'
 INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,status,baseId)
 VALUES ('1007','owner/repo',9,'https://github.com/owner/repo/issues/9#issuecomment-1007','failed','1007');
 INSERT INTO conversation_messages(messageId,conversationId,commentId,repo,issueNumber,author,body,commentUrl,createdAt,messageType)
-VALUES ('m7','conv-9','1007','owner/repo',9,'user','/manul retry','https://github.com/owner/repo/issues/9#issuecomment-1007','2026-10-17T10:07:00Z','comment');
+VALUES ('m7','conv-9','1007','owner/repo',9,'user','/manul retry','https://github.com/owner/repo/issues/9#issuecomment-1007','2026-10-17T10:07:00Z','task-trigger');
+INSERT INTO conversation_messages(messageId,conversationId,commentId,repo,issueNumber,author,body,commentUrl,createdAt,messageType)
+VALUES ('m8','conv-9','1008','owner/repo',9,'user','/manul batch member','https://github.com/owner/repo/issues/9#issuecomment-1008','2026-10-17T10:08:00Z','task-trigger');
+INSERT INTO conversation_links(conversationId,repo,issueNumber,commentId,taskCommentId,linkType,createdAt)
+VALUES ('conv-9','owner/repo',9,'1008','1007','task-trigger','2026-10-17T10:08:00Z');
 SQL
 
 LOCK_READY="$TEST_ROOT/poll-lock-ready"
@@ -187,6 +191,8 @@ assert_contains "execute waits for a busy poll lock" "$WAIT_OUTPUT" "Waiting up 
 assert_contains "execute proceeds after poll lock is released" "$WAIT_OUTPUT" "Reset/re-poll complete"
 assert_eq "poll invoked again after lock release" "2" "$(wc -l < "$POLL_CALL_FILE" | tr -d ' ')"
 assert_eq "reset removes the replayable task after waiting for the poll" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='1007';")"
+assert_eq "reset removes the task's batch-member trigger message" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_messages WHERE commentId='1008';")"
+assert_eq "reset removes the task's batch-member trigger link" "0" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM conversation_links WHERE taskCommentId='1007' AND linkType='task-trigger';")"
 
 # Full reset stops automation itself, clears all task/routing state (including stale
 # running/worker ownership), and leaves the DB empty unless --poll-after is requested.

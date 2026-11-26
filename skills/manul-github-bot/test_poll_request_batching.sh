@@ -56,10 +56,31 @@ assert_eq "singleton falls back to parsed prompt when fullBody is empty" "Fallba
 
 DB="$TEST_DIR/manul.db"
 LOG="$TEST_DIR/test.log"
-sqlite3 "$DB" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY); CREATE TABLE conversation_messages(commentId TEXT); INSERT INTO processed_comments(commentId) VALUES('issue:100'); INSERT INTO conversation_messages(commentId) VALUES('101');"
-candidate='[{"id":"issue:100","rawId":"100","fullBody":"Already queued"},{"id":"issue:101","rawId":"101","fullBody":"Already persisted"},{"id":"issue:102","rawId":"102","fullBody":"New request"},{"id":"issue:103","rawId":"103","fullBody":"New sibling"}]'
+sqlite3 "$DB" "CREATE TABLE processed_comments(commentId TEXT PRIMARY KEY); CREATE TABLE conversation_messages(commentId TEXT); CREATE TABLE conversation_links(commentId TEXT, taskCommentId TEXT, linkType TEXT); INSERT INTO processed_comments(commentId) VALUES('issue:100'); INSERT INTO conversation_messages(commentId) VALUES('101');"
+candidate='[{"id":"issue:100","rawId":"100","fullBody":"Already queued"},{"id":"issue:101","rawId":"101","fullBody":"Persisted by history sync before task discovery"},{"id":"issue:102","rawId":"102","fullBody":"New request"},{"id":"issue:103","rawId":"103","fullBody":"New sibling"}]'
 remaining="$(filter_new_poll_request_members "$candidate")"
-assert_eq "previously queued and persisted comments are removed individually" "issue:102,issue:103" "$(jq -r '[.[].id] | join(",")' <<<"$remaining")"
+assert_eq "history-only message is not mistaken for a queued task" "issue:101,issue:102,issue:103" "$(jq -r '[.[].id] | join(",")' <<<"$remaining")"
+# Once a non-anchor batch member is consumed, persist that fact as an explicit
+# task relation. It must not be inferred from conversation_messages.
+sqlite3 "$DB" "INSERT INTO conversation_links(commentId,taskCommentId,linkType) VALUES('101','100','REQUEST_BATCH_MEMBER');"
+remaining="$(filter_new_poll_request_members "$candidate")"
+assert_eq "already-consumed batch sibling is excluded by explicit task link" "issue:102,issue:103" "$(jq -r '[.[].id] | join(",")' <<<"$remaining")"
+# The history-only race case has no task row AND no task-membership link, so it
+# remains eligible and can be queued exactly once.
+history_only_id="issue:102"
+already_recorded="$(sqlite3 "$DB" "SELECT 1 FROM processed_comments WHERE commentId='$(sql_escape "$history_only_id")' UNION ALL SELECT 1 FROM conversation_links WHERE linkType='REQUEST_BATCH_MEMBER' AND commentId='102' LIMIT 1;")"
+assert_eq "history-only trigger is still eligible for enqueue" "" "$already_recorded"
+sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId) VALUES('issue:102');"
+assert_eq "history-only trigger is queued exactly once" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:102';")"
+sqlite3 "$DB" "INSERT OR IGNORE INTO processed_comments(commentId) VALUES('issue:102');"
+assert_eq "duplicate poll does not enqueue the same trigger twice" "1" "$(sqlite3 "$DB" "SELECT COUNT(*) FROM processed_comments WHERE commentId='issue:102';")"
+# Keep both production entrypoint guards from regressing to history-based dedupe.
+[[ "$(grep -c 'already_recorded=' "$SCRIPT_DIR/poll.sh")" -eq 2 ]] || fail "expected issue-comment and issue-body task guards"
+grep -Fq "linkType='REQUEST_BATCH_MEMBER'" "$SCRIPT_DIR/poll.sh" || fail "batch-member task links must be used for deduplication"
+if grep 'already_recorded=' "$SCRIPT_DIR/poll.sh" | grep -q 'conversation_messages'; then
+  fail "task identity guard still consults conversation_messages"
+fi
+ok "both production task guards use processed_comments only"
 filtered_batch="$(printf '%s\n' "$remaining" | render_poll_request_batch)"
 assert_eq "remaining comments are re-anchored to the earliest new comment" "issue:102" "$(jq -r '.id' <<<"$filtered_batch")"
 assert_eq "only unprocessed source comments remain in the batch" "2" "$(jq -r '.batchSize' <<<"$filtered_batch")"
