@@ -3716,6 +3716,9 @@ evaluate_task_completion() {
   local TASK_EXECUTION_KIND="${21:-repository}"
   local TEAM_TASK_BRANCH="${22:-}"
   local TASK_ACTION="${23:-IMPLEMENT}"
+  # The persisted action is authoritative. Never let a missing/stale caller
+  # delivery-mode argument turn a VERIFY task into implementation delivery.
+  if [ "$TASK_ACTION" = "VERIFY" ]; then DELIVERY_MODE="comment_only"; fi
   # Reset per-evaluation output so a prior task cannot leak its verified merged PR base.
   local VERIFIED_MERGED_RESULT_PR_BASE=""
 
@@ -3796,19 +3799,23 @@ evaluate_task_completion() {
       FAIL_REASON="Comment-only task modified the repository; report-only delivery must leave code unchanged"
       log "dispatch: task $COMMENT_ID report-only validation failed: repository changed"
       lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_repository_changed"
-    elif ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
+    elif ! verify_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt" "true"; then
       SUCCESS="false"
-      FAILURE_CODE="DELIVERY_COMMENT_MISSING"
-      FAIL_REASON="Report-only task did not publish a verified result comment"
-      log "dispatch: task $COMMENT_ID report-only validation failed: requested report comment missing or invalid"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_invalid"
-    elif ! verify_nonempty_result_comment "$REPO" "$ISSUE_NUM" "$COMMENT_ID" "$safe_comment_id" "$current_attempt"; then
-      SUCCESS="false"
-      FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
-      FAIL_REASON="Report-only task result comment is empty or contains only the marker/signature"
-      log "dispatch: task $COMMENT_ID report-only validation failed: empty report"
-      lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_empty"
+      if [ "${RESULT_COMMENT_VERIFY_FAILURE_CODE:-}" = "DELIVERY_COMMENT_EMPTY" ]; then
+        FAILURE_CODE="DELIVERY_COMMENT_EMPTY"
+        FAIL_REASON="Report-only task result comment is empty or contains only the marker/signature"
+        log "dispatch: task $COMMENT_ID report-only validation failed: empty report"
+        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_empty"
+      else
+        FAILURE_CODE="DELIVERY_COMMENT_MISSING"
+        FAIL_REASON="Report-only task did not publish one verified result comment"
+        log "dispatch: task $COMMENT_ID report-only validation failed: requested report comment missing or invalid"
+        lc_log "TASK_ERROR" "task=$COMMENT_ID reason=comment_only_comment_invalid"
+      fi
     else
+      # The exact marker and non-empty content were checked in one authoritative
+      # GitHub read. Skip the later generic marker re-read for this delivery.
+      COMMENT_ONLY_DELIVERY="true"
       log "dispatch: task $COMMENT_ID verified comment-only/report delivery"
       lc_log "COMMENT_ONLY_DELIVERY_VERIFIED" "task=$COMMENT_ID repo=$REPO issue=$ISSUE_NUM attempt=$current_attempt"
     fi
@@ -4788,6 +4795,23 @@ Before taking any action, determine whether this task is:
 - **Repository Change**: The user wants code changes, fixes, features, or other modifications. Proceed with implementation on the appropriate branch.
 
 If the task is informational, you MUST post a thoughtful answer as a GitHub comment using the `run` tool (see GitHub Comment Posting section below), then emit `TASK_DONE`. Do NOT modify any repository files.
+
+## Authoritative Task Action — preserve across the entire lifecycle
+
+The `Task Action` field in the task metadata is an execution contract, not a suggestion.
+Never reinterpret it from the wording of the request or override it with a generic
+informational/repository-change classification.
+
+When `Task Action` is `VERIFY`:
+- This task remains report-only through retries, runtime continuation, delegation,
+  and every handoff. Pass `VERIFY` unchanged to any delegated agent or resumed task.
+- Inspect and validate read-only. Do not create or modify repository files, branches,
+  commits, pushes, pull requests, or any other repository state.
+- Publish one non-empty report comment containing the exact task/attempt marker.
+- Emit `TASK_DONE` only after the report comment has been posted and independently
+  verified in the correct GitHub conversation/thread.
+- If a requested fix is discovered, describe it and recommend a follow-up
+  implementation task; do not implement it under this VERIFY task.
 
 ## User interaction and decision points
 1. Behave like a competent human teammate.
