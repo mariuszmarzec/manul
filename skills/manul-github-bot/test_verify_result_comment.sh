@@ -565,6 +565,19 @@ echo ""
 # Write response JSON files into temp dir
 REPO="owner/repo"
 
+# The content predicate must ignore task markers, the standard signature,
+# escaped JSON newlines and real whitespace, while retaining meaningful prose.
+content_test_marker="<!-- manul-task:content-helper:attempt:1 -->"
+content_test_body="$content_test_marker\\nUseful report text.\\n\\n— manul 🐈"
+result_comment_body_has_content "$content_test_body" "$content_test_marker"
+assert_rc "Escaped-newline report contains meaningful content" 0 "$?"
+empty_content_test_body="$content_test_marker\\n\\n— manul 🐈"
+result_comment_body_has_content "$empty_content_test_body" "$content_test_marker"
+assert_rc "Marker and signature without prose are empty" 1 "$?"
+multiline_content_test_body="$content_test_marker"$'\\n'"Useful multiline report."$'\\n\\n'"— manul 🐈"
+result_comment_body_has_content "$multiline_content_test_body" "$content_test_marker"
+assert_rc "Actual multiline report contains meaningful content" 0 "$?"
+
 # ── Test 1: Top-level comment with matching marker ─────────────────────────────
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
 [{"id": 100, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-1:attempt:1 -->\nI completed the task.\n\n— manul 🐈"}]
@@ -580,7 +593,7 @@ rm -f "$TEMP_DB"
 setup_db
 insert_task "result-nonempty" "$REPO" 1 "https://github.com/owner/repo/issues/1#issuecomment-result-nonempty"
 cat > "$WORK/responses/owner__repo__issues__1__comments.json" << 'EOF'
-[{"id": 110, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-nonempty:attempt:1 -->\nUseful findings and validation results.\n\n— manul 🐈"}]
+[{"id": 110, "user": {"login": "Manul-Bot"}, "in_reply_to_id": null, "body": "<!-- manul-task:result-nonempty:attempt:1 --> Useful findings and validation results. — manul 🐈"}]
 EOF
 RESULT_COMMENT_VERIFY_FAILURE_CODE=""
 verify_result_comment "$REPO" 1 "result-nonempty" "result-nonempty" 1 true >/dev/null 2>&1
