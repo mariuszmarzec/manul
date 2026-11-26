@@ -991,7 +991,7 @@ sqlite3 "$DB" "DELETE FROM processed_comments WHERE commentId='COMMENT_Q';" 2>/d
 sqlite3 "$DB" "INSERT INTO processed_comments(commentId,repository,issueNumber,commentUrl,author,agent,prompt,status,attempts,workerPid,action) VALUES ('COMMENT_Q','test/repo',56,'https://github.com/test/repo/issues/56#issuecomment-1015','user','test','diagnostics only; do not change code','running',1,$$,'VERIFY');" 2>/dev/null
 STDOUT_FILE="$TEST_TMPDIR/stdoutQ.txt"; echo "TASK_DONE" >"$STDOUT_FILE"
 COMPLETION_SUCCESS=""; FINAL_COMMENT=""; FAIL_REASON=""; FAILURE_CODE=""; TASK_ACTION="VERIFY"
-evaluate_task_completion "test/repo" "56" "COMMENT_Q" "COMMENT_Q" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_Q" "" "$INITIAL_HEAD_Q" "master" "master" "" "" "" "" "comment_only"
+evaluate_task_completion "test/repo" "56" "COMMENT_Q" "COMMENT_Q" "1" "0" "$STDOUT_FILE" "$DB" "" "$WORKDIR_Q" "" "$INITIAL_HEAD_Q" "master" "master" "" "" "" "" "implementation" "" "repository" "" "VERIFY"
 if [ "$COMPLETION_SUCCESS" != "true" ]; then echo "FAIL: report-only should succeed ($FAIL_REASON)"; exit 1; fi
 echo "[OK] Test Q: PASSED"
 
