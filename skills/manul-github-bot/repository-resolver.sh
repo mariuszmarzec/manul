@@ -74,8 +74,10 @@ Return every repository that the user explicitly expects Manul to CHANGE and
 deliver through its own pull request. A repository mentioned only as an API
 dependency, reference, issue-link context, example, or read-only dependency is
 not a write target. A task may require multiple write targets; preserve all of
-them. For multiple targets, Manul will create independent top-level child
-tasks, workspaces, branches and PRs through its existing Team workflow.
+them. For multiple targets, the first ordered repository is owned by
+the parent Team task and receives its own PR from the parent's assigned
+checkout. Every remaining target receives one independent top-level child
+task, workspace, branch and PR. Never create a child for the primary target.
 
 Use all supplied project descriptions and skill content. Skills can define
 project nicknames, repository mappings, backend/frontend roles, ownership or
@@ -178,7 +180,7 @@ WORKSPACE="$(mktemp -d "$OPERATOR_QUERY_ROOT/oq-repository-resolver.XXXXXX")" ||
 chmod 700 "$WORKSPACE"
 trap 'rm -rf -- "$WORKSPACE" "$TMP_DIR"' EXIT HUP INT TERM
 
-TASK_ID="repository-resolver-$"
+TASK_ID="repository-resolver-$$"
 CONTEXT_FILE="$TMP_DIR/execution-context.json"
 jq -cn \
   --arg taskId "$TASK_ID" \
