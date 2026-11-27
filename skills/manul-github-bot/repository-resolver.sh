@@ -253,7 +253,7 @@ jq -cn --argjson result "$RESULT" --argjson catalog "$CATALOG_JSON" --argjson av
   ($result.repositories | map(ascii_downcase)) as $wanted
   | [$catalog.repositories[]? | select((.name | ascii_downcase) as $name | ($wanted | index($name)) != null)] as $entries
   | ([$entries[].skills[]?] + ($result.skills // [])) as $all_skills
-  | ([$all_skills[] | select(any($availableSkills[]; . == .))] | unique) as $skills
+  | ([$all_skills[] as $skill | select(any($availableSkills[]; . == $skill)) | $skill] | unique) as $skills
   | {
       repository: $result.repositories[0],
       repositories: $result.repositories,
