@@ -7,7 +7,7 @@ TEST_DIR="$(mktemp -d /tmp/manul-repository-resolver-XXXXXX)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 HOME_DIR="$TEST_DIR/home"
 BIN_DIR="$TEST_DIR/bin"
-mkdir -p "$HOME_DIR/.manul" "$HOME_DIR/.agents/skills/bff-project" "$BIN_DIR"
+mkdir -p "$HOME_DIR/.manul" "$HOME_DIR/.agents/skills/bff-project" "$HOME_DIR/.agents/skills/globalskills-repository" "$BIN_DIR"
 cat >"$HOME_DIR/.manul/config.json" <<'JSON'
 {"automation":{"agentRuntime":"opencode"}}
 JSON
