@@ -7,6 +7,15 @@ TEST_DIR="$(mktemp -d /tmp/manul-todo-sources-XXXXXX)"
 BIN="$TEST_DIR/bin"
 mkdir -p "$BIN"
 trap 'rm -rf "$TEST_DIR"' EXIT
+# Routing unit tests must never invoke a live model, even when run on a host
+# whose real Manul runtime uses OpenCode. The resolver adapter is tested
+# separately with a hermetic fake AgentTaskRunner.
+export MANUL_DIR="$TEST_DIR/manul"
+mkdir -p "$MANUL_DIR"
+cat > "$MANUL_DIR/config.json" <<'JSON'
+{"automation":{"agentRuntime":"openclaw"}}
+JSON
+export MANUL_CONFIG="$MANUL_DIR/config.json"
 PYTHON_BIN="$(command -v python3)"
 unset TODO_LOCAL_MCP_TOKEN
 
