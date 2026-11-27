@@ -532,6 +532,79 @@ todo_task_fingerprint() {
   todo_task_fingerprint_raw "$stable_task"
 }
 
+# Queue/database-aware deduplication for provider polling. A completed,
+# queued or running source version must not invoke the semantic resolver again.
+# Todo source IDs include a structural fingerprint, so editing the task tree
+# naturally creates a new identity. Jira additionally uses updatedAt throttling
+# while a routing blocker has not yet produced a queue row.
+todo_task_source_already_known() {
+  local source_type="$1" source_id="$2"
+  local db="${DB:-${MANUL_DB:-$HOME/.manul/state/manul.db}}" safe_type safe_id found
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -f "$db" ] || return 1
+  safe_type="$(printf '%s' "$source_type" | sed "s/'/''/g")"
+  safe_id="$(printf '%s' "$source_id" | sed "s/'/''/g")"
+  found="$(sqlite3 "$db" "SELECT 1 FROM processed_comments WHERE taskSourceType='$safe_type' AND taskSourceId='$safe_id' LIMIT 1;" 2>/dev/null)" || return 1
+  [ "$found" = "1" ]
+}
+
+todo_task_routing_attempt_recently() {
+  local source_type="$1" source_id="$2" source_updated_at="$3" ttl_seconds="${4:-300}"
+  local db="${DB:-${MANUL_DB:-$HOME/.manul/state/manul.db}}" safe_type safe_id safe_updated found
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -f "$db" ] || return 1
+  [[ "$ttl_seconds" =~ ^[1-9][0-9]*$ ]] || ttl_seconds=300
+  safe_type="$(printf '%s' "$source_type" | sed "s/'/''/g")"
+  safe_id="$(printf '%s' "$source_id" | sed "s/'/''/g")"
+  safe_updated="$(printf '%s' "$source_updated_at" | sed "s/'/''/g")"
+  sqlite3 "$db" "
+    CREATE TABLE IF NOT EXISTS repository_resolution_attempts (
+      taskSourceType TEXT NOT NULL,
+      taskSourceId TEXT NOT NULL,
+      taskSourceUpdatedAt TEXT NOT NULL DEFAULT '',
+      attemptedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(taskSourceType, taskSourceId, taskSourceUpdatedAt)
+    );
+  " >/dev/null 2>&1 || return 1
+  found="$(sqlite3 "$db" "
+    SELECT 1
+    FROM repository_resolution_attempts
+    WHERE taskSourceType='$safe_type'
+      AND taskSourceId='$safe_id'
+      AND taskSourceUpdatedAt='$safe_updated'
+      AND (julianday('now') - julianday(attemptedAt)) * 86400 < $ttl_seconds
+    LIMIT 1;
+  " 2>/dev/null)" || return 1
+  [ "$found" = "1" ]
+}
+
+todo_task_record_routing_attempt() {
+  local source_type="$1" source_id="$2" source_updated_at="$3"
+  local db="${DB:-${MANUL_DB:-$HOME/.manul/state/manul.db}}" safe_type safe_id safe_updated
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -f "$db" ] || return 1
+  safe_type="$(printf '%s' "$source_type" | sed "s/'/''/g")"
+  safe_id="$(printf '%s' "$source_id" | sed "s/'/''/g")"
+  safe_updated="$(printf '%s' "$source_updated_at" | sed "s/'/''/g")"
+  sqlite3 "$db" "
+    CREATE TABLE IF NOT EXISTS repository_resolution_attempts (
+      taskSourceType TEXT NOT NULL,
+      taskSourceId TEXT NOT NULL,
+      taskSourceUpdatedAt TEXT NOT NULL DEFAULT '',
+      attemptedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(taskSourceType, taskSourceId, taskSourceUpdatedAt)
+    );
+    INSERT INTO repository_resolution_attempts(taskSourceType,taskSourceId,taskSourceUpdatedAt,attemptedAt)
+    VALUES('$safe_type','$safe_id','$safe_updated',CURRENT_TIMESTAMP)
+    ON CONFLICT(taskSourceType,taskSourceId,taskSourceUpdatedAt)
+    DO UPDATE SET attemptedAt=CURRENT_TIMESTAMP;
+  " >/dev/null 2>&1
+}
+
+todo_task_has_verified_generated_update() {
+  local raw_fingerprint stable_fingerprint
+  raw_fingerprint="$(todo_task_fingerprint_raw "$1")" || return 1
+  stable_fingerprint="$(todo_task_fingerprint "$1")" || return 1
+  [ "$raw_fingerprint" != "$stable_fingerprint" ]
+}
+
 todo_task_ids_json() {
   jq -c '
     def ids:
