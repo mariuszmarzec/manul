@@ -567,6 +567,13 @@ specific_source='{"repositories":["owner/fiteo","owner/fiteo-app"]}'
 specific_resolution="$(todo_task_resolve_repository "$specific_source" '{"id":93,"description":"/manul Update the Fiteo App"}')"
 assert_eq "longest matching alias distinguishes Fiteo App from Fiteo backend" "owner/fiteo-app" "$(jq -r '.repository' <<<"$specific_resolution")"
 
+overlapping_alias_task='{"id":94,"description":"/manul Update Fiteo and Fiteo App"}'
+resolution_rc=0
+overlapping_alias_output="$(todo_task_resolve_repository "$specific_source" "$overlapping_alias_task" 2>&1)" || resolution_rc=$?
+assert_rc "separately naming Fiteo and Fiteo App keeps both overlapping aliases" "1" "$resolution_rc"
+assert_contains "overlapping alias ambiguity retains the Fiteo backend target" "$overlapping_alias_output" "owner/fiteo"
+assert_contains "overlapping alias ambiguity retains the Fiteo App target" "$overlapping_alias_output" "owner/fiteo-app"
+
 e2e_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":96,"description":"/manul zrob w test-manul-e2e repo PR z helloworld w elixir"}')"
 assert_eq "hyphenated repository slug wins over embedded Manul alias" "owner/test-manul-e2e" "$(jq -r '.repository' <<<"$e2e_resolution")"
 assert_eq "repository slug is available as an implicit matched alias" "test-manul-e2e" "$(jq -r '.matchedAlias' <<<"$e2e_resolution")"
