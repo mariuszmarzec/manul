@@ -217,7 +217,9 @@ if [ "$RUNNER_RC" -ne 0 ] || [ "$EXECUTION_STATUS" != "COMPLETED" ]; then
   exit 3
 fi
 
-TEXT_OUTPUT="$(jq -Rr 'try fromjson catch empty | select(.type == "text") | (.part.text // .text // empty)' "$RAW_FILE" 2>/dev/null)"
+# AgentExecutor/OpenCodeAdapter writes the normalized text stream to the
+# caller-supplied stdout_file; raw JSONL remains an internal adapter artifact.
+TEXT_OUTPUT="$(cat "$RAW_FILE" 2>/dev/null || true)"
 if [ -z "$(printf '%s' "$TEXT_OUTPUT" | tr -d '[:space:]')" ]; then
   echo "repository resolver: OpenCode returned no text result" >&2
   exit 3
