@@ -148,8 +148,9 @@ todo_task_resolve_repository_static() {
 
   matches_json='[]'
   if [ "$catalog_valid" = "true" ]; then
-    # Keep every most-specific alias. A shorter alias contained in a longer
-    # one is suppressed; independent project aliases remain separate.
+    # Keep every matching alias, including overlapping aliases that may
+    # refer to distinct repositories (for example "fiteo" and "fiteo app").
+    # Multiple candidates are delegated to the semantic resolver for scope.
     matches_json="$(jq -c --arg description "$description" '
       def norm:
         ascii_downcase
@@ -162,15 +163,7 @@ todo_task_resolve_repository_static() {
           | ($alias | norm) as $normalized_alias
           | select($normalized_alias != "")
           | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
-          | {repository:$repo.name,alias:$alias,normalizedAlias:$normalized_alias,length:($normalized_alias|length)}
-        ] as $all_matches
-      | [
-          $all_matches[] as $candidate
-          | select((
-              [$all_matches[]
-                | select(.length > $candidate.length and (.normalizedAlias | contains($candidate.normalizedAlias)))
-              ] | length
-            ) == 0)
+          | {repository:$repo.name,alias:$alias,length:($normalized_alias|length)}
         ]
       | unique_by(.repository)
     ' <<<"$catalog_json")" || return 2
