@@ -163,7 +163,26 @@ todo_task_resolve_repository_static() {
           | ($alias | norm) as $normalized_alias
           | select($normalized_alias != "")
           | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
-          | {repository:$repo.name,alias:$alias,length:($normalized_alias|length)}
+          | {repository:$repo.name,alias:$alias,normalizedAlias:$normalized_alias,length:($normalized_alias|length)}
+        ] as $all_matches
+      | [
+          $all_matches[] as $candidate
+          | ([
+              $all_matches[] as $longer
+              | select($longer.length > $candidate.length)
+              | select((" " + $longer.normalizedAlias + " ") | contains(" " + $candidate.normalizedAlias + " "))
+            ]) as $containing_aliases
+          | (reduce $containing_aliases[] as $longer ($task_text;
+              gsub(
+                "(^| )" + ($longer.normalizedAlias | gsub(" "; " +")) + "($| )";
+                " "
+              )
+            )) as $without_longer_aliases
+          | select(
+              ($containing_aliases | length) == 0
+              or ((" " + $without_longer_aliases + " ") | contains(" " + $candidate.normalizedAlias + " "))
+            )
+          | {repository:$candidate.repository,alias:$candidate.alias,length:$candidate.length}
         ]
       | unique_by(.repository)
     ' <<<"$catalog_json")" || return 2
