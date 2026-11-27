@@ -120,10 +120,12 @@ and the normal process/timeout controls. Manul validates every returned
 against the installed skill inventory.
 
 A single target follows the normal checkout/branch/PR path. Two or more write
-targets automatically become a Team parent: one independent top-level child
-task is created per target, each child gets its own workspace, branch and PR,
-and the parent coordinates and verifies all deliveries. Repositories mentioned
-only as dependencies or read-only context are not expanded into child work.
+targets automatically use the Team workflow: the parent task owns the first
+ordered target in its primary checkout and delivers its own PR; one independent
+top-level child task is created for every remaining target, each with its own
+workspace, branch and PR. The parent coordinates dependencies and verifies all
+child deliveries. Repositories mentioned only as dependencies or read-only
+context are not expanded into child work.
 If resolution remains ambiguous, the resolver is unavailable, or any selected
 target is outside the allowlist, Manul creates and verifies an OPEN routing
 child rather than guessing or downgrading the task to an answer. There is no
