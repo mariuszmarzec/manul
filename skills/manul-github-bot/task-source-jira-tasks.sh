@@ -114,12 +114,12 @@ task_source_jira_tasks_poll() {
     if [ "$target_count" -eq 1 ]; then
       prompt+="Target repository: $repository"
     else
-      prompt+="All required write-target repositories (each must receive its own PR):"
+      prompt+="All required write-target repositories (each must receive its own separate PR):"
       while IFS= read -r target_repository; do
         [ -n "$target_repository" ] && prompt+=$'\n- '"$target_repository"
       done < <(jq -r '.[]' <<<"$target_repositories_json")
       prompt+=$'\n\n'
-      prompt+="**Mandatory multi-repository execution:** Manul selected its existing TEAM workflow. The parent is coordination-only; do not implement changes in its primary checkout. Create one independent TOP-LEVEL tracker task per listed repository, each with its exact owner/repo, bounded implementation request, acceptance criteria, stable work-item marker, and /manul run trigger. Each child must receive its own workspace and deliver a separate verified branch and PR. Do not create nested Todo subtasks for these tasks. Preserve cross-repository dependencies, wait for every child, verify every required PR and its CI/review evidence, and report all PR links before TASK_DONE. Do not omit or substitute a target."
+      prompt+="**Mandatory multi-repository execution:** Manul selected its existing TEAM workflow. The first target ($repository) is owned by this parent task: implement it in the assigned primary checkout and deliver a verified PR for that repository. Do not create a duplicate child task for the primary target. For every remaining target, create exactly one independent TOP-LEVEL tracker task, each with its exact owner/repo, bounded implementation request, acceptance criteria, stable work-item marker, and /manul run trigger. Each additional child must receive its own workspace and deliver a separate verified branch and PR. Do not create nested Todo subtasks for these tasks. Preserve cross-repository dependencies, wait for every additional child, verify every child PR and its CI/review evidence, and include the parent's own primary-repository PR plus all child PR links in the final report. Do not omit or combine targets. Use the canonical team-workflow skill."
     fi
     prompt+=$'\nResolution method: '"$method"
     if [ "$target_count" -gt 1 ]; then
