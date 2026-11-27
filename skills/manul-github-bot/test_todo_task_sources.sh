@@ -583,6 +583,35 @@ full_repo_task='{"id":102,"description":"/manul Implement a change","subTasks":[
 full_repo_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$full_repo_task")"
 assert_eq "explicit owner/repo notation in a subtask resolves from the allowlist" "owner/local" "$(jq -r '.repository' <<<"$full_repo_resolution")"
 assert_eq "explicit owner/repo notation has dedicated provenance" "explicit_repository_name" "$(jq -r '.method' <<<"$full_repo_resolution")"
+assert_eq "single repository results expose a normalized repositories array" "owner/local" "$(jq -r '.repositories[0]' <<<"$full_repo_resolution")"
+
+# Multi-target requests must not be collapsed to the first match. The static
+# resolver deliberately yields to OpenCode so it can distinguish write targets
+# from dependencies/background mentions.
+multi_explicit_task='{"id":110,"description":"/manul Create matching PRs in https://github.com/owner/local and https://github.com/owner/remote"}'
+resolution_rc=0
+multi_explicit_output="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$multi_explicit_task" 2>&1)" || resolution_rc=$?
+assert_rc "multiple explicit GitHub URLs require semantic target-scope resolution" "1" "$resolution_rc"
+assert_contains "multi-URL diagnostic retains every candidate" "$multi_explicit_output" "owner/local, owner/remote"
+
+multi_alias_task='{"id":111,"description":"/manul Update the local project and remote service"}'
+resolution_rc=0
+multi_alias_output="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$multi_alias_task" 2>&1)" || resolution_rc=$?
+assert_rc "multiple independent project aliases require semantic target-scope resolution" "1" "$resolution_rc"
+
+unmapped_alias_task='{"id":112,"description":"/manul Fix the issue in repo bff"}'
+resolution_rc=0
+unmapped_alias_output="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$unmapped_alias_task" 2>&1)" || resolution_rc=$?
+assert_rc "an unmapped repo nickname is sent to the semantic resolver" "1" "$resolution_rc"
+assert_contains "unmapped repo nickname is preserved in routing diagnostic" "$unmapped_alias_output" "bff"
+
+multi_resolution='{"repository":"owner/local","repositories":["owner/local","owner/remote"],"method":"opencode_agent_multi","matchedAlias":"","skills":["fiteo-backend-api"],"confidence":"high","reason":"The request explicitly asks for matching changes in both projects."}'
+multi_source="$(todo_task_to_source_json '{"id":113,"description":"/manul Create matching changes and PRs","subTasks":[],"isToDo":true}' todo_local_mcp "$multi_resolution")"
+assert_eq "multi-repository Todo work automatically uses TEAM action" "TEAM" "$(jq -r '.action' <<<"$multi_source")"
+assert_eq "multi-repository Todo metadata preserves every target" "2" "$(jq '.metadata.repositories | length' <<<"$multi_source")"
+assert_contains "multi-repository parent delegates instead of coding in its primary checkout" "$(jq -r '.prompt' <<<"$multi_source")" "coordination-only"
+assert_contains "multi-repository instructions require separate root tasks" "$(jq -r '.prompt' <<<"$multi_source")" "TOP-LEVEL"
+assert_contains "multi-repository prompt includes each target" "$(jq -r '.prompt' <<<"$multi_source")" "owner/remote"
 
 nested_alias_task='{"id":103,"description":"/manul Implement a change","subTasks":[{"id":105,"description":"Use the local project for this change"}]}'
 nested_alias_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$nested_alias_task")"
