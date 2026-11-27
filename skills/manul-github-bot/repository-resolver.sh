@@ -180,6 +180,20 @@ if [ -z "$(printf '%s' "$TEXT_OUTPUT" | tr -d '[:space:]')" ]; then
   exit 3
 fi
 
+AVAILABLE_SKILLS_JSON="$(python3 - "$HOME/.agents/skills" <<'PY_AVAILABLE_SKILLS'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+names = sorted(
+    path.parent.name
+    for path in root.glob("*/SKILL.md")
+    if path.is_file() and path.parent.is_dir()
+    and path.parent.name.replace("-", "").replace("_", "").isalnum()
+)
+print(json.dumps(sorted(set(names))))
+PY_AVAILABLE_SKILLS
+)" || exit 2
+
 RESULT="$(python3 - "$TEXT_OUTPUT" <<'PY_RESULT'
 import json, sys
 from json import JSONDecoder
@@ -212,25 +226,34 @@ PY_RESULT
 
 # Validate model output again in code. No model-generated value can widen the
 # configured allowlist or add malformed repository identifiers.
-jq -ce --argjson allowed "$REPOSITORIES_JSON" '
+jq -ce --argjson allowed "$REPOSITORIES_JSON" --argjson availableSkills "$AVAILABLE_SKILLS_JSON" '
   (.repositories | type == "array" and length >= 1 and length <= 12)
   and (.confidence == "high" or .confidence == "medium")
   and ((.reason // "") | type == "string" and length > 0 and length <= 1200)
+  and ((.skills // []) | type == "array" and length <= 20)
+  and all((.skills // [])[];
+    type == "string"
+    and test("^[a-z0-9][a-z0-9-]*$")
+    and (.[0:1] != "")
+    and (ascii_downcase as $skill | any($availableSkills[]; . == $skill))
+  )
   and all(.repositories[];
     type == "string"
     and test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
     and (ascii_downcase as $candidate | any($allowed[]; ascii_downcase == $candidate))
   )
   and ((.repositories | map(ascii_downcase) | unique | length) == (.repositories | length))
+  and (((.skills // []) | unique | length) == ((.skills // []) | length))
 ' <<<"$RESULT" >/dev/null 2>&1 || {
   echo "repository resolver: invalid, ambiguous, or non-allowlisted agent result; refusing to queue" >&2
   exit 3
 }
 
-jq -cn --argjson result "$RESULT" --argjson catalog "$CATALOG_JSON" '
+jq -cn --argjson result "$RESULT" --argjson catalog "$CATALOG_JSON" --argjson availableSkills "$AVAILABLE_SKILLS_JSON" '
   ($result.repositories | map(ascii_downcase)) as $wanted
   | [$catalog.repositories[]? | select((.name | ascii_downcase) as $name | ($wanted | index($name)) != null)] as $entries
-  | ([$entries[].skills[]?] | unique) as $skills
+  | ([$entries[].skills[]?] + ($result.skills // [])) as $all_skills
+  | ([$all_skills[] | select(any($availableSkills[]; . == .))] | unique) as $skills
   | {
       repository: $result.repositories[0],
       repositories: $result.repositories,
