@@ -18,7 +18,7 @@ if [ "$RUNTIME" != "opencode" ]; then
   exit 3
 fi
 
-OPENCODE_BIN="${OPENCODE_BIN:-$(command -v opencode 2>/dev/null || true)}"
+OPENCODE_BIN="$(command -v "${OPENCODE_BIN:-opencode}" 2>/dev/null || true)"
 if [ -z "$OPENCODE_BIN" ] || [ ! -x "$OPENCODE_BIN" ]; then
   echo "repository resolver: OpenCode executable is unavailable" >&2
   exit 3
@@ -91,7 +91,11 @@ points outside the allowlist, return an empty repositories array and confidence
 "low". Never silently drop a target that is outside the allowlist.
 
 Return exactly one JSON object with this schema and no Markdown:
-{"repositories":["owner/repo"],"confidence":"high","reason":"short evidence-based explanation"}
+{"repositories":["owner/repo"],"skills":["installed-skill-name"],"confidence":"high","reason":"short evidence-based explanation"}
+
+The skills array is optional, but when a supplied installed skill materially
+established a project nickname/repository mapping or is required by the target
+project's implementation, include its exact directory name. Never invent names.
 
 Use "high" only when every selected repository is directly supported by the
 task or an unambiguous supplied project skill. Use "medium" for a strong but
