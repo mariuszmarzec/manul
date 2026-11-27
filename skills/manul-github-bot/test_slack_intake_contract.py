@@ -20,7 +20,7 @@ class SlackIntakeContractTest(unittest.TestCase):
 
     def test_slack_intake_execution_kind_is_reserved(self):
         runner = self.read("agent-executor.sh")
-        self.assertIn("repository|report_only|operator_query|slack_intake", runner)
+        self.assertIn("repository|report_only|operator_query|repository_resolver|slack_intake", runner)
         self.assertIn('if [ "$execution_kind" = "slack_intake" ]; then', runner)
         self.assertIn('if [ "$agent" != "manul-slack-intake" ]; then', runner)
         self.assertIn('elif [ "$agent" = "manul-slack-intake" ]; then', runner)
@@ -35,7 +35,7 @@ class SlackIntakeContractTest(unittest.TestCase):
         self.assertIn('is_configured_todo_endpoint(candidate.get("url"))', adapter)
         self.assertIn('reusing existing Todo Local MCP endpoint from server', adapter)
         self.assertIn('operator_agent_config["manul-slack-intake"]["tools"] = {"*": False}', adapter)
-        self.assertIn('if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "slack_intake" ]; then', adapter)
+        self.assertIn('if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "repository_resolver" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "slack_intake" ]; then', adapter)
 
     def test_installer_deploys_the_slack_intake_helper(self):
         symlinks = self.read("install-manul-symlinks.sh")
