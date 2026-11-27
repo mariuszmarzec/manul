@@ -815,7 +815,7 @@ todo_task_to_source_json() {
         stepIds:$stepIds
       } + (if $repository != "" then {
             repository:$repository,
-            repositories:$resolution.repositories // [$repository],
+            repositories:($resolution.repositories // [$repository]),
             repositoryResolution:$resolution
           } else {repositoryResolution:$resolution} end)),
       execution:{kind:$executionKind}
