@@ -45,6 +45,7 @@ stderr_file="$(jq -r '.stderr_file' "$context_file")"
 
 [[ "$kind" == "repository_resolver" ]]
 [[ "$agent" == "repository-resolver" ]]
+[[ "$task_id" =~ ^repository-resolver-[0-9]+$ ]]
 [[ "$workspace" == "$MANUL_DIR/workspace/operator-query/"* ]]
 [[ -d "$workspace" ]]
 cat "$prompt" >"$OPENCODE_PROMPT_LOG"
@@ -117,6 +118,7 @@ RESULT="$(printf '%s\n' "$INPUT" | bash "$SCRIPT_DIR/repository-resolver.sh")"
 grep -q 'JIRA-123' "$OPENCODE_PROMPT_LOG"
 grep -q 'backend for frontend' "$OPENCODE_PROMPT_LOG"
 grep -q 'owner/service' "$OPENCODE_PROMPT_LOG"
+grep -q 'first ordered repository is owned by' "$OPENCODE_PROMPT_LOG"
 grep -q 'repository_resolver|repository-resolver|' "$RUNNER_CONTEXT_LOG"
 echo "PASS: resolver uses the Manul execution boundary, supplies installed skills and preserves multi-repo targets"
 
