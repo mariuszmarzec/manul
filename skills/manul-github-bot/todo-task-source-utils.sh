@@ -123,7 +123,7 @@ todo_task_resolve_repository_static() {
       | any($allowed[]; ascii_downcase == $candidate))
   ' <<<"$direct_matches_json" >/dev/null 2>&1; then
     echo "an explicitly referenced repository is excluded by the global .repositories allowlist" >&2
-    return 2
+    return 1
   fi
 
   if [ "$direct_match_count" -gt 1 ]; then
@@ -247,7 +247,7 @@ todo_task_resolve_repository_static() {
 
   if ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$repositories_json" >/dev/null 2>&1; then
     echo "repository $canonical_repository is excluded by the global .repositories list" >&2
-    return 2
+    return 1
   fi
 
   if [ -n "$entry_json" ]; then
@@ -272,6 +272,13 @@ todo_task_resolve_repository() {
   if [ "$static_rc" -eq 0 ]; then
     printf '%s\n' "$static_output"
     return 0
+  fi
+
+  # Explicit allowlist violations remain a hard denial. The model may explain
+  # an ambiguous route, but it must never replace or drop a denied target.
+  if [[ "$static_output" == *"excluded by"* ]]; then
+    printf '%s\n' "$static_output" >&2
+    return "$static_rc"
   fi
 
   # Natural-language informational requests keep the dedicated answer route;
