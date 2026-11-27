@@ -644,8 +644,9 @@ The provider contract is normalized to:
 - `taskSourceUrl`
 - title/body, timestamps and a normalized `prompt`
 - provider-specific `metadata`
-- an execution target when the provider can resolve one (currently
-  `metadata.repository` for repository-backed execution)
+- an execution target when the provider can resolve one:
+  `metadata.repository` is the compatibility primary target and
+  `metadata.repositories` contains the complete set of write targets
 
 Filtering is provider-owned. The common poller does not impose a universal
 trigger or task-selection rule:
@@ -657,17 +658,26 @@ trigger or task-selection rule:
 - `todo_remote_mcp` selects active unscheduled root tasks whose `shares`
   contain the configured `manulUserId` with `EDITOR_AND_VIEWER` permission.
 
-For both Todo providers, a normal `/manul <request>` trigger is routed from
-the complete task tree: the root description and every nested subtask
-description are considered together. A GitHub repository URL, an exact
+Todo Local and Todo Remote route a normal `/manul <request>` from the
+complete task tree: the root description and every nested subtask description
+are considered together. Jira tasks use the issue summary and complete
+description with the same resolver. A GitHub repository URL, an exact
 configured `owner/repo` reference, a configured short name written as
-`repo <name>` or `repository <name>`, or one unambiguous catalog alias selects
-repository-backed execution. Short names are matched only against the final
+`repo <name>` or `repository <name>`, or an unambiguous catalog alias can be
+resolved deterministically. Short names are matched only against the final
 segment of the top-level `.repositories` allowlist; for example, `repo todo`
 selects `mariuszmarzec/todo` when that is the unique configured repository
 ending in `todo`. The project catalog is not needed for URL, full-name, or
-configured short-name routing. The legacy `/manul report <question>` spelling
-is only a trigger alias; it cannot select a different execution mode.
+configured short-name routing. When references are ambiguous or a natural
+language project nickname is not in the catalog, the intake resolver invokes
+the read-only OpenCode `repository-resolver` agent before any coding agent or
+workspace is started. It receives the full task, the global allowlist, the
+project catalog, and installed skill contents from the canonical
+`~/.agents/skills` root. The result must contain one or more exact
+allowlisted `owner/repo` values and may name skills to carry into the coding
+prompt. Every returned repository and skill is independently validated by
+Manul. The legacy `/manul report <question>` spelling is only a trigger alias;
+it cannot select a different execution mode.
 
 Todo MCP tasks use two explicit execution contracts; `report_only` is
 disabled for new tasks.
@@ -684,25 +694,33 @@ Todo tree done (root last). The generated `answered` child is excluded from the
 source fingerprint only while its marker and payload digest remain valid.
 
 Implementation/repository-investigation tasks use
-`action=IMPLEMENT` and `execution.kind=repository`. A missing repository,
-multiple different repository references in one task tree, duplicate configured
-short names, ambiguous catalog aliases, and repositories outside the global
-`.repositories` allowlist are never downgraded to answer mode or report-only.
-Instead, Manul creates and verifies an OPEN child task that summarizes the
-routing checks and asks for the exact repository or a correction to the
-ambiguous/disallowed reference. Editing that child invalidates its digest-bound
+`execution.kind=repository`. A single resolved write target uses
+`action=IMPLEMENT`. Two or more resolved write targets use `action=TEAM`
+automatically, even when the user did not type `/manul team`. The Team parent
+is coordination-only by default and must create one independent top-level
+tracker task per target repository; each child receives its own workspace,
+branch, tests and PR. Nested Todo subtasks are not suitable for these children.
+Every child must name its exact `owner/repo`, and the parent must verify and
+report every requested PR before completion.
+
+If the repository remains unresolved, the resolver agent is unavailable, or
+its output is ambiguous/invalid, Manul creates and verifies an OPEN routing
+child asking for the exact missing input. A result outside the global
+`.repositories` allowlist is rejected. Neither case is downgraded to answer
+mode or report-only. Editing the routing child invalidates its digest-bound
 marker and creates a new source version. The common poller rejects legacy Todo
 `report_only` queue entries, and the dispatcher migrates any already-persisted
 legacy entry before agent launch.
 
 Todo providers do not select a configured default repository. For each active
 root, routing searches the complete tree and gives explicit GitHub URLs and
-configured repository names precedence over catalog aliases. Otherwise, the
-longest whole-phrase alias in the optional project catalog
-(`~/.agents/skills/globalskills-repository/project-repositories.json`) must
-identify exactly one canonical `owner/repo`. The catalog supplies aliases and
-optional mapped project skills. The top-level `.repositories` list remains the
-only access allowlist. Mapped skill files are read only from
+configured repository names precedence over catalog aliases. The optional
+project catalog (`~/.agents/skills/globalskills-repository/project-repositories.json`)
+supplies aliases and mapped project skills; if deterministic matching is
+insufficient, the OpenCode resolver agent reads installed skill contents from
+the canonical `~/.agents/skills` root and returns the required context names.
+The top-level `.repositories` list remains the only access allowlist. Mapped
+skill files are read by the coding task only from
 `~/.agents/skills/<skill>/SKILL.md`; a missing skill file is skipped.
 
 The top-level `.repositories` array in `~/.manul/config.json` is the single
