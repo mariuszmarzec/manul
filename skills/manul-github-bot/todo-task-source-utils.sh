@@ -39,7 +39,7 @@ todo_task_repository_catalog_path() {
 # Resolve Todo task targets from the complete task tree. The global
 # .repositories list is both the allowlist and the source of configured
 # owner/repo names and short repository slugs; the catalog adds optional aliases.
-todo_task_resolve_repository() {
+todo_task_resolve_repository_static() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
   local catalog_json="" catalog_valid=false matches_json match_json entry_json="" repositories_json canonical_repository skills_json="[]"
@@ -135,6 +135,39 @@ todo_task_resolve_repository() {
     fi
   fi
 
+  # If a direct URL/name and a different project alias occur together,
+  # do not assume the URL is the only write target. Let the routing agent
+  # distinguish write targets from dependency/background references.
+  if [ "$direct_match_count" -eq 1 ] && [ "$catalog_valid" = "true" ]; then
+    local direct_repository alias_matches_json alias_other_count
+    direct_repository="$(jq -r '.[0].repository' <<<"$direct_matches_json")"
+    alias_matches_json="$(jq -c --arg description "$description" '
+      def norm:
+        ascii_downcase
+        | gsub("[^a-z0-9]+"; " ")
+        | gsub("^ +| +$"; "");
+      ($description | norm) as $task_text
+      | [
+          .repositories[] as $repo
+          | (($repo.aliases // []) + [(($repo.name // "") | split("/") | last)])[] as $alias
+          | ($alias | norm) as $normalized_alias
+          | select($normalized_alias != "")
+          | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
+          | {repository:$repo.name,alias:$alias,length:($normalized_alias|length)}
+        ]
+      | if length == 0 then []
+        else (map(.length) | max) as $max_length
+        | map(select(.length == $max_length))
+        | unique_by(.repository)
+        end
+    ' <<<"$catalog_json")" || return 2
+    alias_other_count="$(jq --arg repo "$direct_repository" '[.[] | select((.repository|ascii_downcase) != ($repo|ascii_downcase))] | length' <<<"$alias_matches_json")" || return 2
+    if [ "$alias_other_count" -gt 0 ]; then
+      echo "Todo task contains a direct repository reference and a different project alias; target scope requires semantic resolution" >&2
+      return 1
+    fi
+  fi
+
   if [ "$direct_match_count" -eq 1 ]; then
     match_json="$(jq -c '.[0]' <<<"$direct_matches_json")"
     repository="$(jq -r '.repository' <<<"$match_json")"
@@ -215,7 +248,47 @@ todo_task_resolve_repository() {
     --arg method "$method" \
     --arg matchedAlias "$matched_alias" \
     --argjson skills "$skills_json" \
-    '{repository:$repository,method:$method,matchedAlias:$matchedAlias,skills:$skills}'
+    '{repository:$repository,repositories:[$repository],method:$method,matchedAlias:$matchedAlias,skills:$skills}'
+}
+
+# Fast deterministic routing is preferred. Ambiguous/unmatched tasks are
+# delegated to the read-only OpenCode Repository Resolver when OpenCode is the
+# configured Manul runtime. It receives the complete task tree, allowlist,
+# project catalog and installed skill contents before any coding workspace exists.
+todo_task_resolve_repository() {
+  local source_json="$1" task_json="$2" static_output static_rc agent_output agent_rc
+  static_output="$(todo_task_resolve_repository_static "$source_json" "$task_json" 2>&1)"
+  static_rc=$?
+  if [ "$static_rc" -eq 0 ]; then
+    printf '%s\n' "$static_output"
+    return 0
+  fi
+
+  # Natural-language informational requests keep the dedicated answer route;
+  # they should not start a repository resolver model just because no repo is needed.
+  if { [ "$static_rc" -eq 3 ] || [ "$static_rc" -eq 1 ]; } && declare -F todo_task_is_answer_request >/dev/null 2>&1 && todo_task_is_answer_request "$task_json"; then
+    printf '%s\n' "$static_output" >&2
+    return "$static_rc"
+  fi
+
+  if [ "$static_rc" -eq 1 ] || [ "$static_rc" -eq 3 ]; then
+    local request_json
+    request_json="$(jq -cn --argjson source "$source_json" --argjson task "$task_json" '{source:$source,task:$task}')" || return 2
+    agent_output="$(printf '%s\n' "$request_json" | bash "$TODO_TASK_SOURCE_DIR/repository-resolver.sh" 2>&1)"
+    agent_rc=$?
+    if [ "$agent_rc" -eq 0 ] && jq -e '.repositories | type == "array" and length > 0' <<<"$agent_output" >/dev/null 2>&1; then
+      printf '%s\n' "$agent_output"
+      return 0
+    fi
+    {
+      [ -n "$static_output" ] && printf '%s\n' "$static_output"
+      [ -n "$agent_output" ] && printf 'OpenCode repository resolver: %s\n' "$agent_output"
+    } >&2
+    return 3
+  fi
+
+  printf '%s\n' "$static_output" >&2
+  return "$static_rc"
 }
 
 todo_task_resolved_skill_context() {
