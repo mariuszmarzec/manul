@@ -36,6 +36,7 @@ echo
 # ---------------------------------------------------------------------------
 grep -q 'manul-env.sh' "$SCRIPT_DIR/install-manul-symlinks.sh"   && ok "Symlink installer deploys manul-env.sh"   || fail "Symlink installer does not deploy manul-env.sh"
 grep -q '"manul-zsh-bootstrap.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys Zsh bootstrap" || fail "Symlink installer does not deploy Zsh bootstrap"
+grep -q '"repository-resolver.sh"' "$SCRIPT_DIR/install-manul-symlinks.sh" && ok "Symlink installer deploys repository resolver" || fail "Symlink installer does not deploy repository resolver"
 grep -q 'MANUL_ZSH_ENV_READY=1' "$SCRIPT_DIR/manul-shell.zsh" && ok "Interactive shell marks its initialized Zsh environment" || fail "Shell integration does not export the Zsh environment marker"
 grep -q 'manul-zsh-bootstrap.sh' "$SCRIPT_DIR/watchdog.sh" && ok "Watchdog bootstraps ~/.zshrc from cron" || fail "Watchdog bypasses Zsh bootstrap"
 grep -Fq '"$OPENCODE_BIN" mcp list)' "$SCRIPT_DIR/opencode-adapter.sh" && ok "Caracal MCP preflight uses the shared OpenCode server" || fail "Caracal MCP preflight does not use the shared OpenCode server"
