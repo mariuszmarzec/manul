@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Resolve Todo/Jira repository targets through the configured OpenCode agent.
-# This runs before a task workspace exists and only receives operator-provided
+# This runs before a coding workspace is prepared and only receives operator-provided
 # task text, the Manul allowlist, the project catalog and installed SKILL.md files from the canonical shared skill root.
 set -uo pipefail
 
@@ -192,7 +192,7 @@ jq -cn \
     prompt:$prompt,
     workspace:$workspace,
     workspaceRoot:$workspace,
-    workdir:$workspace,
+    workdir:"",
     executionKind:"repository_resolver",
     agent:"repository-resolver",
     attempt:1,
