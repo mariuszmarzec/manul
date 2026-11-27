@@ -371,6 +371,32 @@ The agent may read/search configured related repository checkouts inside the lea
 
 ## 14. Agent task access boundary
 
+### Repository resolver execution
+
+- `repository_resolver` is a one-shot, synchronous pre-queue intake execution
+  kind. It is never inserted into the task queue and never claims a repository
+  lock, repository checkout, Todo item, GitHub issue, or conversation.
+- It may run only when `automation.agentRuntime=opencode`, with the reserved
+  native `repository-resolver` role, through the normal
+  AgentExecutionController -> AgentExecutor -> OpenCodeAdapter path. It must
+  not invoke an OpenCode CLI process directly or select/override a model or
+  provider.
+- It runs in a disposable, mode-0700
+  `MANUL_WORKSPACE/operator-query/oq-*` directory. The adapter validates that
+  exact path, removes operator Fiteo/Todo credentials and MCP entries, disables
+  every tool, and fails closed when the native resolver agent cannot be
+  discovered. The directory is deleted after the resolver returns.
+- The resolver receives only the complete intake task/tree, a filtered
+  `.repositories` allowlist, the project catalog, and installed skill contents
+  explicitly copied into its prompt from `~/.agents/skills`. It cannot inspect
+  host files, network resources, repositories, GitHub, MCP servers, or other
+  workspaces.
+- Manul validates the model's output again: every repository must be a
+  syntactically valid exact `owner/repo` in the global allowlist, and every
+  returned skill must exist in the canonical installed skill inventory.
+  Invalid, ambiguous, low-confidence, or non-allowlisted output is a routing
+  blocker; it must never silently select a partial target set or widen access.
+
 ### Operator query execution
 
 - `operator_query` is a one-shot, synchronous CLI execution kind. It is never
