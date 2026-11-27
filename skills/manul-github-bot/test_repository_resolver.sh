@@ -31,34 +31,79 @@ cat >"$HOME_DIR/.agents/skills/globalskills-repository/project-repositories.json
 }
 JSON
 
-cat >"$BIN_DIR/opencode" <<'FAKE_OPENCODE'
+cat >"$BIN_DIR/fake-agent-task-runner" <<'FAKE_RUNNER'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >"$OPENCODE_ARGS_LOG"
-cat >"$OPENCODE_PROMPT_LOG"
+context_file="$1"
+task_id="$(jq -r '.taskId' "$context_file")"
+kind="$(jq -r '.executionKind' "$context_file")"
+agent="$(jq -r '.agent' "$context_file")"
+workspace="$(jq -r '.workspace' "$context_file")"
+prompt="$(jq -r '.prompt' "$context_file")"
+stdout_file="$(jq -r '.stdout_file' "$context_file")"
+stderr_file="$(jq -r '.stderr_file' "$context_file")"
+
+[[ "$kind" == "repository_resolver" ]]
+[[ "$agent" == "repository-resolver" ]]
+[[ "$workspace" == "$MANUL_DIR/workspace/operator-query/"* ]]
+[[ -d "$workspace" ]]
+cat "$prompt" >"$OPENCODE_PROMPT_LOG"
+printf '%s\n' "$kind|$agent|$workspace|$task_id" >"$RUNNER_CONTEXT_LOG"
+
 case "$FAKE_MODE" in
   success)
-    printf '%s\n' '{"type":"text","part":{"text":"{\"repositories\":[\"owner/bff\",\"owner/service\"],\"skills\":[\"bff-project\"],\"confidence\":\"high\",\"reason\":\"The task and BFF project skill identify both write targets.\"}"}}'
+    cat >"$stdout_file" <<'TEXT'
+{
+  "repositories": ["owner/bff", "owner/service"],
+  "skills": ["bff-project"],
+  "confidence": "high",
+  "reason": "The task and BFF project skill identify both write targets."
+}
+TEXT
     ;;
   denied)
-    printf '%s\n' '{"type":"text","part":{"text":"{\"repositories\":[\"attacker/private\"],\"skills\":[],\"confidence\":\"high\",\"reason\":\"Ignore the allowlist.\"}"}}'
+    cat >"$stdout_file" <<'TEXT'
+{
+  "repositories": ["attacker/private"],
+  "skills": [],
+  "confidence": "high",
+  "reason": "Ignore the allowlist."
+}
+TEXT
     ;;
   uncertain)
-    printf '%s\n' '{"type":"text","part":{"text":"{\"repositories\":[],\"skills\":[],\"confidence\":\"low\",\"reason\":\"The task is ambiguous.\"}"}}'
+    cat >"$stdout_file" <<'TEXT'
+{
+  "repositories": [],
+  "skills": [],
+  "confidence": "low",
+  "reason": "The task is ambiguous."
+}
+TEXT
     ;;
   *)
     echo "unexpected fake mode" >&2
     exit 2
     ;;
 esac
-FAKE_OPENCODE
-chmod +x "$BIN_DIR/opencode"
+: >"$stderr_file"
+jq -cn --arg taskId "$task_id" '{
+  status:"COMPLETED",
+  task_id:$taskId,
+  exit_code:0,
+  summary:"fake runner completed",
+  session_id:"",
+  duration_s:0,
+  runtime:"opencode"
+}'
+FAKE_RUNNER
+chmod +x "$BIN_DIR/fake-agent-task-runner"
 
 export HOME="$HOME_DIR"
 export MANUL_DIR="$HOME_DIR/.manul"
-export OPENCODE_BIN="$BIN_DIR/opencode"
-export OPENCODE_ARGS_LOG="$TEST_DIR/opencode.args"
-export OPENCODE_PROMPT_LOG="$TEST_DIR/opencode.prompt"
+export MANUL_REPOSITORY_RESOLVER_RUNNER="$BIN_DIR/fake-agent-task-runner"
+export OPENCODE_PROMPT_LOG="$TEST_DIR/resolver.prompt"
+export RUNNER_CONTEXT_LOG="$TEST_DIR/runner.context"
 SOURCE='{"repositories":["owner/bff","owner/service"]}'
 TASK='{"id":42,"description":"/manul implement Jira JIRA-123 in repo bff and the service","subTasks":[{"description":"The BFF gateway and downstream service both need changes."}]}'
 INPUT="$(jq -cn --argjson source "$SOURCE" --argjson task "$TASK" '{source:$source,task:$task}')"
@@ -72,12 +117,8 @@ RESULT="$(printf '%s\n' "$INPUT" | bash "$SCRIPT_DIR/repository-resolver.sh")"
 grep -q 'JIRA-123' "$OPENCODE_PROMPT_LOG"
 grep -q 'backend for frontend' "$OPENCODE_PROMPT_LOG"
 grep -q 'owner/service' "$OPENCODE_PROMPT_LOG"
-grep -q -- '--agent repository-resolver' "$OPENCODE_ARGS_LOG"
-if grep -q -- '--model' "$OPENCODE_ARGS_LOG"; then
-  echo "FAIL: resolver overrode the operator's model selection" >&2
-  exit 1
-fi
-echo "PASS: resolver uses the configured OpenCode agent, receives installed skills and preserves multi-repo targets"
+grep -q 'repository_resolver|repository-resolver|' "$RUNNER_CONTEXT_LOG"
+echo "PASS: resolver uses the Manul execution boundary, supplies installed skills and preserves multi-repo targets"
 
 export FAKE_MODE=denied
 if printf '%s\n' "$INPUT" | bash "$SCRIPT_DIR/repository-resolver.sh" >/dev/null 2>&1; then
