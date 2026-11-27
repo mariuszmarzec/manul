@@ -722,12 +722,14 @@ source fingerprint only while its marker and payload digest remain valid.
 Implementation/repository-investigation tasks use
 `execution.kind=repository`. A single resolved write target uses
 `action=IMPLEMENT`. Two or more resolved write targets use `action=TEAM`
-automatically, even when the user did not type `/manul team`. The Team parent
-is coordination-only by default and must create one independent top-level
-tracker task per target repository; each child receives its own workspace,
-branch, tests and PR. Nested Todo subtasks are not suitable for these children.
-Every child must name its exact `owner/repo`, and the parent must verify and
-report every requested PR before completion.
+automatically, even when the user did not type `/manul team`. The parent task
+owns the first ordered target and must deliver its own verified PR from the
+assigned primary checkout. For every remaining target, it creates one
+independent top-level tracker task with an exact `owner/repo`; each child
+receives its own workspace, branch, tests and PR. Nested Todo subtasks are not
+suitable for these children. The Team coordinator's trackerRefs contain only
+additional-repository children, never the parent itself. The parent must verify
+and report its own PR plus every child PR before completion.
 
 If the repository remains unresolved, the resolver agent is unavailable, or
 its output is ambiguous/invalid, Manul creates and verifies an OPEN routing
