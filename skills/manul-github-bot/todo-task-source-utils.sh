@@ -167,16 +167,14 @@ todo_task_resolve_repository_static() {
         ] as $all_matches
       | [
           $all_matches[] as $candidate
-          | ([
-              $all_matches[] as $longer
-              | select($longer.length > $candidate.length)
-              | select((" " + $longer.normalizedAlias + " ") | contains(" " + $candidate.normalizedAlias + " "))
-            ]) as $containing_aliases
-          | (reduce $containing_aliases[] as $longer ($task_text;
-              gsub(
-                "(^| )" + ($longer.normalizedAlias | gsub(" "; " +")) + "($| )";
-                " "
+          | ($all_matches | map(
+              select(
+                .length > $candidate.length
+                and ((" " + .normalizedAlias + " ") | contains(" " + $candidate.normalizedAlias + " "))
               )
+            )) as $containing_aliases
+          | (reduce ($containing_aliases | map(.normalizedAlias | gsub(" "; " +")))[] as $pattern ($task_text;
+              gsub("(^| )" + $pattern + "($| )"; " ")
             )) as $without_longer_aliases
           | select(
               ($containing_aliases | length) == 0
