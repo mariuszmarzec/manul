@@ -72,7 +72,7 @@ AgentExecutor.execute() {
 
     # Validate inputs before dispatching
     case "$execution_kind" in
-        repository|report_only|operator_query|slack_intake|answer) ;;
+        repository|report_only|operator_query|repository_resolver|slack_intake|answer) ;;
         *)
             printf '{"status":"FAILED","task_id":"%s","exit_code":1,"summary":"Unsupported task execution kind","session_id":"","duration_s":0}\n' "$task_id"
             AgentExecutor_ExitCode=1
@@ -119,7 +119,23 @@ AgentExecutor.execute() {
         return 1
     fi
 
-    if [ -n "$agent" ] && [ "$agent" != "main" ] && [ "$agent" != "manul-slack-intake" ]; then
+    # Repository resolution is an internal, read-only intake execution.
+    # It is available only through OpenCode and only with its dedicated native
+    # agent. It is not a user-selectable coding role and cannot be used with a
+    # repository workspace or any other execution kind.
+    if [ "$execution_kind" = "repository_resolver" ]; then
+        if [ "$agent" != "repository-resolver" ] || [ "$AGENT_RUNTIME" != "opencode" ]; then
+            jq -cn --arg taskId "$task_id" \
+              '{status:"FAILED",task_id:$taskId,exit_code:65,summary:"Repository resolver requires the dedicated repository-resolver role and configured OpenCode runtime",failure_code:"REPOSITORY_RESOLVER_RUNTIME_INVALID"}'
+            AgentExecutor_ExitCode=65
+            return 1
+        fi
+    elif [ "$agent" = "repository-resolver" ]; then
+        jq -cn --arg taskId "$task_id" \
+          '{status:"FAILED",task_id:$taskId,exit_code:65,summary:"The repository-resolver role is reserved for pre-workspace routing",failure_code:"REPOSITORY_RESOLVER_ROLE_RESERVED"}'
+        AgentExecutor_ExitCode=65
+        return 1
+    elif [ -n "$agent" ] && [ "$agent" != "main" ] && [ "$agent" != "manul-slack-intake" ]; then
         local allowed_agents_json
         allowed_agents_json="$(jq -c '.agents // []' "$MANUL_CONFIG" 2>/dev/null || printf '[]')"
         if ! jq -e 'type == "array" and length > 0' <<<"$allowed_agents_json" >/dev/null 2>&1; then

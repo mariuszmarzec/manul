@@ -103,18 +103,39 @@ date/time, persists the non-empty answer as a verified Todo child, and marks
 the whole tree done only after that read-back succeeds.
 
 Implementation and repository-investigation tasks use
-`execution.kind=repository` and a normal leased repository workspace. They
-require one allowlisted GitHub URL or unambiguous alias from the optional
-project catalog and follow the normal checkout/branch/PR path. There is no Todo
-`report_only` mode. If no unique target can be resolved, the adapter creates
-and verifies an OPEN Todo child task explaining what it checked and asking for
-the exact repository or a correction to the conflicting reference. During
-execution, missing required input is captured in an OPEN child task, and
-terminal failures are published as OPEN children with their stage and
-redacted reason. Generated feedback children carry digest-bound markers; only
-an unchanged verified marker is excluded from the source fingerprint so edits
-by the user produce a new source version. A repository-backed root is marked
-done only after normal repository delivery has been verified.
+`execution.kind=repository` and a normal leased repository workspace. Their
+repository target set may contain one or more allowlisted repositories. The
+intake path keeps deterministic URL/full-name/slug/alias matching as a fast
+path. If a nickname is not present in the catalog, or the task contains
+multiple plausible repository references, Manul invokes a dedicated
+read-only `repository-resolver` role through the normal
+AgentExecutionController -> AgentExecutor -> OpenCodeAdapter boundary before
+starting any coding agent. The resolver receives the complete task tree (or
+Jira issue summary and description), the filtered global allowlist, project
+catalog, and installed skill contents from the canonical
+`~/.agents/skills` tree. It has a disposable `operator-query/oq-*` workspace,
+a tool-free OpenCode overlay, the operator's existing model/provider config,
+and the normal process/timeout controls. Manul validates every returned
+`owner/repo` against the unchanged global allowlist and every returned skill
+against the installed skill inventory.
+
+A single target follows the normal checkout/branch/PR path. Two or more write
+targets automatically use the Team workflow: the parent task owns the first
+ordered target in its primary checkout and delivers its own PR; one independent
+top-level child task is created for every remaining target, each with its own
+workspace, branch and PR. The parent coordinates dependencies and verifies all
+child deliveries. Repositories mentioned only as dependencies or read-only
+context are not expanded into child work.
+If resolution remains ambiguous, the resolver is unavailable, or any selected
+target is outside the allowlist, Manul creates and verifies an OPEN routing
+child rather than guessing or downgrading the task to an answer. There is no
+Todo `report_only` mode. During execution, missing required input is captured
+in an OPEN child task, and terminal failures are published as OPEN children
+with their stage and redacted reason. Generated feedback children carry
+digest-bound markers; only an unchanged verified marker is excluded from the
+source fingerprint so edits by the user produce a new source version. A
+repository-backed root is marked done only after normal repository delivery
+has been verified.
 
 The shared Todo MCP transport and local endpoint resolver are owned by
 globalskills/aicode and passed to Manul through exported environment paths.

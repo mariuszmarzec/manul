@@ -104,6 +104,9 @@ SCRIPTS=(
     "task-source-todo-local.sh"
     "task-source-todo-remote.sh"
     "todo-task-source-utils.sh"
+    # Pre-workspace semantic repository routing uses the normal Manul
+    # AgentExecutor/OpenCode adapter, so this helper must be installed too.
+    "repository-resolver.sh"
     "todo-mcp-client.py"
     "todo-local-mcp-url.sh"
     "start-manul-automation.sh"

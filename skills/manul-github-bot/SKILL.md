@@ -257,6 +257,17 @@ Manul execution workspaces. Every independently executable work item must be
 a separate root task to receive its own Manul workspace. Nested Todo subtasks
 remain ordered steps within one task and do not create separate executions.
 
+Manul may select TEAM automatically when repository routing identifies multiple
+write targets in one Todo/Jira request. The parent prompt contains the complete
+allowlisted target list in resolver order. The parent owns the first target and
+must deliver its own PR in the assigned primary checkout. Create one independent
+top-level child task only for each remaining target; every child gets its own
+workspace, branch, verification and PR. Do not create a duplicate child for the
+first target or combine multiple repositories into one PR. The Team coordinator's
+trackerRefs must contain only additional-repository children, never the parent
+itself. Read the Globalskills `team-workflow` skill for the multi-repository
+intake contract.
+
 The Team parent is assigned one stable, daemon-prepared task branch before the Orchestrator starts. The branch is derived from the logical conversation identity, not from an individual wake comment or attempt, and is reused across child-completion wakeups and `/manul team resume`. The daemon must verify the checked-out branch before agent startup; the Orchestrator must keep all parent-level repository changes on that branch. If a verified PR already exists for the stable branch, resume that PR head instead of creating another branch or PR. A Team parent that makes no repository changes may finish with a verified non-empty result comment without creating an empty PR; any committed repository changes still require the normal verified PR delivery.
 
 The parent is event-driven, not a barrier over the full child set. When one
@@ -338,26 +349,38 @@ Todo MCP tasks use one of two explicit execution kinds; neither is
   today's weekday. A non-empty answer is saved as a verified child task titled
   **Odpowiedź**, and only then is the complete Todo tree marked done.
 - Implementation and repository investigation tasks use
-  `execution.kind=repository` and require one allowlisted repository. If the
-  repository is missing, ambiguous, or disallowed, Manul does not start the
-  agent: it creates an OPEN routing subtask explaining what was checked and
-  asking for the exact `owner/repo`, GitHub URL, or configured alias. Editing
-  that subtask creates a new task-source version and re-triggers routing.
+  `execution.kind=repository` and require one or more allowlisted repositories.
+  Manul first uses deterministic URL/name/alias matching. When the target is
+  missing or the task contains multiple plausible repository references, the
+  OpenCode `repository-resolver` agent receives the full task tree, filtered
+  global allowlist, project catalog and installed skill contents before any
+  coding workspace is prepared. Its output is validated against the unchanged
+  global allowlist. If the agent is unavailable, uncertain, or returns a
+  disallowed target, Manul does not start a coding agent; it creates an OPEN
+  routing subtask explaining the exact blocker and required input.
+  A single resolved target follows the normal implementation path. Multiple
+  write targets automatically select TEAM: the parent delivers a PR for the
+  first target, while each remaining target receives one separate root task,
+  workspace, branch and PR.
 
 Legacy Todo `report_only` queue entries are rejected/migrated; new Todo tasks
 cannot select that execution mode.
 
 Todo sources do not have a fixed project repository. Each Todo root resolves its
 execution target independently from the full task tree. Explicit GitHub URLs
-and exact configured `owner/repo`/short-name matches take precedence over
-catalog aliases. Multiple distinct repository targets in one task tree,
-duplicate configured short names, ambiguous aliases, and targets outside the
-global list fail closed and are not queued. The project catalog
-(`~/.agents/skills/globalskills-repository/project-repositories.json`) supplies
-aliases and optional mapped project skills; the top-level `.repositories`
-array remains the only access allowlist. Missing mapped skill files are skipped
-rather than blocking execution. Manul reads mapped skills only from
-`~/.agents/skills/<skill>/SKILL.md`.
+and exact configured `owner/repo`/short-name matches are the fast path.
+Ambiguous or unmatched natural-language project references are delegated to
+the read-only OpenCode `repository-resolver` agent when OpenCode is the
+configured Manul runtime. It receives installed skill content before deciding,
+and returns one or more exact targets plus relevant skill names. Manul validates
+every target against the global allowlist and validates selected skills against
+the installed `~/.agents/skills` inventory. Multiple write targets automatically
+use TEAM: the parent delivers a PR for the first target, and every remaining
+write target receives a separate root task/workspace/branch/PR. References that
+are only read-only dependencies are not turned into child work items.
+The project catalog (`~/.agents/skills/globalskills-repository/project-repositories.json`)
+supplies aliases and optional mapped project skills; the top-level
+`.repositories` array remains the only access allowlist.
 
 The top-level `.repositories` array in `~/.manul/config.json` is the only
 operator-configured repository list. GitHub Issues polling and both Todo sources

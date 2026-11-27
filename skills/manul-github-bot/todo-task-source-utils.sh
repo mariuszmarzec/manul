@@ -39,7 +39,7 @@ todo_task_repository_catalog_path() {
 # Resolve Todo task targets from the complete task tree. The global
 # .repositories list is both the allowlist and the source of configured
 # owner/repo names and short repository slugs; the catalog adds optional aliases.
-todo_task_resolve_repository() {
+todo_task_resolve_repository_static() {
   local source_json="$1" task_json="$2"
   local catalog_file description explicit_matches candidate_count repository method matched_alias
   local catalog_json="" catalog_valid=false matches_json match_json entry_json="" repositories_json canonical_repository skills_json="[]"
@@ -116,6 +116,19 @@ todo_task_resolve_repository() {
     ')" || return 2
   direct_match_count="$(jq -r 'length' <<<"$direct_matches_json")" || return 2
 
+  # Explicit GitHub URLs and owner/repo references are hard targets. Never
+  # let the semantic resolver replace a target that the user named but which
+  # the operator has not allowlisted.
+  if ! jq -e --argjson allowed "$repositories_json" '
+    all(.[]; (.repository | ascii_downcase) as $candidate
+      | any($allowed[]; ascii_downcase == $candidate))
+  ' <<<"$direct_matches_json" >/dev/null 2>&1; then
+    local direct_candidates
+    direct_candidates="$(jq -r '[.[].repository] | join(", ")' <<<"$direct_matches_json")"
+    echo "an explicitly referenced repository is excluded by the global .repositories list: $direct_candidates" >&2
+    return 1
+  fi
+
   if [ "$direct_match_count" -gt 1 ]; then
     local candidates
     candidates="$(jq -r '[.[].repository] | join(", ")' <<<"$direct_matches_json")"
@@ -135,16 +148,11 @@ todo_task_resolve_repository() {
     fi
   fi
 
-  if [ "$direct_match_count" -eq 1 ]; then
-    match_json="$(jq -c '.[0]' <<<"$direct_matches_json")"
-    repository="$(jq -r '.repository' <<<"$match_json")"
-    method="$(jq -r '.method' <<<"$match_json")"
-    matched_alias="$(jq -r '.matchedAlias // empty' <<<"$match_json")"
-  else
-    if [ "$catalog_valid" != "true" ]; then
-      echo "project catalog is unavailable; alias routing is disabled and this task will be report-only" >&2
-      return 3
-    fi
+  matches_json='[]'
+  if [ "$catalog_valid" = "true" ]; then
+    # Keep every matching alias, including overlapping aliases that may
+    # refer to distinct repositories (for example "fiteo" and "fiteo app").
+    # Multiple candidates are delegated to the semantic resolver for scope.
     matches_json="$(jq -c --arg description "$description" '
       def norm:
         ascii_downcase
@@ -157,18 +165,74 @@ todo_task_resolve_repository() {
           | ($alias | norm) as $normalized_alias
           | select($normalized_alias != "")
           | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
-          | {
-              repository: $repo.name,
-              alias: $alias,
-              length: ($normalized_alias | length)
-            }
+          | {repository:$repo.name,alias:$alias,normalizedAlias:$normalized_alias,length:($normalized_alias|length)}
+        ] as $all_matches
+      | [
+          $all_matches[] as $candidate
+          | ($all_matches | map(
+              select(
+                .length > $candidate.length
+                and ((" " + .normalizedAlias + " ") | contains(" " + $candidate.normalizedAlias + " "))
+              )
+            )) as $containing_aliases
+          | (reduce ($containing_aliases | map(.normalizedAlias | gsub(" "; " +")))[] as $pattern ($task_text;
+              gsub("(^| )" + $pattern + "($| )"; " ")
+            )) as $without_longer_aliases
+          | select(
+              ($containing_aliases | length) == 0
+              or ((" " + $without_longer_aliases + " ") | contains(" " + $candidate.normalizedAlias + " "))
+            )
+          | {repository:$candidate.repository,alias:$candidate.alias,length:$candidate.length}
         ]
-      | if length == 0 then []
-        else (map(.length) | max) as $max_length
-        | map(select(.length == $max_length))
-        | unique_by(.repository)
-        end
+      | unique_by(.repository)
     ' <<<"$catalog_json")" || return 2
+
+    # A direct URL plus another project alias may be a coordinated change.
+    # Let the semantic resolver distinguish write targets from dependencies.
+    if [ "$direct_match_count" -eq 1 ]; then
+      local direct_repository alias_other_count
+      direct_repository="$(jq -r '.[0].repository' <<<"$direct_matches_json")"
+      alias_other_count="$(jq --arg repo "$direct_repository" '
+        [.[] | select((.repository | ascii_downcase) != ($repo | ascii_downcase))] | length
+      ' <<<"$matches_json")" || return 2
+      if [ "$alias_other_count" -gt 0 ]; then
+        echo "Todo task contains a direct repository reference and another project alias; write-target scope requires semantic resolution" >&2
+        return 1
+      fi
+    fi
+
+    # An explicit "repo <nickname>" missing from the catalog/allowlist must
+    # not be silently ignored (for example, "repo bff").
+    local requested_slug slug_known
+    while IFS= read -r requested_slug; do
+      [ -n "$requested_slug" ] || continue
+      # A complete owner/repo path is handled by direct matching above.
+      # Do not reinterpret its owner component as a short repository slug.
+      [[ "$requested_slug" == */* ]] && continue
+      case "$requested_slug" in
+        is|for|in|to|the|this|that|with|all|changes|change|code|project|repository|repo|pr|pull|request|branch|github) continue ;;
+      esac
+      slug_known="$(jq -r --arg slug "$requested_slug" --argjson allowed "$repositories_json" --argjson catalog "$catalog_json" '
+        ([ $allowed[] | select((split("/") | last | ascii_downcase) == ($slug|ascii_downcase)) ] | length)
+        + ([ $catalog.repositories[]? | select(any((.aliases // [])[]; ascii_downcase == ($slug|ascii_downcase))) ] | length)
+      ' <<<"{}")" || return 2
+      if [ "$slug_known" = "0" ]; then
+        echo "Todo task contains an unmapped repository/project slug '$requested_slug'; semantic routing is required" >&2
+        return 1
+      fi
+    done < <(grep -Eo '(repo|repository)[[:space:]:=]+[A-Za-z0-9_-]+([.][A-Za-z0-9_-]+)*(/[A-Za-z0-9_-]+([.][A-Za-z0-9_-]+)*)?' <<<"$description" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | sort -u)
+  fi
+
+  if [ "$direct_match_count" -eq 1 ]; then
+    match_json="$(jq -c '.[0]' <<<"$direct_matches_json")"
+    repository="$(jq -r '.repository' <<<"$match_json")"
+    method="$(jq -r '.method' <<<"$match_json")"
+    matched_alias="$(jq -r '.matchedAlias // empty' <<<"$match_json")"
+  else
+    if [ "$catalog_valid" != "true" ]; then
+      echo "project catalog is unavailable; alias routing is disabled and this task will be report-only" >&2
+      return 3
+    fi
     candidate_count="$(jq -r 'length' <<<"$matches_json")"
     if [ "$candidate_count" -eq 0 ]; then
       echo "no project alias matched and no configured repository name was present in the Todo task tree" >&2
@@ -215,7 +279,53 @@ todo_task_resolve_repository() {
     --arg method "$method" \
     --arg matchedAlias "$matched_alias" \
     --argjson skills "$skills_json" \
-    '{repository:$repository,method:$method,matchedAlias:$matchedAlias,skills:$skills}'
+    '{repository:$repository,repositories:[$repository],method:$method,matchedAlias:$matchedAlias,skills:$skills}'
+}
+
+# Deterministic matching is the fast path. If it cannot safely decide,
+# ask the dedicated read-only OpenCode intake agent to interpret the complete
+# task tree together with the allowlist, project catalog and installed skills.
+todo_task_resolve_repository() {
+  local source_json="$1" task_json="$2" static_output static_rc agent_output agent_rc request_json
+  static_output="$(todo_task_resolve_repository_static "$source_json" "$task_json" 2>&1)"
+  static_rc=$?
+  if [ "$static_rc" -eq 0 ]; then
+    printf '%s\n' "$static_output"
+    return 0
+  fi
+
+  # Explicitly named but disallowed GitHub repositories are authorization
+  # errors, not ambiguities. Never let the model substitute another target.
+  if [[ "$static_output" == *"excluded by"* ]]; then
+    printf '%s\n' "$static_output" >&2
+    return "$static_rc"
+  fi
+
+  if { [ "$static_rc" -eq 1 ] || [ "$static_rc" -eq 3 ]; } &&
+     declare -F todo_task_is_answer_request >/dev/null 2>&1 &&
+     todo_task_is_answer_request "$task_json"; then
+    printf '%s\n' "$static_output" >&2
+    return "$static_rc"
+  fi
+
+  if [ "$static_rc" -eq 1 ] || [ "$static_rc" -eq 3 ]; then
+    request_json="$(jq -cn --argjson source "$source_json" --argjson task "$task_json" '{source:$source,task:$task}')" || return 2
+    agent_output="$(printf '%s\n' "$request_json" | bash "$TODO_TASK_SOURCE_DIR/repository-resolver.sh" 2>&1)"
+    agent_rc=$?
+    if [ "$agent_rc" -eq 0 ] &&
+       jq -e '.repositories | type == "array" and length > 0' <<<"$agent_output" >/dev/null 2>&1; then
+      printf '%s\n' "$agent_output"
+      return 0
+    fi
+    {
+      [ -n "$static_output" ] && printf '%s\n' "$static_output"
+      [ -n "$agent_output" ] && printf 'OpenCode repository resolver: %s\n' "$agent_output"
+    } >&2
+    return "$static_rc"
+  fi
+
+  printf '%s\n' "$static_output" >&2
+  return "$static_rc"
 }
 
 todo_task_resolved_skill_context() {
@@ -411,6 +521,76 @@ todo_task_fingerprint() {
   todo_task_fingerprint_raw "$stable_task"
 }
 
+# Provider/database-aware routing deduplication. Todo IDs include a
+# structural fingerprint, so edits create a new source identity. Jira issues
+# use the upstream updatedAt value and a short retry window for unresolved work.
+todo_task_source_already_known() {
+  local source_type="$1" source_id="$2"
+  local db="${DB:-${MANUL_DB:-$HOME/.manul/state/manul.db}}" safe_type safe_id found
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -f "$db" ] || return 1
+  safe_type="$(printf '%s' "$source_type" | sed "s/'/''/g")"
+  safe_id="$(printf '%s' "$source_id" | sed "s/'/''/g")"
+  found="$(sqlite3 "$db" "SELECT 1 FROM processed_comments WHERE taskSourceType='$safe_type' AND taskSourceId='$safe_id' LIMIT 1;" 2>/dev/null)" || return 1
+  [ "$found" = "1" ]
+}
+
+todo_task_routing_attempt_recently() {
+  local source_type="$1" source_id="$2" source_updated_at="$3" ttl_seconds="${4:-300}"
+  local db="${DB:-${MANUL_DB:-$HOME/.manul/state/manul.db}}" safe_type safe_id safe_updated found
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -f "$db" ] || return 1
+  [[ "$ttl_seconds" =~ ^[1-9][0-9]*$ ]] || ttl_seconds=300
+  safe_type="$(printf '%s' "$source_type" | sed "s/'/''/g")"
+  safe_id="$(printf '%s' "$source_id" | sed "s/'/''/g")"
+  safe_updated="$(printf '%s' "$source_updated_at" | sed "s/'/''/g")"
+  sqlite3 "$db" "
+    CREATE TABLE IF NOT EXISTS repository_resolution_attempts (
+      taskSourceType TEXT NOT NULL,
+      taskSourceId TEXT NOT NULL,
+      taskSourceUpdatedAt TEXT NOT NULL DEFAULT '',
+      attemptedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(taskSourceType, taskSourceId, taskSourceUpdatedAt)
+    );
+  " >/dev/null 2>&1 || return 1
+  found="$(sqlite3 "$db" "
+    SELECT 1 FROM repository_resolution_attempts
+    WHERE taskSourceType='$safe_type'
+      AND taskSourceId='$safe_id'
+      AND taskSourceUpdatedAt='$safe_updated'
+      AND (julianday('now') - julianday(attemptedAt)) * 86400 < $ttl_seconds
+    LIMIT 1;
+  " 2>/dev/null)" || return 1
+  [ "$found" = "1" ]
+}
+
+todo_task_record_routing_attempt() {
+  local source_type="$1" source_id="$2" source_updated_at="$3"
+  local db="${DB:-${MANUL_DB:-$HOME/.manul/state/manul.db}}" safe_type safe_id safe_updated
+  [ -n "$source_type" ] && [ -n "$source_id" ] && [ -f "$db" ] || return 1
+  safe_type="$(printf '%s' "$source_type" | sed "s/'/''/g")"
+  safe_id="$(printf '%s' "$source_id" | sed "s/'/''/g")"
+  safe_updated="$(printf '%s' "$source_updated_at" | sed "s/'/''/g")"
+  sqlite3 "$db" "
+    CREATE TABLE IF NOT EXISTS repository_resolution_attempts (
+      taskSourceType TEXT NOT NULL,
+      taskSourceId TEXT NOT NULL,
+      taskSourceUpdatedAt TEXT NOT NULL DEFAULT '',
+      attemptedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(taskSourceType, taskSourceId, taskSourceUpdatedAt)
+    );
+    INSERT INTO repository_resolution_attempts(taskSourceType,taskSourceId,taskSourceUpdatedAt,attemptedAt)
+    VALUES('$safe_type','$safe_id','$safe_updated',CURRENT_TIMESTAMP)
+    ON CONFLICT(taskSourceType,taskSourceId,taskSourceUpdatedAt)
+    DO UPDATE SET attemptedAt=CURRENT_TIMESTAMP;
+  " >/dev/null 2>&1
+}
+
+todo_task_has_verified_generated_update() {
+  local raw_fingerprint stable_fingerprint
+  raw_fingerprint="$(todo_task_fingerprint_raw "$1")" || return 1
+  stable_fingerprint="$(todo_task_fingerprint "$1")" || return 1
+  [ "$raw_fingerprint" != "$stable_fingerprint" ]
+}
+
 todo_task_ids_json() {
   jq -c '
     def ids:
@@ -530,7 +710,7 @@ todo_task_prompt() {
 }
 todo_task_to_source_json() {
   local task_json="$1" source_type="$2" resolution_json="${3-}"
-  local repository execution_kind task_id fingerprint source_id source_url title body prompt ids created updated matched_alias project_skill_context resolution_method action
+  local repository execution_kind task_id fingerprint source_id source_url title body prompt ids created updated matched_alias project_skill_context resolution_method action target_repositories_json target_repository_count target_repository
   [ -n "$resolution_json" ] || resolution_json='{}'
   repository="$(jq -r '.repository // empty' <<<"$resolution_json")"
   execution_kind="$(jq -r '.executionKind // "repository"' <<<"$resolution_json")"
@@ -563,18 +743,39 @@ todo_task_to_source_json() {
       | select(test("^[[:space:]]*/manul[[:space:]]+team([[:space:]]|$)"; "i"))][0] // ""
   ' <<<"$task_json" | awk '{print tolower($2)}')"
   if [ "$trigger_action" = "team" ]; then action="TEAM"; fi
+  target_repositories_json="$(jq -c --arg repository "$repository" '
+    if (.repositories | type == "array" and length > 0)
+    then (.repositories | map(select(type == "string")) | unique)
+    else [$repository]
+    end
+  ' <<<"$resolution_json")" || return 2
+  target_repository_count="$(jq 'length' <<<"$target_repositories_json")" || return 2
+  if [ "$target_repository_count" -gt 1 ]; then action="TEAM"; fi
   if [ "$execution_kind" = "answer" ]; then
     action="ANSWER"
   else
     resolution_method="$(jq -r '.method // "unknown"' <<<"$resolution_json")"
-    prompt+=$'\n\n## Repository routing\n\nTarget repository: '
-    prompt+="$repository"
+    prompt+=$'\n\n## Repository routing\n\n'
+    if [ "$target_repository_count" -eq 1 ]; then
+      prompt+="Target repository: $repository"
+    else
+      prompt+="All required write-target repositories (each must receive its own separate PR):"
+      while IFS= read -r target_repository; do
+        [ -n "$target_repository" ] && prompt+=$'\n- '"$target_repository"
+      done < <(jq -r '.[]' <<<"$target_repositories_json")
+      prompt+=$'\n\n'
+      prompt+="**Mandatory multi-repository execution:** Manul has automatically selected its existing TEAM workflow. The first target ($repository) is owned by this parent task: implement it in the assigned primary checkout and deliver a verified PR for that repository. Do not create a duplicate child task for the primary target. For every remaining target, create exactly one independent TOP-LEVEL tracker task, each with its exact owner/repo, a bounded implementation request, acceptance criteria, stable work-item marker, and a /manul run trigger. Each additional child must receive its own workspace and deliver a separate verified branch and PR. Do not put these tasks under the parent as nested Todo subtasks: they must be independent root tasks. Preserve dependencies and coordinate cross-repository API contracts. Wait for all additional children, independently verify every child PR and its CI/review evidence, and include the parent's own primary-repository PR plus all child PR links in the final report. Do not silently omit or combine targets. Use the canonical team-workflow skill."
+    fi
     prompt+=$'\nResolution method: '
     prompt+="$resolution_method"
     matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
     if [ -n "$matched_alias" ]; then
       prompt+=$'\nMatched project alias: '
       prompt+="$matched_alias"
+    fi
+    if [ "$target_repository_count" -gt 1 ]; then
+      prompt+=$'\nResolver reason: '
+      prompt+="$(jq -r '.reason // empty' <<<"$resolution_json")"
     fi
     project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
     if [ -n "$project_skill_context" ]; then
@@ -615,7 +816,11 @@ todo_task_to_source_json() {
         issueNumber:0,
         todoTaskId:$taskId,
         stepIds:$stepIds
-      } + (if $repository != "" then {repository:$repository,repositoryResolution:$resolution} else {repositoryResolution:$resolution} end)),
+      } + (if $repository != "" then {
+            repository:$repository,
+            repositories:($resolution.repositories // [$repository]),
+            repositoryResolution:$resolution
+          } else {repositoryResolution:$resolution} end)),
       execution:{kind:$executionKind}
     }'
 }

@@ -7,6 +7,15 @@ TEST_DIR="$(mktemp -d /tmp/manul-todo-sources-XXXXXX)"
 BIN="$TEST_DIR/bin"
 mkdir -p "$BIN"
 trap 'rm -rf "$TEST_DIR"' EXIT
+# Routing unit tests must never invoke a live model, even when run on a host
+# whose real Manul runtime uses OpenCode. The resolver adapter is tested
+# separately with a hermetic fake AgentTaskRunner.
+export MANUL_DIR="$TEST_DIR/manul"
+mkdir -p "$MANUL_DIR"
+cat > "$MANUL_DIR/config.json" <<'JSON'
+{"automation":{"agentRuntime":"openclaw"}}
+JSON
+export MANUL_CONFIG="$MANUL_DIR/config.json"
 PYTHON_BIN="$(command -v python3)"
 unset TODO_LOCAL_MCP_TOKEN
 
@@ -567,6 +576,13 @@ specific_source='{"repositories":["owner/fiteo","owner/fiteo-app"]}'
 specific_resolution="$(todo_task_resolve_repository "$specific_source" '{"id":93,"description":"/manul Update the Fiteo App"}')"
 assert_eq "longest matching alias distinguishes Fiteo App from Fiteo backend" "owner/fiteo-app" "$(jq -r '.repository' <<<"$specific_resolution")"
 
+overlapping_alias_task='{"id":94,"description":"/manul Update Fiteo and Fiteo App"}'
+resolution_rc=0
+overlapping_alias_output="$(todo_task_resolve_repository "$specific_source" "$overlapping_alias_task" 2>&1)" || resolution_rc=$?
+assert_rc "separately naming Fiteo and Fiteo App keeps both overlapping aliases" "1" "$resolution_rc"
+assert_contains "overlapping alias ambiguity retains the Fiteo backend target" "$overlapping_alias_output" "owner/fiteo"
+assert_contains "overlapping alias ambiguity retains the Fiteo App target" "$overlapping_alias_output" "owner/fiteo-app"
+
 e2e_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" '{"id":96,"description":"/manul zrob w test-manul-e2e repo PR z helloworld w elixir"}')"
 assert_eq "hyphenated repository slug wins over embedded Manul alias" "owner/test-manul-e2e" "$(jq -r '.repository' <<<"$e2e_resolution")"
 assert_eq "repository slug is available as an implicit matched alias" "test-manul-e2e" "$(jq -r '.matchedAlias' <<<"$e2e_resolution")"
@@ -583,6 +599,35 @@ full_repo_task='{"id":102,"description":"/manul Implement a change","subTasks":[
 full_repo_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$full_repo_task")"
 assert_eq "explicit owner/repo notation in a subtask resolves from the allowlist" "owner/local" "$(jq -r '.repository' <<<"$full_repo_resolution")"
 assert_eq "explicit owner/repo notation has dedicated provenance" "explicit_repository_name" "$(jq -r '.method' <<<"$full_repo_resolution")"
+assert_eq "single repository results expose a normalized repositories array" "owner/local" "$(jq -r '.repositories[0]' <<<"$full_repo_resolution")"
+
+# Multi-target requests must not be collapsed to the first match. The static
+# resolver deliberately yields to OpenCode so it can distinguish write targets
+# from dependencies/background mentions.
+multi_explicit_task='{"id":110,"description":"/manul Create matching PRs in https://github.com/owner/local and https://github.com/owner/remote"}'
+resolution_rc=0
+multi_explicit_output="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$multi_explicit_task" 2>&1)" || resolution_rc=$?
+assert_rc "multiple explicit GitHub URLs require semantic target-scope resolution" "1" "$resolution_rc"
+assert_contains "multi-URL diagnostic retains every candidate" "$multi_explicit_output" "owner/local, owner/remote"
+
+multi_alias_task='{"id":111,"description":"/manul Update the local project and remote service"}'
+resolution_rc=0
+multi_alias_output="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$multi_alias_task" 2>&1)" || resolution_rc=$?
+assert_rc "multiple independent project aliases require semantic target-scope resolution" "1" "$resolution_rc"
+
+unmapped_alias_task='{"id":112,"description":"/manul Fix the issue in repo bff"}'
+resolution_rc=0
+unmapped_alias_output="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$unmapped_alias_task" 2>&1)" || resolution_rc=$?
+assert_rc "an unmapped repo nickname is sent to the semantic resolver" "1" "$resolution_rc"
+assert_contains "unmapped repo nickname is preserved in routing diagnostic" "$unmapped_alias_output" "bff"
+
+multi_resolution='{"repository":"owner/local","repositories":["owner/local","owner/remote"],"method":"opencode_agent_multi","matchedAlias":"","skills":["fiteo-backend-api"],"confidence":"high","reason":"The request explicitly asks for matching changes in both projects."}'
+multi_source="$(todo_task_to_source_json '{"id":113,"description":"/manul Create matching changes and PRs","subTasks":[],"isToDo":true}' todo_local_mcp "$multi_resolution")"
+assert_eq "multi-repository Todo work automatically uses TEAM action" "TEAM" "$(jq -r '.action' <<<"$multi_source")"
+assert_eq "multi-repository Todo metadata preserves every target" "2" "$(jq '.metadata.repositories | length' <<<"$multi_source")"
+assert_contains "multi-repository parent owns the first target and its PR" "$(jq -r '.prompt' <<<"$multi_source")" "owned by this parent task"
+assert_contains "multi-repository instructions require separate root tasks" "$(jq -r '.prompt' <<<"$multi_source")" "TOP-LEVEL"
+assert_contains "multi-repository prompt includes each target" "$(jq -r '.prompt' <<<"$multi_source")" "owner/remote"
 
 nested_alias_task='{"id":103,"description":"/manul Implement a change","subTasks":[{"id":105,"description":"Use the local project for this change"}]}'
 nested_alias_resolution="$(todo_task_resolve_repository "$LOCAL_SOURCE" "$nested_alias_task")"
@@ -1114,6 +1159,25 @@ poll_source="$(cat "$SCRIPT_DIR/poll.sh")"
 assert_contains "agent executor maps ANSWER to tool-free operator_query" "$agent_executor_source" 'adapter_execution_kind="operator_query"'
 assert_contains "source poller accepts the explicit ANSWER action" "$poll_source" 'IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER|TEAM)'
 assert_contains "source poller accepts answer execution only for Todo and without a repository" "$poll_source" 'execution_kind" = "answer"'
+
+# Provider polling must not repeat repository routing for an unchanged
+# Todo version already in the task queue. Jira blockers are throttled by the
+# issue update timestamp and a short retry interval.
+DB="$TEST_DIR/routing-dedup.db"
+sqlite3 "$DB" <<'SQL'
+CREATE TABLE processed_comments (
+  commentId TEXT PRIMARY KEY,
+  taskSourceType TEXT,
+  taskSourceId TEXT
+);
+INSERT INTO processed_comments(commentId,taskSourceType,taskSourceId)
+VALUES('source:todo_local_mcp:501@fingerprint','todo_local_mcp','501@fingerprint');
+SQL
+assert_eq "unchanged Todo source identity is recognized as already queued" "0" "$(todo_task_source_already_known todo_local_mcp '501@fingerprint'; echo $?)"
+assert_eq "new Todo task-tree versions are not mistaken for queued work" "1" "$(todo_task_source_already_known todo_local_mcp '501@new-fingerprint'; echo $?)"
+todo_task_record_routing_attempt jira_tasks JIRA-123 "2026-11-27T12:00:00.000+0100"
+assert_eq "recent unresolved Jira routing attempt is throttled" "0" "$(todo_task_routing_attempt_recently jira_tasks JIRA-123 '2026-11-27T12:00:00.000+0100' 300; echo $?)"
+assert_eq "a changed Jira updatedAt value triggers a fresh routing attempt" "1" "$(todo_task_routing_attempt_recently jira_tasks JIRA-123 '2026-11-27T12:01:00.000+0100' 300; echo $?)"
 
 # Normal standalone operation must not need aicode to export helper paths.
 source "$SCRIPT_DIR/task-source.sh"

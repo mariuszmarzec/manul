@@ -147,6 +147,8 @@ task_source_configured_sources() {
           then (if .type == "todo_local_mcp" then del(.tokenEnv) else . end)
              | .repositories = $repositories
              | del(.repositoryAllowlist, .repositoryAllowlistEnforced)
+          elif .type == "jira_tasks"
+          then .repositories = $repositories
           else .
           end
       ' "$config"
