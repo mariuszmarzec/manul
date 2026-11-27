@@ -62,6 +62,16 @@ task_source_todo_local_poll() {
     todo_task_has_local_trigger "$task_json" || continue
     task_id="$(jq -r '.id // "unknown"' <<<"$task_json")"
     local resolution_output resolution_rc task_fingerprint source_id update_status update_summary update_receipt
+    task_fingerprint="$(todo_task_fingerprint "$task_json")" || continue
+    source_id="${task_id}@${task_fingerprint}"
+    if todo_task_source_already_known todo_local_mcp "$source_id"; then
+      echo "task-source: local Todo task $task_id already has a Manul record for this task-tree version; skipping repeated routing" >&2
+      continue
+    fi
+    if todo_task_has_verified_generated_update "$task_json"; then
+      echo "task-source: local Todo task $task_id already has a verified Manul update for this task-tree version; waiting for user edits" >&2
+      continue
+    fi
     resolution_output="$(todo_task_resolve_repository "$source_json" "$task_json" 2>&1)"
     resolution_rc=$?
     if [ "$resolution_rc" -eq 0 ]; then
@@ -70,8 +80,6 @@ task_source_todo_local_poll() {
       resolution='{"executionKind":"answer","method":"question_without_repository"}'
       echo "task-source: todo_local_mcp Todo task $task_id routed to a direct answer; no repository is required" >&2
     else
-      task_fingerprint="$(todo_task_fingerprint "$task_json")" || continue
-      source_id="${task_id}@${task_fingerprint}"
       if [ "$resolution_rc" -eq 1 ] || [ "$resolution_rc" -eq 3 ]; then
         update_status="needs_input"
         update_summary="$(cat <<'TODO_ROUTING_BLOCKER'
