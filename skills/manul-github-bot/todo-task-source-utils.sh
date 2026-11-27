@@ -215,7 +215,7 @@ todo_task_resolve_repository_static() {
         echo "Todo task contains an unmapped repository/project slug '$requested_slug'; semantic routing is required" >&2
         return 1
       fi
-    done < <(grep -Eo '(repo|repository)[[:space:]:=]+[A-Za-z0-9._-]+' <<<"$description" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | sort -u)
+    done < <(grep -Eo '(repo|repository)[[:space:]:=]+[A-Za-z0-9_-]+([.][A-Za-z0-9_-]+)*' <<<"$description" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | sort -u)
   fi
 
   if [ "$direct_match_count" -eq 1 ]; then
