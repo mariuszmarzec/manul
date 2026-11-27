@@ -123,7 +123,9 @@ todo_task_resolve_repository_static() {
     all(.[]; (.repository | ascii_downcase) as $candidate
       | any($allowed[]; ascii_downcase == $candidate))
   ' <<<"$direct_matches_json" >/dev/null 2>&1; then
-    echo "an explicitly referenced repository is excluded by the global .repositories allowlist" >&2
+    local direct_candidates
+    direct_candidates="$(jq -r '[.[].repository] | join(", ")' <<<"$direct_matches_json")"
+    echo "an explicitly referenced repository is excluded by the global .repositories list: $direct_candidates" >&2
     return 1
   fi
 
@@ -204,6 +206,9 @@ todo_task_resolve_repository_static() {
     local requested_slug slug_known
     while IFS= read -r requested_slug; do
       [ -n "$requested_slug" ] || continue
+      # A complete owner/repo path is handled by direct matching above.
+      # Do not reinterpret its owner component as a short repository slug.
+      [[ "$requested_slug" == */* ]] && continue
       case "$requested_slug" in
         is|for|in|to|the|this|that|with|all|changes|change|code|project|repository|repo|pr|pull|request|branch|github) continue ;;
       esac
@@ -215,7 +220,7 @@ todo_task_resolve_repository_static() {
         echo "Todo task contains an unmapped repository/project slug '$requested_slug'; semantic routing is required" >&2
         return 1
       fi
-    done < <(grep -Eo '(repo|repository)[[:space:]:=]+[A-Za-z0-9_-]+([.][A-Za-z0-9_-]+)*' <<<"$description" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | sort -u)
+    done < <(grep -Eo '(repo|repository)[[:space:]:=]+[A-Za-z0-9_-]+([.][A-Za-z0-9_-]+)*(/[A-Za-z0-9_-]+([.][A-Za-z0-9_-]+)*)?' <<<"$description" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | sort -u)
   fi
 
   if [ "$direct_match_count" -eq 1 ]; then
