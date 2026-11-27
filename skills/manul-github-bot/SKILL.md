@@ -259,11 +259,14 @@ remain ordered steps within one task and do not create separate executions.
 
 Manul may select TEAM automatically when repository routing identifies multiple
 write targets in one Todo/Jira request. The parent prompt contains the complete
-allowlisted target list and is coordination-only: create one independent
-top-level child task for each listed repository, with its own workspace,
-branch, verification and PR. Do not implement changes in the parent's primary
-checkout or omit a target. Read the Globalskills `team-workflow` skill for the
-multi-repository intake contract.
+allowlisted target list in resolver order. The parent owns the first target and
+must deliver its own PR in the assigned primary checkout. Create one independent
+top-level child task only for each remaining target; every child gets its own
+workspace, branch, verification and PR. Do not create a duplicate child for the
+first target or combine multiple repositories into one PR. The Team coordinator's
+trackerRefs must contain only additional-repository children, never the parent
+itself. Read the Globalskills `team-workflow` skill for the multi-repository
+intake contract.
 
 The Team parent is assigned one stable, daemon-prepared task branch before the Orchestrator starts. The branch is derived from the logical conversation identity, not from an individual wake comment or attempt, and is reused across child-completion wakeups and `/manul team resume`. The daemon must verify the checked-out branch before agent startup; the Orchestrator must keep all parent-level repository changes on that branch. If a verified PR already exists for the stable branch, resume that PR head instead of creating another branch or PR. A Team parent that makes no repository changes may finish with a verified non-empty result comment without creating an empty PR; any committed repository changes still require the normal verified PR delivery.
 
@@ -356,8 +359,9 @@ Todo MCP tasks use one of two explicit execution kinds; neither is
   disallowed target, Manul does not start a coding agent; it creates an OPEN
   routing subtask explaining the exact blocker and required input.
   A single resolved target follows the normal implementation path. Multiple
-  write targets automatically select TEAM: the parent coordinates one
-  independent top-level child task, workspace, branch and PR per target.
+  write targets automatically select TEAM: the parent delivers a PR for the
+  first target, while each remaining target receives one separate root task,
+  workspace, branch and PR.
 
 Legacy Todo `report_only` queue entries are rejected/migrated; new Todo tasks
 cannot select that execution mode.
@@ -371,8 +375,9 @@ configured Manul runtime. It receives installed skill content before deciding,
 and returns one or more exact targets plus relevant skill names. Manul validates
 every target against the global allowlist and validates selected skills against
 the installed `~/.agents/skills` inventory. Multiple write targets automatically
-use TEAM and receive separate root tasks/workspaces/branches/PRs; references
-that are only read-only dependencies are not turned into child work items.
+use TEAM: the parent delivers a PR for the first target, and every remaining
+write target receives a separate root task/workspace/branch/PR. References that
+are only read-only dependencies are not turned into child work items.
 The project catalog (`~/.agents/skills/globalskills-repository/project-repositories.json`)
 supplies aliases and optional mapped project skills; the top-level
 `.repositories` array remains the only access allowlist.
