@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Resolve Todo/Jira repository targets through the configured OpenCode agent.
 # This runs before a task workspace exists and only receives operator-provided
-# task text, the Manul allowlist, the project catalog and installed SKILL.md files.
+# task text, the Manul allowlist, the project catalog and installed SKILL.md files from the canonical shared skill root.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -121,11 +121,7 @@ from pathlib import Path
 home = Path(sys.argv[1])
 limit = max(20000, int(sys.argv[2]))
 catalog = json.loads(sys.argv[3])
-roots = [
-    home / ".agents" / "skills",
-    home / ".globalskills" / "skills",
-    home / ".config" / "opencode" / "skills",
-]
+roots = [home / ".agents" / "skills"]
 files = {}
 for root in roots:
     if not root.is_dir():
@@ -141,7 +137,7 @@ for root in roots:
         files.setdefault(path.parent.name, text)
 
 # First include every catalog-mapped skill, then the remaining installed
-# skills. This keeps project ownership data ahead of generic guidance.
+# skills from the canonical ~/.agents/skills root.
 priority = []
 for entry in catalog.get("repositories", []):
     for name in entry.get("skills", []):
