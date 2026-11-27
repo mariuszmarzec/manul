@@ -152,7 +152,7 @@ todo_task_resolve_repository_static() {
     while IFS= read -r requested_slug; do
       [ -n "$requested_slug" ] || continue
       case "$requested_slug" in
-        is|for|in|to|the|this|that|with|all|changes|change|code|project|repository|repo) continue ;;
+        is|for|in|to|the|this|that|with|all|changes|change|code|project|repository|repo|pr|pull|request|branch|github) continue ;;
       esac
       slug_known="$(jq -r --arg slug "$requested_slug" --argjson allowed "$repositories_json" --argjson catalog "$catalog_json" '
         ([ $allowed[] | select((split("/") | last | ascii_downcase) == ($slug|ascii_downcase)) ] | length) +
