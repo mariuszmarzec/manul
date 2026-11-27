@@ -6,23 +6,21 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 MANUL_DIR="${MANUL_DIR:-$HOME/.manul}"
+source "$SCRIPT_DIR/manul-env.sh"
+if ! manul_env_load "$MANUL_DIR"; then
+  echo "repository resolver: failed to load Manul runtime environment" >&2
+  exit 3
+fi
+source "$SCRIPT_DIR/manul-paths.sh"
+if [ "$AGENT_RUNTIME" != "opencode" ]; then
+  echo "repository resolver requires automation.agentRuntime=opencode (current: $AGENT_RUNTIME)" >&2
+  exit 3
+fi
+
 INPUT="$(cat)"
 SOURCE_JSON="$(jq -c '.source // {}' <<<"$INPUT" 2>/dev/null)" || exit 2
 TASK_JSON="$(jq -c '.task // {}' <<<"$INPUT" 2>/dev/null)" || exit 2
 [ -n "$SOURCE_JSON" ] && [ -n "$TASK_JSON" ] || exit 2
-
-CONFIG="${MANUL_CONFIG:-$MANUL_DIR/config.json}"
-RUNTIME="$(jq -r '.automation.agentRuntime // "openclaw"' "$CONFIG" 2>/dev/null || printf 'openclaw')"
-if [ "$RUNTIME" != "opencode" ]; then
-  echo "repository resolver requires automation.agentRuntime=opencode (current: $RUNTIME)" >&2
-  exit 3
-fi
-
-OPENCODE_BIN="$(command -v "${OPENCODE_BIN:-opencode}" 2>/dev/null || true)"
-if [ -z "$OPENCODE_BIN" ] || [ ! -x "$OPENCODE_BIN" ]; then
-  echo "repository resolver: OpenCode executable is unavailable" >&2
-  exit 3
-fi
 
 REPOSITORIES_JSON="$(jq -c '
   .repositories
@@ -166,11 +164,56 @@ timeout_seconds="${MANUL_REPOSITORY_RESOLVER_TIMEOUT_SECONDS:-180}"
 case "$timeout_seconds" in ''|*[!0-9]*) timeout_seconds=180 ;; esac
 if [ "$timeout_seconds" -lt 15 ] || [ "$timeout_seconds" -gt 600 ]; then timeout_seconds=180; fi
 
-# Reuse the operator's existing OpenCode configuration/provider. Do not use
-# --standalone, --model, or any provider override for this intake-only agent.
-if ! timeout "$timeout_seconds" "$OPENCODE_BIN" run --agent repository-resolver --format json <"$PROMPT_FILE" >"$RAW_FILE" 2>"$ERR_FILE"; then
-  detail="$(tail -n 12 "$ERR_FILE" 2>/dev/null | tr '\n' ' ' | cut -c1-1200)"
-  echo "repository resolver: OpenCode agent failed or is not installed: ${detail:-no diagnostic}" >&2
+# The intake resolver is a tool-free execution in a disposable operator-query
+# workspace. It goes through the normal AgentExecutionController and OpenCode
+# adapter, preserving ProcessRunner timeouts, agent discovery, task overlays,
+# operator model/provider configuration and failure classification.
+OPERATOR_QUERY_ROOT="$MANUL_WORKSPACE/operator-query"
+[ ! -L "$MANUL_WORKSPACE" ] && [ ! -L "$OPERATOR_QUERY_ROOT" ] || {
+  echo "repository resolver: operator-query workspace path must not be a symlink" >&2
+  exit 3
+}
+mkdir -p "$OPERATOR_QUERY_ROOT" || exit 3
+WORKSPACE="$(mktemp -d "$OPERATOR_QUERY_ROOT/oq-repository-resolver.XXXXXX")" || exit 3
+chmod 700 "$WORKSPACE"
+trap 'rm -rf -- "$WORKSPACE" "$TMP_DIR"' EXIT HUP INT TERM
+
+TASK_ID="repository-resolver-$"
+CONTEXT_FILE="$TMP_DIR/execution-context.json"
+jq -cn \
+  --arg taskId "$TASK_ID" \
+  --arg prompt "$PROMPT_FILE" \
+  --arg workspace "$WORKSPACE" \
+  --arg stdout "$RAW_FILE" \
+  --arg stderr "$ERR_FILE" \
+  --argjson timeout "$timeout_seconds" \
+  '{
+    taskId:$taskId,
+    prompt:$prompt,
+    workspace:$workspace,
+    workspaceRoot:$workspace,
+    workdir:$workspace,
+    executionKind:"repository_resolver",
+    agent:"repository-resolver",
+    attempt:1,
+    timeout:$timeout,
+    stdout_file:$stdout,
+    stderr_file:$stderr
+  }' >"$CONTEXT_FILE" || exit 3
+chmod 600 "$CONTEXT_FILE"
+
+TASK_RUNNER="${MANUL_REPOSITORY_RESOLVER_RUNNER:-$SCRIPT_DIR/agent-task-runner.sh}"
+if [ ! -x "$TASK_RUNNER" ]; then
+  echo "repository resolver: Manul agent task runner is unavailable" >&2
+  exit 3
+fi
+EXECUTION_RESULT="$("$TASK_RUNNER" "$CONTEXT_FILE" 2>"$TMP_DIR/runner.stderr")"
+RUNNER_RC=$?
+EXECUTION_STATUS="$(jq -r '.status // "FAILED"' <<<"$EXECUTION_RESULT" 2>/dev/null || printf 'FAILED')"
+if [ "$RUNNER_RC" -ne 0 ] || [ "$EXECUTION_STATUS" != "COMPLETED" ]; then
+  detail="$(jq -r '.summary // empty' <<<"$EXECUTION_RESULT" 2>/dev/null)"
+  [ -n "$detail" ] || detail="$(tail -n 12 "$TMP_DIR/runner.stderr" 2>/dev/null | tr '\n' ' ' | cut -c1-1200)"
+  echo "repository resolver: OpenCode routing execution failed: ${detail:-no diagnostic}" >&2
   exit 3
 fi
 
