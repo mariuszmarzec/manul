@@ -375,7 +375,7 @@ if [ -n "$_TASK_WORKSPACE_ROOT_INPUT" ] || [ -n "$_OPENCODE_BASE_CONFIG" ]; then
             printf '{"status":"FAILED","task_id":"%s","exit_code":66,"summary":"Runner-assigned report-only workspace is not a direct scratch directory under MANUL_WORKSPACE/report-only","session_id":"","duration_s":0}\n' "$OPT_TASK_ID"
             exit 66
         fi
-    elif [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
+    elif [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "repository_resolver" ]; then
         _operator_query_root="$_workspace_base_real/operator-query"
         _operator_query_root_real=""
         if [ ! -L "$_operator_query_root" ] && [ -d "$_operator_query_root" ]; then
@@ -437,7 +437,7 @@ if [ -n "$_workdir_real" ]; then export MANUL_TASK_WORKDIR="$_workdir_real"; fi
 CARACAL_CONFIGURED=0
 CARACAL_CONFIG_SHAPE="servers"
 CARACAL_PROVIDER_READY=0
-if [ "$_TASK_EXECUTION_KIND_INPUT" != "operator_query" ] && [ "$_TASK_EXECUTION_KIND_INPUT" != "slack_intake" ]; then
+if [ "$_TASK_EXECUTION_KIND_INPUT" != "operator_query" ] && [ "$_TASK_EXECUTION_KIND_INPUT" != "repository_resolver" ] && [ "$_TASK_EXECUTION_KIND_INPUT" != "slack_intake" ]; then
     _caracal_config_state="$(python3 - "${_OPENCODE_BASE_CONFIG:-}" "${OPENCODE_CONFIG_CONTENT:-}" <<'PY_CARACAL_CONFIG'
 import json
 import sys
@@ -878,11 +878,11 @@ permissions = operator_permissions + [
 # Never permit the raw operator Fiteo create tool inside a Manul task.
 # Task creation is only available through the dedicated Manul-authenticated
 # MCP connection below; the user's global Fiteo server remains untouched.
-if execution_kind in ("operator_query", "slack_intake"):
+if execution_kind in ("operator_query", "repository_resolver", "slack_intake"):
     # Tool-free queries and Slack intake never inherit the operator's Fiteo credentials.
     fiteo_url = ""
     fiteo_pat = ""
-    if execution_kind == "operator_query":
+    if execution_kind in ("operator_query", "repository_resolver"):
         todo_url = ""
 
 operator_agent_config = {}
@@ -898,6 +898,11 @@ if execution_kind == "operator_query":
             "tools": {"*": False},
         }
     }
+    tools = {pattern: False for pattern in tool_rule_patterns}
+    tools["*"] = False
+elif execution_kind == "repository_resolver":
+    # Repository resolution must use the installed, dedicated native agent,
+    # but its entire tool surface is disabled at the invocation layer too.
     tools = {pattern: False for pattern in tool_rule_patterns}
     tools["*"] = False
 elif execution_kind == "slack_intake":
@@ -1087,7 +1092,7 @@ fi
 chmod 600 "$_OVERLAY_JSON_FILE"
 OPENCODE_CONFIG_CONTENT="$(cat "$_OVERLAY_JSON_FILE")"
 export OPENCODE_CONFIG_CONTENT
-if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "slack_intake" ]; then
+if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "repository_resolver" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "slack_intake" ]; then
     # Keep variables defined for nounset-safe diagnostics below, but blank
     # their exported values so OpenCode cannot inherit operator credentials.
     FITEO_BASE_URL=""
@@ -1254,6 +1259,8 @@ fi
 # Operator queries always use a reserved, task-local agent whose tool set is empty.
 if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
     OPT_AGENT="manul-operator-query"
+elif [ "$_TASK_EXECUTION_KIND_INPUT" = "repository_resolver" ]; then
+    OPT_AGENT="repository-resolver"
 elif [ "$_TASK_EXECUTION_KIND_INPUT" = "slack_intake" ]; then
     OPT_AGENT="manul-slack-intake"
 fi
@@ -1398,6 +1405,13 @@ if [ -n "$OPT_AGENT" ]; then
                 jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:66,summary:"Could not verify native OpenCode agent sdd with the available OpenCode CLI discovery commands.",failure_code:"SDD_AGENT_DISCOVERY_FAILED",diagnostics:{stage:"sdd_agent_preflight"}}'
             fi
             exit 66
+        elif [ "$OPT_AGENT" = "repository-resolver" ]; then
+            if [ "$_agent_check_status" = "missing" ]; then
+                jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:66,summary:"Required native OpenCode agent repository-resolver was not listed by OpenCode. Install the Globalskills agent definition before enabling semantic routing.",failure_code:"REPOSITORY_RESOLVER_AGENT_MISSING",diagnostics:{stage:"repository_resolver_preflight"}}'
+            else
+                jq -cn --arg taskId "$OPT_TASK_ID" '{status:"FAILED",task_id:$taskId,exit_code:66,summary:"Could not verify native OpenCode agent repository-resolver with the available OpenCode CLI discovery commands.",failure_code:"REPOSITORY_RESOLVER_AGENT_DISCOVERY_FAILED",diagnostics:{stage:"repository_resolver_preflight"}}'
+            fi
+            exit 66
         fi
         log "OpenCode agent '$OPT_AGENT' could not be verified ($_agent_check_status); using configured default_agent or built-in build"
         OPT_AGENT=""
@@ -1429,6 +1443,8 @@ write_runtime_capability_context() {
     printf '%s\n' '- Only the primary checkout may be edited/delivered by default. Related checkouts explicitly declared read-only remain read-only.'
     if [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ]; then
         printf '%s\n' '- Operator query mode is tool-free. Use only the read-only snapshot embedded in the prompt; do not access local files or invoke tools.'
+    elif [ "$_TASK_EXECUTION_KIND_INPUT" = "repository_resolver" ]; then
+        printf '%s\n' '- Repository resolver mode is tool-free. Use only the task, allowlist, catalog and skill contents supplied in the prompt; do not access files, network, shell, MCP servers or other tools.'
     fi
     printf '%s\n' '- Access is still subject to OpenCode tool-level and path-level decisions. An external-directory allow rule is not a guarantee that every bash command or tool call will be allowed.'
     printf '%s\n' '- Never inspect or modify sibling task workspaces, shared caches, Manul databases/logs/configuration, adapters, or other runtime state. Never try to bypass a denial via another tool, a different path, a symlink, a wrapper, or a reshaped command.'
@@ -1885,18 +1901,21 @@ else
         _status="NEEDS_CONTINUATION"
         _exit_code=1
         _summary="OpenCode reached its step limit without a completion marker; existing session can continue"
-    elif [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] &&
+    elif { [ "$_TASK_EXECUTION_KIND_INPUT" = "operator_query" ] || [ "$_TASK_EXECUTION_KIND_INPUT" = "repository_resolver" ]; } &&
          [ "$pr_rc" -eq 0 ] &&
          [ -n "$(tr -d '[:space:]' < "$OPT_STDOUT_FILE" 2>/dev/null)" ]; then
-        # Operator queries are read-only, tool-free one-shot answers. Some
-        # OpenCode versions return a complete text response and a session ID
-        # but omit the explicit TASK_DONE line despite a clean process exit.
-        # In this restricted mode only, non-empty normalized text plus rc=0 is
-        # sufficient completion evidence; implementation tasks remain fail-closed.
+        # Operator queries and repository routing are read-only, tool-free
+        # one-shot executions. A clean, non-empty runtime response is their
+        # completion evidence; neither may create repository state or tools.
         _status="COMPLETED"
         _exit_code=0
-        _summary="OpenCode returned a non-empty read-only operator-query answer without TASK_DONE; accepting the clean response"
-        log "operator query completed with non-empty text and clean exit but no TASK_DONE marker; accepting tool-free response"
+        if [ "$_TASK_EXECUTION_KIND_INPUT" = "repository_resolver" ]; then
+            _summary="OpenCode returned a non-empty repository routing result"
+            log "repository resolver completed with non-empty tool-free response"
+        else
+            _summary="OpenCode returned a non-empty read-only operator-query answer without TASK_DONE; accepting the clean response"
+            log "operator query completed with non-empty text and clean exit but no TASK_DONE marker; accepting tool-free response"
+        fi
     elif [ "$pr_rc" -eq 0 ] && [ -n "$session_id" ]; then
         _status="FAILED"
         _exit_code=1
