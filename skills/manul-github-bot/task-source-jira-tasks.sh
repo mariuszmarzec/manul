@@ -12,7 +12,7 @@ task_source_jira_tasks_poll() {
   local source_json="$1"
   local base_url user_env password_env jql search_path configured_repository user password url payload
   local repositories_json issues_json issue_json issue_key summary description routing_task resolution resolution_rc
-  local repository target_repositories_json target_count action prompt skill_context method routing_hint
+  local repository target_repositories_json target_count action prompt skill_context method routing_hint source_updated_at
 
   base_url="$(jq -r '.baseUrl // empty' <<<"$source_json")"
   user_env="$(jq -r '.userEnv // "MANUL_JIRA_USER"' <<<"$source_json")"
@@ -58,6 +58,14 @@ task_source_jira_tasks_poll() {
     [ "$state" != "DONE" ] || continue
 
     issue_key="$(jq -r '.key // (.id|tostring)' <<<"$issue_json")"
+    source_updated_at="$(jq -r '.fields.updated // .fields.created // ""' <<<"$issue_json")"
+    if todo_task_source_already_known jira_tasks "$issue_key"; then
+      continue
+    fi
+    if todo_task_routing_attempt_recently jira_tasks "$issue_key" "$source_updated_at" "${MANUL_REPOSITORY_RESOLVER_RETRY_SECONDS:-300}"; then
+      echo "task-source: Jira issue $issue_key had a recent unresolved repository-routing attempt; waiting for an update or retry interval" >&2
+      continue
+    fi
     summary="$(jq -r '.fields.summary // ""' <<<"$issue_json")"
     description="$(jq -r '
       .fields.description // ""
@@ -82,6 +90,7 @@ task_source_jira_tasks_poll() {
       fi
     fi
     if [ "$resolution_rc" -ne 0 ]; then
+      todo_task_record_routing_attempt jira_tasks "$issue_key" "$source_updated_at" || true
       echo "task-source: Jira issue $issue_key was not queued because repository routing did not resolve safely: ${resolution:-no diagnostic}" >&2
       continue
     fi
@@ -132,7 +141,7 @@ task_source_jira_tasks_poll() {
       --argjson targets "$target_repositories_json" \
       --argjson resolution "$resolution" \
       --arg created "$(jq -r '.fields.created // ""' <<<"$issue_json")" \
-      --arg updated "$(jq -r '.fields.updated // .fields.created // ""' <<<"$issue_json")" \
+      --arg updated "$source_updated_at" \
       --arg issueType "$(jq -r '.fields.issuetype.name // ""' <<<"$issue_json")" \
       --arg status "$(jq -r '.fields.status.name // ""' <<<"$issue_json")" \
       '{
