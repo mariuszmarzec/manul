@@ -1089,50 +1089,6 @@ todo_task_publish_update() {
     '{sourceId:$sourceId,status:$status,rootTaskId:$rootTaskId,updateTaskId:$updateTaskId,summary:$summary}'
 }
 
-\n\n## Repository routing\n\n'
-    if [ "$target_repository_count" -eq 1 ]; then
-      prompt+="Target repository: $repository"
-    else
-      prompt+="All required write-target repositories (each must receive its own PR):"
-      while IFS= read -r target_repository; do
-        [ -n "$target_repository" ] && prompt+=
-  ids="$(todo_task_ids_json "$task_json")"
-  created="$(jq -r '.addedTime // ""' <<<"$task_json")"
-  updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
-  jq -cn \
-    --arg type "$source_type" \
-    --arg sourceId "$source_id" \
-    --arg sourceUrl "$source_url" \
-    --arg title "$title" \
-    --arg body "$body" \
-    --arg prompt "$prompt" \
-    --arg action "$action" \
-    --arg created "$created" \
-    --arg updated "$updated" \
-    --arg repository "$repository" \
-    --arg executionKind "$execution_kind" \
-    --argjson resolution "$resolution_json" \
-    --argjson taskId "$task_id" \
-    --argjson stepIds "$ids" \
-    '{
-      taskSourceType:$type,
-      taskSourceId:$sourceId,
-      taskSourceUrl:$sourceUrl,
-      title:$title,
-      body:$body,
-      prompt:$prompt,
-      action:$action,
-      createdAt:$created,
-      updatedAt:$updated,
-      state:"OPEN",
-      metadata:({
-        issueNumber:0,
-        todoTaskId:$taskId,
-        stepIds:$stepIds
-      } + (if $repository != "" then {repository:$repository,repositoryResolution:$resolution} else {repositoryResolution:$resolution} end)),
-      execution:{kind:$executionKind}
-    }'
-}
 todo_task_is_active() {
   jq -e '(.isToDo // false) == true and (.scheduler == null)' <<<"$1" >/dev/null 2>&1
 }
