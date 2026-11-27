@@ -1144,6 +1144,25 @@ assert_contains "agent executor maps ANSWER to tool-free operator_query" "$agent
 assert_contains "source poller accepts the explicit ANSWER action" "$poll_source" 'IMPLEMENT|REVIEW_FIX|VERIFY|ANSWER|TEAM)'
 assert_contains "source poller accepts answer execution only for Todo and without a repository" "$poll_source" 'execution_kind" = "answer"'
 
+# Provider polling must not repeat repository routing for an unchanged
+# Todo version already in the task queue. Jira blockers are throttled by the
+# issue update timestamp and a short retry interval.
+DB="$TEST_DIR/routing-dedup.db"
+sqlite3 "$DB" <<'SQL'
+CREATE TABLE processed_comments (
+  commentId TEXT PRIMARY KEY,
+  taskSourceType TEXT,
+  taskSourceId TEXT
+);
+INSERT INTO processed_comments(commentId,taskSourceType,taskSourceId)
+VALUES('source:todo_local_mcp:501@fingerprint','todo_local_mcp','501@fingerprint');
+SQL
+assert_eq "unchanged Todo source identity is recognized as already queued" "0" "$(todo_task_source_already_known todo_local_mcp '501@fingerprint'; echo $?)"
+assert_eq "new Todo task-tree versions are not mistaken for queued work" "1" "$(todo_task_source_already_known todo_local_mcp '501@new-fingerprint'; echo $?)"
+todo_task_record_routing_attempt jira_tasks JIRA-123 "2026-11-27T12:00:00.000+0100"
+assert_eq "recent unresolved Jira routing attempt is throttled" "0" "$(todo_task_routing_attempt_recently jira_tasks JIRA-123 '2026-11-27T12:00:00.000+0100' 300; echo $?)"
+assert_eq "a changed Jira updatedAt value triggers a fresh routing attempt" "1" "$(todo_task_routing_attempt_recently jira_tasks JIRA-123 '2026-11-27T12:01:00.000+0100' 300; echo $?)"
+
 # Normal standalone operation must not need aicode to export helper paths.
 source "$SCRIPT_DIR/task-source.sh"
 SAVED_TODO_MCP_CLIENT="${TODO_MCP_CLIENT:-}"
