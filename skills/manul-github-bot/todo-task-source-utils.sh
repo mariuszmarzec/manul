@@ -145,6 +145,26 @@ todo_task_resolve_repository_static() {
     fi
   fi
 
+  # A phrase such as "repo bff" is a project-routing hint even when the slug
+  # is absent from the allowlist/catalog. Hand it to the semantic resolver.
+  if [ "$catalog_valid" = "true" ]; then
+    local requested_slug slug_known
+    while IFS= read -r requested_slug; do
+      [ -n "$requested_slug" ] || continue
+      case "$requested_slug" in
+        is|for|in|to|the|this|that|with|all|changes|change|code|project|repository|repo) continue ;;
+      esac
+      slug_known="$(jq -r --arg slug "$requested_slug" --argjson allowed "$repositories_json" --argjson catalog "$catalog_json" '
+        ([ $allowed[] | select((split("/") | last | ascii_downcase) == ($slug|ascii_downcase)) ] | length) +
+        ([ $catalog.repositories[]? | select(any((.aliases // [])[]; ascii_downcase == ($slug|ascii_downcase))) ] | length)
+      ' <<<"{}")" || return 2
+      if [ "$slug_known" = "0" ]; then
+        echo "Todo task contains an unmapped repository/project slug '$requested_slug'; semantic routing is required" >&2
+        return 1
+      fi
+    done < <(grep -Eo '(repo|repository)[[:space:]:=]+[A-Za-z0-9._-]+' <<<"$description" | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | sort -u)
+  fi
+
   # If a direct URL/name and a different project alias occur together,
   # do not assume the URL is the only write target. Let the routing agent
   # distinguish write targets from dependency/background references.
@@ -163,13 +183,18 @@ todo_task_resolve_repository_static() {
           | ($alias | norm) as $normalized_alias
           | select($normalized_alias != "")
           | select((" " + $task_text + " ") | contains(" " + $normalized_alias + " "))
-          | {repository:$repo.name,alias:$alias,length:($normalized_alias|length)}
+          | {repository:$repo.name,alias:$alias,normalizedAlias:$normalized_alias,length:($normalized_alias|length)}
+        ] as $all_matches
+      | [
+          $all_matches[] as $candidate
+          | select(
+              ([
+                $all_matches[]
+                | select(.length > $candidate.length and (.normalizedAlias | contains($candidate.normalizedAlias)))
+              ] | length) == 0
+            )
         ]
-      | if length == 0 then []
-        else (map(.length) | max) as $max_length
-        | map(select(.length == $max_length))
-        | unique_by(.repository)
-        end
+      | unique_by(.repository)
     ' <<<"$catalog_json")" || return 2
     alias_other_count="$(jq --arg repo "$direct_repository" '[.[] | select((.repository|ascii_downcase) != ($repo|ascii_downcase))] | length' <<<"$alias_matches_json")" || return 2
     if [ "$alias_other_count" -gt 0 ]; then
@@ -203,14 +228,20 @@ todo_task_resolve_repository_static() {
           | {
               repository: $repo.name,
               alias: $alias,
+              normalizedAlias: $normalized_alias,
               length: ($normalized_alias | length)
             }
+        ] as $all_matches
+      | [
+          $all_matches[] as $candidate
+          | select(
+              ([
+                $all_matches[]
+                | select(.length > $candidate.length and (.normalizedAlias | contains($candidate.normalizedAlias)))
+              ] | length) == 0
+            )
         ]
-      | if length == 0 then []
-        else (map(.length) | max) as $max_length
-        | map(select(.length == $max_length))
-        | unique_by(.repository)
-        end
+      | unique_by(.repository)
     ' <<<"$catalog_json")" || return 2
     candidate_count="$(jq -r 'length' <<<"$matches_json")"
     if [ "$candidate_count" -eq 0 ]; then
