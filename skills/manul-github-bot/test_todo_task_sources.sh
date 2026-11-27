@@ -616,7 +616,7 @@ multi_resolution='{"repository":"owner/local","repositories":["owner/local","own
 multi_source="$(todo_task_to_source_json '{"id":113,"description":"/manul Create matching changes and PRs","subTasks":[],"isToDo":true}' todo_local_mcp "$multi_resolution")"
 assert_eq "multi-repository Todo work automatically uses TEAM action" "TEAM" "$(jq -r '.action' <<<"$multi_source")"
 assert_eq "multi-repository Todo metadata preserves every target" "2" "$(jq '.metadata.repositories | length' <<<"$multi_source")"
-assert_contains "multi-repository parent delegates instead of coding in its primary checkout" "$(jq -r '.prompt' <<<"$multi_source")" "coordination-only"
+assert_contains "multi-repository parent owns the first target and its PR" "$(jq -r '.prompt' <<<"$multi_source")" "owned by this parent task"
 assert_contains "multi-repository instructions require separate root tasks" "$(jq -r '.prompt' <<<"$multi_source")" "TOP-LEVEL"
 assert_contains "multi-repository prompt includes each target" "$(jq -r '.prompt' <<<"$multi_source")" "owner/remote"
 
