@@ -28,6 +28,12 @@ The runtime isolation refactor has landed. The current implementation:
   instructions from the canonical agent directory `~/.agents/agents/`,
   prepended to the task prompt.
   Never silently route role names to OpenClaw's config-agent selector.
+- The internal `repository_resolver` execution kind is a pre-queue intake
+  capability, not a user-selectable coding role. It must run only through
+  AgentExecutionController -> AgentExecutor -> OpenCodeAdapter with the
+  dedicated native `repository-resolver` agent, a disposable
+  `operator-query/oq-*` workspace, no checkout, no MCP/network/filesystem
+  tools, and the operator's unchanged model/provider configuration.
 - Has no fallback to `~/.openclaw/manul` and no `OPENCLAW_MANUL_DIR` alias.
 
 Do not reintroduce `~/.openclaw/manul` ownership, compatibility shims, or
