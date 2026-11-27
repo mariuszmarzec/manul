@@ -86,9 +86,10 @@ assert_eq "multiple source entries are preserved" "3" "$count"
 assert_contains "GitHub provider instances use global repositories" "$multi" '"repositories":["owner/global"]'
 assert_not_contains "provider-local repositories cannot add targets" "$multi" "owner/a"
 assert_contains "Jira source is preserved when enabled" "$multi" '"type":"jira_tasks"'
+assert_contains "Jira provider receives the same global repository allowlist" "$multi" '"type":"jira_tasks","enabled":true,"baseUrl":"http://todo.local","repositories":["owner/global"]'
 
 cat >"$WORK/jira.json" <<'JSON'
-{"type":"jira_tasks","enabled":true,"baseUrl":"http://jira.local","repository":"owner/jira-repo","userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD","jql":"project = DEMO"}
+{"type":"jira_tasks","enabled":true,"baseUrl":"http://jira.local","repository":"owner/jira-repo","repositories":["owner/jira-repo"],"userEnv":"CUSTOM_JIRA_USER","passwordEnv":"CUSTOM_JIRA_PASSWORD","jql":"project = DEMO"}
 JSON
 cat >"$BIN/curl" <<'CURL'
 #!/usr/bin/env bash
