@@ -116,6 +116,16 @@ todo_task_resolve_repository_static() {
     ')" || return 2
   direct_match_count="$(jq -r 'length' <<<"$direct_matches_json")" || return 2
 
+  # An explicit target outside the allowlist is a hard denial, not a reason
+  # to ask the model to select a different repository.
+  if ! jq -e --argjson allowed "$repositories_json" '
+    all(.[]; (.repository | ascii_downcase) as $candidate
+      | any($allowed[]; ascii_downcase == $candidate))
+  ' <<<"$direct_matches_json" >/dev/null 2>&1; then
+    echo "an explicitly referenced repository is excluded by the global .repositories allowlist" >&2
+    return 2
+  fi
+
   if [ "$direct_match_count" -gt 1 ]; then
     local candidates
     candidates="$(jq -r '[.[].repository] | join(", ")' <<<"$direct_matches_json")"
@@ -237,7 +247,7 @@ todo_task_resolve_repository_static() {
 
   if ! jq -e --arg repo "$canonical_repository" 'any(.[]; ascii_downcase == ($repo | ascii_downcase))' <<<"$repositories_json" >/dev/null 2>&1; then
     echo "repository $canonical_repository is excluded by the global .repositories list" >&2
-    return 1
+    return 2
   fi
 
   if [ -n "$entry_json" ]; then
@@ -284,7 +294,7 @@ todo_task_resolve_repository() {
       [ -n "$static_output" ] && printf '%s\n' "$static_output"
       [ -n "$agent_output" ] && printf 'OpenCode repository resolver: %s\n' "$agent_output"
     } >&2
-    return 3
+    return "$static_rc"
   fi
 
   printf '%s\n' "$static_output" >&2
