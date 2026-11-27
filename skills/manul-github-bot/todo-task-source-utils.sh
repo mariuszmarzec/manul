@@ -699,7 +699,34 @@ todo_task_to_source_json() {
     action="ANSWER"
   else
     resolution_method="$(jq -r '.method // "unknown"' <<<"$resolution_json")"
-    prompt+=
+    prompt+=$'\n\n## Repository routing\n\n'
+    if [ "$target_repository_count" -eq 1 ]; then
+      prompt+="Target repository: $repository"
+    else
+      prompt+="All required write-target repositories (each must receive its own PR):"
+      while IFS= read -r target_repository; do
+        [ -n "$target_repository" ] && prompt+=$'\n- '"$target_repository"
+      done < <(jq -r '.[]' <<<"$target_repositories_json")
+      prompt+=$'\n\n'
+      prompt+="**Mandatory multi-repository execution:** This task has multiple independent repository write targets. Manul has automatically selected its existing TEAM workflow. Do not implement code in the parent task's primary checkout. Use the canonical team-workflow skill to create exactly one independent TOP-LEVEL tracker task per listed repository, each with its exact owner/repo, a bounded implementation request, acceptance criteria, stable work-item marker, and a /manul run trigger. Each child must produce and verify its own branch and pull request in its target repository. Do not put these tasks under the parent as nested Todo subtasks: they must be independent root tasks and receive independent Manul workspaces. Preserve dependencies and coordinate cross-repository API contracts. Wait for all children, independently verify every required PR and its CI/review evidence, then finish the parent with a report linking every PR. Do not silently omit a target."
+    fi
+    prompt+=$'\nResolution method: '
+    prompt+="$resolution_method"
+    matched_alias="$(jq -r '.matchedAlias // empty' <<<"$resolution_json")"
+    if [ -n "$matched_alias" ]; then
+      prompt+=$'\nMatched project alias: '
+      prompt+="$matched_alias"
+    fi
+    if [ "$target_repository_count" -gt 1 ]; then
+      prompt+=$'\nResolver reason: '
+      prompt+="$(jq -r '.reason // empty' <<<"$resolution_json")"
+    fi
+    project_skill_context="$(todo_task_resolved_skill_context "$resolution_json")"
+    if [ -n "$project_skill_context" ]; then
+      prompt+=$'\n\n## Relevant project skills (included below)\n\n'
+      prompt+="$project_skill_context"
+    fi
+  fi
   ids="$(todo_task_ids_json "$task_json")"
   created="$(jq -r '.addedTime // ""' <<<"$task_json")"
   updated="$(jq -r '.modifiedTime // .addedTime // ""' <<<"$task_json")"
