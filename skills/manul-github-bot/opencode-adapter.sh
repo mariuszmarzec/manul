@@ -1595,15 +1595,21 @@ while true; do
     fi
 
     current_step_limit_detected="false"
-    # A step limit is a runtime control signal only when it comes from a
-    # structured error event. Text events and tool payloads are task content
-    # and may mention "maximum steps" without exhausting the runtime budget.
+    # OpenCode reports its own exhausted step budget as the exact text event
+    # "Maximum steps reached" in some versions, while other versions expose
+    # the same condition as a structured error. Accept the exact runtime text
+    # signal only: arbitrary task text/tool payloads mentioning step limits
+    # must never trigger an internal continuation.
     current_step_limit_message=""
     if [ -s "$CURRENT_RUN_STDOUT_FILE" ]; then
         current_step_limit_message="$(jq -Rr '
             try fromjson catch empty
-            | select(.type == "error")
-            | (.error.message // .error.data.message // .message // empty)
+            | if .type == "error" then
+                (.error.message // .error.data.message // .message // empty)
+              elif .type == "text" then
+                (.part.text // .text // empty)
+                | select(test("^\\\\s*Maximum steps reached\\\\.?\\\\s*$"; "i"))
+              else empty end
         ' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null |
             grep -Ei 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' |
             head -n 1 || true)"
