@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
-mkdir -p "$tmp/bin" "$tmp/workspace" "$tmp/home"
+mkdir -p "$tmp/bin" "$tmp/workspace/ws-step-limit" "$tmp/home"
 printf '%s\n' 'Perform the task' >"$tmp/prompt"
 
 cat >"$tmp/bin/opencode" <<'MOCK'
@@ -33,10 +33,10 @@ run_adapter() {
   PATH="$tmp/bin:$PATH" OPENCODE_BIN="$tmp/bin/opencode" \
     MOCK_CALLS_FILE="$tmp/calls" MOCK_SCENARIO="$scenario" \
     AGENT_RUNTIME=opencode MANUL_DIR="$tmp/runtime-$scenario" \
-    MANUL_WORKSPACE="$tmp/workspace" MANUL_TASK_WORKSPACE_ROOT="$tmp/workspace" \
+    MANUL_WORKSPACE="$tmp/workspace" MANUL_TASK_WORKSPACE_ROOT="$tmp/workspace/ws-step-limit" \
     HOME="$tmp/home" OPENCODE_CONFIG="$tmp/home/opencode.json" \
     bash "$SCRIPT_DIR/opencode-adapter.sh" \
-      --task-id "step-limit-$scenario" --prompt "$tmp/prompt" --workspace "$tmp/workspace" \
+      --task-id "step-limit-$scenario" --prompt "$tmp/prompt" --workspace "$tmp/workspace/ws-step-limit" \
       --attempt 1 --timeout 30 --session-id "" \
       --stdout-file "$tmp/$scenario.stdout" --stderr-file "$tmp/$scenario.stderr" 2>/dev/null
 }
