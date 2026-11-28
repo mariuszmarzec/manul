@@ -1608,7 +1608,7 @@ while true; do
                 (.error.message // .error.data.message // .message // empty)
               elif .type == "text" then
                 (.part.text // .text // empty)
-                | select(test("^\\\\s*Maximum steps reached\\\\.?\\\\s*$"; "i"))
+                | select(test("^\\s*Maximum steps reached\\.?\\s*$"; "i"))
               else empty end
         ' "$CURRENT_RUN_STDOUT_FILE" 2>/dev/null |
             grep -Ei 'max(imum)?[[:space:]_-]+steps|steps?[[:space:]_-]+limit|step[[:space:]_-]+limit' |
